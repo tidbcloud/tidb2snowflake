@@ -1,0 +1,37 @@
+---
+name: E2E
+
+# Manual only: end-to-end tests require real TiDB Cloud / S3 / Snowflake
+# credentials provided as repository secrets.
+on:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - name: Run e2e
+        env:
+          E2E_TIDB_HOST: ${{ secrets.E2E_TIDB_HOST }}
+          E2E_TIDB_PORT: ${{ secrets.E2E_TIDB_PORT }}
+          E2E_TIDB_USER: ${{ secrets.E2E_TIDB_USER }}
+          E2E_TIDB_PASS: ${{ secrets.E2E_TIDB_PASS }}
+          E2E_TIDBCLOUD_CLUSTER_ID: ${{ secrets.E2E_TIDBCLOUD_CLUSTER_ID }}
+          E2E_TIDBCLOUD_PUBLIC_KEY: ${{ secrets.E2E_TIDBCLOUD_PUBLIC_KEY }}
+          E2E_TIDBCLOUD_PRIVATE_KEY: ${{ secrets.E2E_TIDBCLOUD_PRIVATE_KEY }}
+          E2E_TIDBCLOUD_HOST: ${{ secrets.E2E_TIDBCLOUD_HOST }}
+          E2E_STORAGE: ${{ secrets.E2E_STORAGE }}
+          E2E_AWS_ACCESS_KEY: ${{ secrets.E2E_AWS_ACCESS_KEY }}
+          E2E_AWS_SECRET_KEY: ${{ secrets.E2E_AWS_SECRET_KEY }}
+          E2E_SNOWFLAKE_ACCOUNT_ID: ${{ secrets.E2E_SNOWFLAKE_ACCOUNT_ID }}
+          E2E_SNOWFLAKE_USER: ${{ secrets.E2E_SNOWFLAKE_USER }}
+          E2E_SNOWFLAKE_PASS: ${{ secrets.E2E_SNOWFLAKE_PASS }}
+          E2E_SNOWFLAKE_WAREHOUSE: ${{ secrets.E2E_SNOWFLAKE_WAREHOUSE }}
+          E2E_SNOWFLAKE_DATABASE: ${{ secrets.E2E_SNOWFLAKE_DATABASE }}
+        run: make e2e
