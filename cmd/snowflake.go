@@ -1,0 +1,115 @@
+package cmd
+
+import (
+	"context"
+	"time"
+
+	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
+	"github.com/pingcap/tiflow/pkg/logutil"
+	"github.com/spf13/cobra"
+	"github.com/thediveo/enumflag"
+	"github.com/tidbcloud/tidb2snowflake/pkg/snowsql"
+	"github.com/tidbcloud/tidb2snowflake/pkg/tidbsql"
+	"go.uber.org/zap"
+)
+
+// NewSnowflakeCmd builds the `snowflake` subcommand: replicate a TiDB Cloud
+// Serverless cluster into Snowflake by driving an export and a changefeed
+// through the TiDB Cloud OpenAPI.
+func NewSnowflakeCmd() *cobra.Command {
+	cfg := &Config{
+		TiDB:      &tidbsql.TiDBConfig{},
+		Snowflake: &snowsql.SnowflakeConfig{},
+	}
+	var (
+		logFile  string
+		logLevel string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "snowflake",
+		Short: "Replicate snapshot and incremental data from TiDB Cloud to Snowflake",
+		RunE: func(c *cobra.Command, _ []string) error {
+			if err := logutil.InitLogger(&logutil.Config{Level: logLevel, File: logFile}); err != nil {
+				return errors.Trace(err)
+			}
+			if err := validateConfig(cfg); err != nil {
+				return err
+			}
+			ctx := context.Background()
+			if err := Replicate(ctx, cfg); err != nil {
+				log.Error("replication failed", zap.Error(err))
+				return err
+			}
+			log.Info("replication finished")
+			return nil
+		},
+	}
+
+	f := cmd.Flags()
+	// run mode
+	f.Var(enumflag.New(&cfg.Mode, "mode", RunModeIds, enumflag.EnumCaseInsensitive), "mode",
+		"replication mode: full, snapshot-only, incremental-only")
+
+	// TiDB connection (used to read source table schema)
+	f.StringVar(&cfg.TiDB.Host, "tidb.host", "127.0.0.1", "TiDB host")
+	f.IntVarP(&cfg.TiDB.Port, "tidb.port", "P", 4000, "TiDB port")
+	f.StringVarP(&cfg.TiDB.User, "tidb.user", "u", "root", "TiDB user")
+	f.StringVarP(&cfg.TiDB.Pass, "tidb.pass", "p", "", "TiDB password")
+	f.StringVar(&cfg.TiDB.SSLCA, "tidb.ssl-ca", "", "TiDB SSL CA path")
+
+	// TiDB Cloud OpenAPI
+	f.StringVar(&cfg.TiDBCloud.ClusterID, "tidbcloud.cluster-id", "", "TiDB Cloud Serverless cluster ID")
+	f.StringVar(&cfg.TiDBCloud.PublicKey, "tidbcloud.public-key", "", "TiDB Cloud API key public part")
+	f.StringVar(&cfg.TiDBCloud.PrivateKey, "tidbcloud.private-key", "", "TiDB Cloud API key private part")
+	f.StringVar(&cfg.TiDBCloud.Host, "tidbcloud.host", "", "TiDB Cloud OpenAPI host (default serverless.tidbapi.com)")
+
+	// Snowflake
+	f.StringVar(&cfg.Snowflake.AccountId, "snowflake.account-id", "", "Snowflake account id: <organization>-<account>")
+	f.StringVar(&cfg.Snowflake.Warehouse, "snowflake.warehouse", "COMPUTE_WH", "Snowflake warehouse")
+	f.StringVar(&cfg.Snowflake.User, "snowflake.user", "", "Snowflake user")
+	f.StringVar(&cfg.Snowflake.Pass, "snowflake.pass", "", "Snowflake password")
+	f.StringVar(&cfg.Snowflake.Database, "snowflake.database", "", "Snowflake database")
+	f.StringVar(&cfg.Snowflake.Schema, "snowflake.schema", "", "Snowflake schema")
+
+	// tables and storage
+	f.StringArrayVarP(&cfg.Tables, "table", "t", nil, "fully qualified table name, repeatable, e.g. -t db1.t1 -t db2.t2")
+	f.StringVarP(&cfg.StoragePath, "storage", "s", "", "object storage path, e.g. s3://<bucket>/<path>")
+	f.StringVar(&cfg.AWSAccessKey, "aws.access-key", "", "AWS access key for the storage bucket")
+	f.StringVar(&cfg.AWSSecretKey, "aws.secret-key", "", "AWS secret key for the storage bucket")
+
+	// consistency / changefeed tuning
+	f.StringVar(&cfg.SnapshotTSO, "snapshot-tso", "", "pin the snapshot to a specific TiDB TSO (optional; default: chosen at export time)")
+	f.DurationVar(&cfg.ChangefeedFlushInterval, "changefeed.flush-interval", 60*time.Second, "changefeed flush interval")
+	f.IntVar(&cfg.ChangefeedFileSizeMiB, "changefeed.file-size", 64, "changefeed file size in MiB")
+	f.DurationVar(&cfg.PollInterval, "poll-interval", 10*time.Second, "interval to poll export/changefeed status")
+
+	// logging
+	f.StringVar(&logFile, "log.file", "", "log file path")
+	f.StringVar(&logLevel, "log.level", "info", "log level")
+
+	_ = cmd.MarkFlagRequired("storage")
+	_ = cmd.MarkFlagRequired("tidbcloud.cluster-id")
+	_ = cmd.MarkFlagRequired("table")
+
+	return cmd
+}
+
+func validateConfig(cfg *Config) error {
+	if cfg.TiDBCloud.ClusterID == "" {
+		return errors.New("--tidbcloud.cluster-id is required")
+	}
+	if cfg.TiDBCloud.PublicKey == "" || cfg.TiDBCloud.PrivateKey == "" {
+		return errors.New("--tidbcloud.public-key and --tidbcloud.private-key are required")
+	}
+	if cfg.AWSAccessKey == "" || cfg.AWSSecretKey == "" {
+		return errors.New("--aws.access-key and --aws.secret-key are required")
+	}
+	if cfg.Mode != RunModeIncrementalOnly {
+		if cfg.Snowflake.Database == "" || cfg.Snowflake.Schema == "" {
+			return errors.New("--snowflake.database and --snowflake.schema are required")
+		}
+	}
+	return nil
+}
