@@ -1,0 +1,71 @@
+# tidb2snowflake build tooling
+
+default: dev
+
+all: dev
+dev: tidy fmt build test
+
+.PHONY: default all dev
+
+#### Build ####
+
+BUILD_FLAGS ?=
+BUILD_TAGS ?=
+
+DOCKER_IMG ?= pingcap/tidb2snowflake:latest
+
+ROOT_PATH := $(shell pwd)
+BUILD_OUTPUT := $(ROOT_PATH)/bin/tidb2snowflake
+
+REPO    := github.com/pingcap-inc/tidb2snowflake
+# Newer Go linkers reject linkname references used by some TiDB deps; disable the check.
+LINKNAME_FLAG := $(shell go tool link -h 2>&1 | grep -q -- '-checklinkname' && echo -checklinkname=0)
+
+_COMMIT := $(shell git describe --no-match --always --dirty)
+_GITREF := $(shell git rev-parse --abbrev-ref HEAD)
+COMMIT  := $(if $(COMMIT),$(COMMIT),$(_COMMIT))
+GITREF  := $(if $(GITREF),$(GITREF),$(_GITREF))
+
+LDFLAGS := -w -s
+LDFLAGS += $(LINKNAME_FLAG)
+LDFLAGS += -X "$(REPO)/version.GitHash=$(COMMIT)"
+LDFLAGS += -X "$(REPO)/version.GitRef=$(GITREF)"
+LDFLAGS += $(EXTRA_LDFLAGS)
+
+CGO_ENABLED ?= 0
+ifeq ($(shell uname -s),Darwin)
+	CGO_ENABLED=1
+endif
+
+.PHONY: build
+build:
+	@echo "Build using CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH)"
+	CGO_ENABLED=$(CGO_ENABLED) go build $(BUILD_FLAGS) -gcflags '$(GCFLAGS)' -ldflags '$(LDFLAGS)' -tags "$(BUILD_TAGS)" -o $(BUILD_OUTPUT) main.go
+
+.PHONY: fmt
+fmt:
+	go fmt ./...
+
+.PHONY: test
+test:
+	CGO_ENABLED=$(CGO_ENABLED) go test -ldflags '$(LDFLAGS)' ./...
+
+.PHONY: tidy
+tidy:
+	go mod tidy
+
+.PHONY: clean
+clean:
+	rm -rf $(ROOT_PATH)/bin
+
+.PHONY: docker-build
+docker-build: export CGO_ENABLED=0
+docker-build: export GOOS=linux
+docker-build: export GOARCH=amd64
+docker-build: BUILD_OUTPUT=$(ROOT_PATH)/bin/tidb2snowflake-linux-amd64
+docker-build: build
+	docker build -t $(DOCKER_IMG) .
+
+.PHONY: docker-push
+docker-push:
+	docker push $(DOCKER_IMG)
