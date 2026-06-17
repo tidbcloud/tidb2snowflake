@@ -1,6 +1,6 @@
 module github.com/tidbcloud/tidb2snowflake
 
-go 1.21
+go 1.24
 
 require (
 	github.com/aws/aws-sdk-go v1.45.25
@@ -23,7 +23,7 @@ require (
 require (
 	blainsmith.com/go/seahash v1.2.1 // indirect
 	github.com/AthenZ/athenz v1.10.39 // indirect
-	github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 // indirect
+	github.com/Azure/go-ntlmssp v0.1.1 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.1.1 // indirect
 	github.com/IBM/sarama v1.41.2 // indirect
 	github.com/KimMachineGun/automemlimit v0.2.4 // indirect
