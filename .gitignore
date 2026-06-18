@@ -26,6 +26,9 @@ go.work
 # build binary
 bin
 
+# local TiUP/S3/Snowflake e2e logs
+.local-e2e/
+
 # IDE files
 .idea
 .vscode/
