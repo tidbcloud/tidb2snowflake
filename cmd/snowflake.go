@@ -57,6 +57,7 @@ func NewSnowflakeCmd() *cobra.Command {
 	f.IntVarP(&cfg.TiDB.Port, "tidb.port", "P", 4000, "TiDB port")
 	f.StringVarP(&cfg.TiDB.User, "tidb.user", "u", "root", "TiDB user")
 	f.StringVarP(&cfg.TiDB.Pass, "tidb.pass", "p", "", "TiDB password")
+	f.BoolVar(&cfg.TiDB.TLS, "tidb.tls", false, "enable TLS for TiDB connection")
 	f.StringVar(&cfg.TiDB.SSLCA, "tidb.ssl-ca", "", "TiDB SSL CA path")
 
 	// TiDB Cloud OpenAPI

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -419,7 +420,7 @@ func buildChangefeedRequest(cfg *Config, cleanIncrementURI string, cred *credent
 				OutputColumnID: true,
 			},
 		},
-		Filter:        &tidbcloud.ChangefeedFilter{FilterRule: cfg.Tables},
+		Filter:        &tidbcloud.ChangefeedFilter{FilterRule: cfg.Tables, Mode: tidbcloud.TableModeForceSync},
 		StartPosition: start,
 	}
 }
@@ -477,7 +478,15 @@ func genCleanSubURIs(storagePath string) (string, string, error) {
 	if err != nil {
 		return "", "", errors.Trace(err)
 	}
-	return snapshot.String(), increment.String(), nil
+	return s3URIWithTrailingSlash(&snapshot), s3URIWithTrailingSlash(&increment), nil
+}
+
+func s3URIWithTrailingSlash(uri *url.URL) string {
+	out := uri.String()
+	if !strings.HasSuffix(out, "/") {
+		out += "/"
+	}
+	return out
 }
 
 // errWalkStop is a sentinel used to stop a WalkDir early once a match is found.

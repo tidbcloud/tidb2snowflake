@@ -14,7 +14,7 @@ import (
 
 func TestCreateChangefeed_CloudStorageBody(t *testing.T) {
 	var gotMethod, gotPath string
-	var gotBody CreateChangefeedRequest
+	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod, gotPath = r.Method, r.URL.Path
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
@@ -49,25 +49,35 @@ func TestCreateChangefeed_CloudStorageBody(t *testing.T) {
 				SizeInMiB:         64,
 			},
 		},
-		Filter:        &ChangefeedFilter{FilterRule: []string{"db1.t1"}},
-		StartPosition: &StartPosition{Mode: StartModeFromTSO, TSO: "449023000000000000"},
+		Filter: &ChangefeedFilter{FilterRule: []string{"db1.t1"}, Mode: TableModeForceSync},
+		StartPosition: &StartPosition{
+			Mode: StartModeFromTSO,
+			TSO:  "449023000000000000",
+		},
 	}
 	cf, err := c.CreateChangefeed(context.Background(), "10", req)
 	require.NoError(t, err)
 
 	require.Equal(t, http.MethodPost, gotMethod)
 	require.Equal(t, "/v1beta1/clusters/10/changefeeds", gotPath)
-	require.Equal(t, ChangefeedTypeCloudStorage, gotBody.Sink.Type)
-	require.Equal(t, CloudStorageTypeS3, gotBody.Sink.CloudStorage.Storage.Type)
-	require.Equal(t, "s3://bucket/increment", gotBody.Sink.CloudStorage.Storage.S3.URI)
-	require.Equal(t, CloudStorageProtocolCSV, gotBody.Sink.CloudStorage.DataFormat.Protocol)
-	require.True(t, gotBody.Sink.CloudStorage.DataFormat.CSVConfig.IncludeCommitTs)
-	require.Equal(t, BinaryEncodingHex, gotBody.Sink.CloudStorage.DataFormat.CSVConfig.Encoding)
-	require.Equal(t, DateSeparatorDay, gotBody.Sink.CloudStorage.DateSeparator)
-	require.Equal(t, 60, gotBody.Sink.CloudStorage.IntervalInSeconds)
-	require.Equal(t, StartModeFromTSO, gotBody.StartPosition.Mode)
-	require.Equal(t, "449023000000000000", gotBody.StartPosition.TSO)
-	require.Equal(t, []string{"db1.t1"}, gotBody.Filter.FilterRule)
+	require.Equal(t, "incremental", gotBody["displayName"])
+	sink := gotBody["sink"].(map[string]any)
+	require.Equal(t, string(ChangefeedTypeCloudStorage), sink["type"])
+	cloudStorage := sink["cloudStorage"].(map[string]any)
+	storage := cloudStorage["storage"].(map[string]any)
+	s3 := storage["s3"].(map[string]any)
+	require.Equal(t, "s3://bucket/increment", s3["uri"])
+	dataFormat := cloudStorage["dataFormat"].(map[string]any)
+	require.Equal(t, string(CloudStorageProtocolCSV), dataFormat["protocol"])
+	csvConfig := dataFormat["csvConfig"].(map[string]any)
+	require.True(t, csvConfig["includeCommitTs"].(bool))
+	require.Equal(t, string(BinaryEncodingHex), csvConfig["encoding"])
+	filter := gotBody["filter"].(map[string]any)
+	require.Equal(t, []any{"db1.t1"}, filter["filterRule"])
+	require.Equal(t, string(TableModeForceSync), filter["mode"])
+	startPosition := gotBody["startPosition"].(map[string]any)
+	require.Equal(t, string(StartModeFromTSO), startPosition["mode"])
+	require.Equal(t, "449023000000000000", startPosition["tso"])
 
 	require.Equal(t, "cf-1", cf.ChangefeedID)
 }

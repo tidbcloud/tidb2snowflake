@@ -77,6 +77,14 @@ const (
 	StartModeFromTime StartMode = "FROM_TIME"
 )
 
+// TableMode controls how the changefeed handles ineligible tables.
+type TableMode string
+
+const (
+	TableModeIgnoreNotSupportTable TableMode = "IGNORE_NOT_SUPPORT_TABLE"
+	TableModeForceSync             TableMode = "FORCE_SYNC"
+)
+
 // ChangefeedArch is the implementation architecture of a changefeed.
 type ChangefeedArch string
 
@@ -87,9 +95,11 @@ const (
 
 // Changefeed is a changefeed resource.
 type Changefeed struct {
+	ID            string            `json:"id,omitempty"`
 	ChangefeedID  string            `json:"changefeedId,omitempty"`
 	ClusterID     string            `json:"clusterId,omitempty"`
 	State         ChangefeedState   `json:"state,omitempty"`
+	Name          string            `json:"name,omitempty"`
 	DisplayName   string            `json:"displayName,omitempty"`
 	Sink          *Sink             `json:"sink,omitempty"`
 	Filter        *ChangefeedFilter `json:"filter,omitempty"`
@@ -145,7 +155,10 @@ type CSVConfig struct {
 
 // ChangefeedFilter selects which tables to replicate.
 type ChangefeedFilter struct {
-	FilterRule []string `json:"filterRule,omitempty"`
+	FilterRule      []string  `json:"filterRule,omitempty"`
+	Mode            TableMode `json:"mode,omitempty"`
+	EventFilterRule []any     `json:"eventFilterRule,omitempty"`
+	CaseSensitive   bool      `json:"caseSensitive,omitempty"`
 }
 
 // StartPosition is where the changefeed begins replicating.
@@ -179,6 +192,7 @@ func (c *Client) CreateChangefeed(ctx context.Context, clusterID string, req *Cr
 	if err := c.do(ctx, http.MethodPost, changefeedsPath(clusterID), req, &out); err != nil {
 		return nil, err
 	}
+	normalizeChangefeedID(&out)
 	return &out, nil
 }
 
@@ -188,7 +202,17 @@ func (c *Client) GetChangefeed(ctx context.Context, clusterID, changefeedID stri
 	if err := c.do(ctx, http.MethodGet, changefeedPath(clusterID, changefeedID), nil, &out); err != nil {
 		return nil, err
 	}
+	normalizeChangefeedID(&out)
 	return &out, nil
+}
+
+func normalizeChangefeedID(cf *Changefeed) {
+	if cf.ChangefeedID == "" {
+		cf.ChangefeedID = cf.ID
+	}
+	if cf.ID == "" {
+		cf.ID = cf.ChangefeedID
+	}
 }
 
 // DeleteChangefeed deletes a changefeed.
