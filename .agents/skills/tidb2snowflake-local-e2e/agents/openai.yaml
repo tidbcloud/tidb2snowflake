@@ -1,0 +1,4 @@
+interface:
+  display_name: "TiDB2Snowflake Local E2E"
+  short_description: "Run TiUP-to-S3-to-Snowflake local e2e"
+  default_prompt: "Use $tidb2snowflake-local-e2e to run the local TiUP, Dumpling, TiCDC, S3, and Snowflake verification for tidb2snowflake."
