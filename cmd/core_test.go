@@ -28,7 +28,7 @@ func baseConfig() *Config {
 
 func TestBuildExportRequest(t *testing.T) {
 	cfg := baseConfig()
-	req := buildExportRequest(cfg, "s3://bucket/path/snapshot", testCred())
+	req := buildExportRequest(cfg, "s3://bucket/path/snapshot/", testCred())
 
 	require.Equal(t, tidbcloud.ExportFileTypeCSV, req.ExportOptions.FileType)
 	require.Equal(t, tidbcloud.ExportCompressionNone, req.ExportOptions.Compression)
@@ -43,7 +43,7 @@ func TestBuildExportRequest(t *testing.T) {
 	require.Empty(t, req.ExportOptions.SnapshotTSO)
 
 	require.Equal(t, tidbcloud.ExportTargetTypeS3, req.Target.Type)
-	require.Equal(t, "s3://bucket/path/snapshot", req.Target.S3.URI)
+	require.Equal(t, "s3://bucket/path/snapshot/", req.Target.S3.URI)
 	require.Equal(t, tidbcloud.S3AuthTypeAccessKey, req.Target.S3.AuthType)
 	require.Equal(t, "AKIA", req.Target.S3.AccessKey.ID)
 	require.Equal(t, "secret", req.Target.S3.AccessKey.Secret)
@@ -52,18 +52,18 @@ func TestBuildExportRequest(t *testing.T) {
 func TestBuildExportRequest_PinnedSnapshotTSO(t *testing.T) {
 	cfg := baseConfig()
 	cfg.SnapshotTSO = "449023000000000000"
-	req := buildExportRequest(cfg, "s3://bucket/path/snapshot", testCred())
+	req := buildExportRequest(cfg, "s3://bucket/path/snapshot/", testCred())
 	require.Equal(t, "449023000000000000", req.ExportOptions.SnapshotTSO)
 }
 
 func TestBuildChangefeedRequest_FromTSO(t *testing.T) {
 	cfg := baseConfig()
-	req := buildChangefeedRequest(cfg, "s3://bucket/path/increment", testCred(), "449023000000000000")
+	req := buildChangefeedRequest(cfg, "s3://bucket/path/increment/", testCred(), "449023000000000000")
 
 	require.Equal(t, tidbcloud.ChangefeedTypeCloudStorage, req.Sink.Type)
 	cs := req.Sink.CloudStorage
 	require.Equal(t, tidbcloud.CloudStorageTypeS3, cs.Storage.Type)
-	require.Equal(t, "s3://bucket/path/increment", cs.Storage.S3.URI)
+	require.Equal(t, "s3://bucket/path/increment/", cs.Storage.S3.URI)
 	require.Equal(t, tidbcloud.S3AuthTypeAccessKey, cs.Storage.S3.AuthType)
 	require.Equal(t, "AKIA", cs.Storage.S3.AccessKey.ID)
 	require.Equal(t, tidbcloud.CloudStorageProtocolCSV, cs.DataFormat.Protocol)
@@ -75,6 +75,7 @@ func TestBuildChangefeedRequest_FromTSO(t *testing.T) {
 	require.True(t, cs.OutputColumnID)
 
 	require.Equal(t, []string{"db1.t1", "db2.t2"}, req.Filter.FilterRule)
+	require.Equal(t, tidbcloud.TableModeForceSync, req.Filter.Mode)
 	require.Equal(t, tidbcloud.StartModeFromTSO, req.StartPosition.Mode)
 	require.Equal(t, "449023000000000000", req.StartPosition.TSO)
 }
@@ -89,8 +90,8 @@ func TestBuildChangefeedRequest_FromNowWhenNoTSO(t *testing.T) {
 func TestGenCleanSubURIs(t *testing.T) {
 	snap, incr, err := genCleanSubURIs("s3://bucket/path")
 	require.NoError(t, err)
-	require.Equal(t, "s3://bucket/path/snapshot", snap)
-	require.Equal(t, "s3://bucket/path/increment", incr)
+	require.Equal(t, "s3://bucket/path/snapshot/", snap)
+	require.Equal(t, "s3://bucket/path/increment/", incr)
 	// no credentials leaked into the API URI
 	require.NotContains(t, snap, "access-key")
 	require.NotContains(t, incr, "secret")

@@ -88,7 +88,7 @@ func TestSnapshotOnly(t *testing.T) {
 	table := "t_snap_" + id
 	dbTable := sourceDB + "." + table
 	schema := "E2E_SNAP_" + id
-	storagePath := cfg.StoragePath + "/snap_" + id
+	storagePath := cfg.StoragePath + "/snap_" + id + "/"
 
 	tidb := cfg.tidbDB(t)
 	defer tidb.Close()
@@ -115,7 +115,7 @@ func TestFullReplication(t *testing.T) {
 	table := "t_full_" + id
 	dbTable := sourceDB + "." + table
 	schema := "E2E_FULL_" + id
-	storagePath := cfg.StoragePath + "/full_" + id
+	storagePath := cfg.StoragePath + "/full_" + id + "/"
 
 	tidb := cfg.tidbDB(t)
 	defer tidb.Close()
@@ -146,7 +146,7 @@ func TestIncrementalOnly(t *testing.T) {
 	table := "t_incr_" + id
 	dbTable := sourceDB + "." + table
 	schema := "E2E_INCR_" + id
-	storagePath := cfg.StoragePath + "/incr_" + id
+	storagePath := cfg.StoragePath + "/incr_" + id + "/"
 
 	tidb := cfg.tidbDB(t)
 	defer tidb.Close()
@@ -169,6 +169,7 @@ func TestIncrementalOnly(t *testing.T) {
 	stop := startTool(t, cfg, "incremental-only", storagePath, schema, dbTable)
 	defer stop()
 
+	waitForStorageFile(t, cfg, storagePath, "increment/metadata", 5*time.Minute)
 	applyIncrementDMLs(t, tidb, dbTable)
 	waitForRowCount(t, sf, table, 4, incrementTimeout)
 	waitForColValue(t, sf, table, "amount", 2, 222, incrementTimeout)

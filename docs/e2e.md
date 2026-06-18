@@ -51,6 +51,8 @@ Baseline rows have ids `1,2,3`. The incremental step inserts `4,5`, updates
 > The TiDB SQL endpoint (`E2E_TIDB_*`) and the OpenAPI cluster
 > (`E2E_TIDBCLOUD_CLUSTER_ID`) must be the **same** cluster: the tests seed data
 > over SQL and the export reads it via the API.
+> The e2e harness enables TLS for the TiDB SQL connection because TiDB Cloud
+> Serverless rejects insecure transport.
 
 ## Notes
 

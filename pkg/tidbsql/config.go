@@ -17,6 +17,7 @@ type TiDBConfig struct {
 	Port  int
 	User  string
 	Pass  string
+	TLS   bool
 	SSLCA string
 }
 
@@ -44,6 +45,8 @@ func (config *TiDBConfig) OpenDB() (*sql.DB, error) {
 			ServerName: config.Host,
 		})
 		tidbConfig.TLSConfig = "tidb"
+	} else if config.TLS {
+		tidbConfig.TLSConfig = "true"
 	}
 	db, err := sql.Open("mysql", tidbConfig.FormatDSN())
 	if err != nil {

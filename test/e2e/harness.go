@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/tidb/br/pkg/storage"
 	putil "github.com/pingcap/tiflow/pkg/util"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowsql"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
@@ -103,7 +104,7 @@ func loadE2EConfig(t *testing.T) *e2eConfig {
 }
 
 func (c *e2eConfig) tidbConfig() *tidbsql.TiDBConfig {
-	return &tidbsql.TiDBConfig{Host: c.TiDBHost, Port: c.TiDBPort, User: c.TiDBUser, Pass: c.TiDBPass}
+	return &tidbsql.TiDBConfig{Host: c.TiDBHost, Port: c.TiDBPort, User: c.TiDBUser, Pass: c.TiDBPass, TLS: true}
 }
 
 func (c *e2eConfig) snowflakeConfig(schema string) *snowsql.SnowflakeConfig {
@@ -191,6 +192,7 @@ func toolArgs(cfg *e2eConfig, mode, storagePath, schema, table string) []string 
 		"--tidb.port", fmt.Sprintf("%d", cfg.TiDBPort),
 		"--tidb.user", cfg.TiDBUser,
 		"--tidb.pass", cfg.TiDBPass,
+		"--tidb.tls",
 		"--tidbcloud.cluster-id", cfg.ClusterID,
 		"--tidbcloud.public-key", cfg.PublicKey,
 		"--tidbcloud.private-key", cfg.PrivateKey,
@@ -307,9 +309,40 @@ func mustTiDB(cfg *e2eConfig) *sql.DB {
 // readState reads tidb2snowflake.state.json from the run's storage path.
 func readState(t *testing.T, cfg *e2eConfig, storagePath string) (exportID, changefeedID string) {
 	t.Helper()
-	uri, err := url.Parse(storagePath)
+	store := openRunStorage(t, cfg, storagePath)
+	exists, err := store.FileExists(context.Background(), "tidb2snowflake.state.json")
+	if err != nil || !exists {
+		return "", ""
+	}
+	data, err := store.ReadFile(context.Background(), "tidb2snowflake.state.json")
 	if err != nil {
 		return "", ""
+	}
+	// minimal extraction without importing the cmd package
+	exportID = jsonString(data, "exportId")
+	changefeedID = jsonString(data, "changefeedId")
+	return exportID, changefeedID
+}
+
+func waitForStorageFile(t *testing.T, cfg *e2eConfig, storagePath, file string, timeout time.Duration) {
+	t.Helper()
+	store := openRunStorage(t, cfg, storagePath)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		exists, err := store.FileExists(context.Background(), file)
+		if err == nil && exists {
+			return
+		}
+		time.Sleep(5 * time.Second)
+	}
+	t.Fatalf("storage file %s did not appear under %s within %s", file, storagePath, timeout)
+}
+
+func openRunStorage(t *testing.T, cfg *e2eConfig, storagePath string) storage.ExternalStorage {
+	t.Helper()
+	uri, err := url.Parse(storagePath)
+	if err != nil {
+		t.Fatalf("parse storage path: %v", err)
 	}
 	q := url.Values{}
 	q.Set("access-key", cfg.AWSAccessKey)
@@ -318,20 +351,9 @@ func readState(t *testing.T, cfg *e2eConfig, storagePath string) (exportID, chan
 	ctx := context.Background()
 	store, err := putil.GetExternalStorageFromURI(ctx, uri.String())
 	if err != nil {
-		return "", ""
+		t.Fatalf("open storage: %v", err)
 	}
-	exists, err := store.FileExists(ctx, "tidb2snowflake.state.json")
-	if err != nil || !exists {
-		return "", ""
-	}
-	data, err := store.ReadFile(ctx, "tidb2snowflake.state.json")
-	if err != nil {
-		return "", ""
-	}
-	// minimal extraction without importing the cmd package
-	exportID = jsonString(data, "exportId")
-	changefeedID = jsonString(data, "changefeedId")
-	return exportID, changefeedID
+	return store
 }
 
 // jsonString does a tiny extraction of a top-level string field, avoiding a
