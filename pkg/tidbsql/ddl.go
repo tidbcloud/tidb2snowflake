@@ -172,8 +172,9 @@ WHERE table_schema = "%s" AND table_name = "%s"`, sourceDatabase, sourceTable) /
 		if column.ColumnDefault != nil {
 			defaultVal = *column.ColumnDefault
 		}
-		// handle unsigned
-		if strings.HasSuffix(column.DataType, " unsigned") {
+		// INFORMATION_SCHEMA.DATA_TYPE is the base type (for example `bigint`),
+		// while COLUMN_TYPE preserves attributes such as `unsigned`.
+		if strings.Contains(strings.ToLower(column.ColumnType), "unsigned") {
 			column.DataType = column.DataType + " unsigned"
 		}
 		tableCol := cloudstorage.TableCol{

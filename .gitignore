@@ -29,6 +29,9 @@ bin
 # local TiUP/S3/Snowflake e2e logs
 .local-e2e/
 
+# local TiUP DDL/type matrix smoke logs
+.local-ddl-matrix/
+
 # IDE files
 .idea
 .vscode/

@@ -1,0 +1,47 @@
+-- Derived from tidb-fivetran-connector/e2e-test/test.sql.
+-- These cases are intentionally not executed by tidb2snowflake's local matrix
+-- smoke test because the current project does not support them, or the current
+-- replication semantics explicitly reject them.
+
+-- Type mappings not implemented by tidb2snowflake today. Some of these are
+-- supported by tidb-fivetran-connector, but still need an explicit Snowflake
+-- target policy and value encoding in this project before we execute them here:
+--   BIT / BIT(n)
+--   JSON
+--   ENUM / SET
+--   YEAR
+--   MEDIUMBLOB / LONGBLOB (Snowflake BINARY is limited to 8 MB)
+--   DECIMAL precision greater than Snowflake's max precision 38
+--   VECTOR
+--   Tables whose primary key contains BIT(n>1)
+
+-- Unsupported or intentionally rejected DDL semantics today:
+--   CREATE TABLE during a running task
+--   CREATE SCHEMA during a running task
+--   RENAME TABLE, because TiCDC can no longer capture the new table name for
+--     the original task
+--   DROP + CREATE same table name with a new shape
+--   ADD/DROP primary key after a table has been admitted
+--   Table admission without a stable primary key
+
+-- Kept as executable examples for future enablement, but not sourced by the
+-- smoke script:
+--
+-- CREATE TABLE unsupported_json_enum_set (
+--   id BIGINT NOT NULL PRIMARY KEY,
+--   c_json JSON NULL,
+--   c_enum ENUM('small', 'medium', 'large') NULL,
+--   c_set SET('red', 'green', 'blue') NULL
+-- );
+--
+-- CREATE TABLE unsupported_binary_large (
+--   id BIGINT NOT NULL PRIMARY KEY,
+--   c_bit BIT(8) NULL,
+--   c_mediumblob MEDIUMBLOB NULL,
+--   c_longblob LONGBLOB NULL
+-- );
+--
+-- CREATE TABLE unsupported_vector (
+--   id BIGINT NOT NULL PRIMARY KEY,
+--   c_vector VECTOR(3) NULL
+-- );
