@@ -68,6 +68,19 @@ previous run created it, or because you created the export/changefeed yourself
 is. If both already exist, the run loads without contacting the TiDB Cloud API,
 so the API key is not required in that case.
 
+Snapshot loading writes a per-table `loadinfo` marker after Snowflake `COPY`
+finishes. A later run skips snapshot loading for tables with that marker, then
+continues incremental replay. By default, snapshot files are loaded with one
+bulk `COPY` statement using a Snowflake `PATTERN`; use
+`--snapshot.load-mode=per-file` to fall back to one `COPY` per exported file.
+Snapshot export compression defaults to `none`; use `--snapshot.compression=gzip`
+to ask TiDB Cloud export for gzip CSV files and configure Snowflake `COPY` to
+read gzip input.
+
+Incremental replay writes a per-table `_consumer/progress.json` under the
+incremental storage prefix after each successfully applied CDC file. On restart,
+the loader restores that applied-file cursor before scanning object storage.
+
 ## Known limitations
 
 - Only Snowflake is supported as the target.

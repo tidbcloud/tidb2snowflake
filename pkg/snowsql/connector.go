@@ -19,14 +19,23 @@ type SnowflakeConnector struct {
 	// db is the connection to snowflake.
 	db *sql.DB
 
-	stageName string
+	stageName            string
+	stageFileCompression string
 
 	s3Credentials *credentials.Value
 
 	columns []cloudstorage.TableCol
 }
 
-func NewSnowflakeConnector(sfConfig *SnowflakeConfig, stageName string, storageURI *url.URL, credentials *credentials.Value) (*SnowflakeConnector, error) {
+type ConnectorOption func(*SnowflakeConnector)
+
+func WithStageFileCompression(compression string) ConnectorOption {
+	return func(sc *SnowflakeConnector) {
+		sc.stageFileCompression = compression
+	}
+}
+
+func NewSnowflakeConnector(sfConfig *SnowflakeConfig, stageName string, storageURI *url.URL, credentials *credentials.Value, opts ...ConnectorOption) (*SnowflakeConnector, error) {
 	db, err := sfConfig.OpenDB()
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -37,12 +46,16 @@ func NewSnowflakeConnector(sfConfig *SnowflakeConfig, stageName string, storageU
 		return nil, errors.Annotate(err, "Failed to create stage")
 	}
 
-	return &SnowflakeConnector{
+	sc := &SnowflakeConnector{
 		db:            db,
 		stageName:     stageName,
 		s3Credentials: credentials,
 		columns:       nil,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(sc)
+	}
+	return sc, nil
 }
 
 func (sc *SnowflakeConnector) InitSchema(columns []cloudstorage.TableCol) error {
@@ -94,7 +107,7 @@ func (sc *SnowflakeConnector) CopyTableSchema(sourceDatabase string, sourceTable
 }
 
 func (sc *SnowflakeConnector) LoadSnapshot(targetTable, filePath string) error {
-	if err := LoadSnapshotFromStage(sc.db, targetTable, sc.stageName, filePath); err != nil {
+	if err := LoadSnapshotFromStage(sc.db, targetTable, sc.stageName, filePath, sc.stageFileCompression); err != nil {
 		return errors.Trace(err)
 	}
 	return nil

@@ -56,6 +56,23 @@ func TestBuildExportRequest_PinnedSnapshotTSO(t *testing.T) {
 	require.Equal(t, "449023000000000000", req.ExportOptions.SnapshotTSO)
 }
 
+func TestBuildExportRequest_GzipCompression(t *testing.T) {
+	cfg := baseConfig()
+	cfg.SnapshotCompression = SnapshotCompressionGzip
+	req := buildExportRequest(cfg, "s3://bucket/path/snapshot/", testCred())
+	require.Equal(t, tidbcloud.ExportCompressionGzip, req.ExportOptions.Compression)
+}
+
+func TestSnapshotLoadModeDefault(t *testing.T) {
+	require.Equal(t, SnapshotLoadModeBulk, snapshotLoadMode(&Config{}))
+	require.Equal(t, SnapshotLoadModePerFile, snapshotLoadMode(&Config{SnapshotLoadMode: SnapshotLoadModePerFile}))
+}
+
+func TestSnapshotCompressionDefault(t *testing.T) {
+	require.Equal(t, SnapshotCompressionNone, snapshotCompression(&Config{}))
+	require.Equal(t, SnapshotCompressionGzip, snapshotCompression(&Config{SnapshotCompression: SnapshotCompressionGzip}))
+}
+
 func TestBuildChangefeedRequest_FromTSO(t *testing.T) {
 	cfg := baseConfig()
 	req := buildChangefeedRequest(cfg, "s3://bucket/path/increment/", testCred(), "449023000000000000")

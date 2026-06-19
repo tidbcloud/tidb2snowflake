@@ -26,6 +26,7 @@ import (
 
 const (
 	CSVFileExtension              = ".csv"
+	checkpointFileExtension       = ".checkpoint"
 	fakePartitionNumForSchemaFile = -1
 )
 
@@ -35,12 +36,32 @@ type fileIndexRange struct {
 	end   uint64
 }
 
+type objectFile struct {
+	path string
+	size int64
+}
+
+type progressFile struct {
+	DML []progressEntry `json:"dml"`
+}
+
+type progressEntry struct {
+	Schema       string `json:"schema"`
+	Table        string `json:"table"`
+	TableVersion uint64 `json:"table_version"`
+	PartitionNum int64  `json:"partition_num"`
+	Date         string `json:"date"`
+	FileIndex    uint64 `json:"file_index"`
+}
+
 type IncrementReplicateSession struct {
 	dwConnector     coreinterfaces.Connector
 	externalStorage storage.ExternalStorage
 	ctx             context.Context
 	// tableDMLIdxMap maintains a map of <dmlPathKey, max file index>
 	tableDMLIdxMap map[cloudstorage.DmlPathKey]uint64
+	// progressDMLIdxMap maintains a map of <dmlPathKey, max applied file index>
+	progressDMLIdxMap map[cloudstorage.DmlPathKey]uint64
 	// tableDefMap maintains a map of <tableVersion, tableDef>
 	tableDefMap map[uint64]*cloudstorage.TableDefinition
 	// dataFileMap maintains a map of <dataFilePath, fileSize>
@@ -65,18 +86,23 @@ func NewIncrementReplicateSession(
 		return nil, errors.Trace(err)
 	}
 	sourceDatabase, sourceTable := utils.SplitTableFQN(tableFQN)
-	return &IncrementReplicateSession{
-		dwConnector:     dwConnector,
-		externalStorage: externalStorage,
-		ctx:             ctx,
-		tableDMLIdxMap:  make(map[cloudstorage.DmlPathKey]uint64),
-		tableDefMap:     make(map[uint64]*cloudstorage.TableDefinition),
-		fileExtension:   fileExtension,
-		sourceDatabase:  sourceDatabase,
-		sourceTable:     sourceTable,
-		tableFQN:        tableFQN,
-		logger:          logger,
-	}, nil
+	sess := &IncrementReplicateSession{
+		dwConnector:       dwConnector,
+		externalStorage:   externalStorage,
+		ctx:               ctx,
+		tableDMLIdxMap:    make(map[cloudstorage.DmlPathKey]uint64),
+		progressDMLIdxMap: make(map[cloudstorage.DmlPathKey]uint64),
+		tableDefMap:       make(map[uint64]*cloudstorage.TableDefinition),
+		fileExtension:     fileExtension,
+		sourceDatabase:    sourceDatabase,
+		sourceTable:       sourceTable,
+		tableFQN:          tableFQN,
+		logger:            logger,
+	}
+	if err := sess.loadProgress(); err != nil {
+		return nil, errors.Trace(err)
+	}
+	return sess, nil
 }
 
 func (sess *IncrementReplicateSession) parseDMLFilePath(path string) error {
@@ -189,6 +215,108 @@ func diffDMLMaps(
 	return resMap
 }
 
+func (sess *IncrementReplicateSession) progressPath() string {
+	return fmt.Sprintf("%s/%s/_consumer/progress.json", sess.sourceDatabase, sess.sourceTable)
+}
+
+func progressEntryToDMLKey(entry progressEntry) cloudstorage.DmlPathKey {
+	return cloudstorage.DmlPathKey{
+		SchemaPathKey: cloudstorage.SchemaPathKey{
+			Schema:       entry.Schema,
+			Table:        entry.Table,
+			TableVersion: entry.TableVersion,
+		},
+		PartitionNum: entry.PartitionNum,
+		Date:         entry.Date,
+	}
+}
+
+func progressEntryFromDMLKey(key cloudstorage.DmlPathKey, fileIdx uint64) progressEntry {
+	return progressEntry{
+		Schema:       key.Schema,
+		Table:        key.Table,
+		TableVersion: key.TableVersion,
+		PartitionNum: key.PartitionNum,
+		Date:         key.Date,
+		FileIndex:    fileIdx,
+	}
+}
+
+func (sess *IncrementReplicateSession) loadProgress() error {
+	path := sess.progressPath()
+	exists, err := sess.externalStorage.FileExists(sess.ctx, path)
+	if err != nil {
+		return errors.Annotate(err, "check increment progress")
+	}
+	if !exists {
+		return nil
+	}
+	data, err := sess.externalStorage.ReadFile(sess.ctx, path)
+	if err != nil {
+		return errors.Annotate(err, "read increment progress")
+	}
+	var progress progressFile
+	if err := json.Unmarshal(data, &progress); err != nil {
+		return errors.Annotate(err, "decode increment progress")
+	}
+	for _, entry := range progress.DML {
+		if entry.Schema != sess.sourceDatabase || entry.Table != sess.sourceTable {
+			sess.logger.Warn("ignore progress entry for different table",
+				zap.String("schema", entry.Schema),
+				zap.String("table", entry.Table))
+			continue
+		}
+		key := progressEntryToDMLKey(entry)
+		sess.progressDMLIdxMap[key] = entry.FileIndex
+		sess.tableDMLIdxMap[key] = entry.FileIndex
+	}
+	sess.logger.Info("loaded increment progress",
+		zap.String("path", path),
+		zap.Int("entries", len(sess.progressDMLIdxMap)))
+	return nil
+}
+
+func (sess *IncrementReplicateSession) saveProgress() error {
+	progress := progressFile{DML: make([]progressEntry, 0, len(sess.progressDMLIdxMap))}
+	for key, fileIdx := range sess.progressDMLIdxMap {
+		progress.DML = append(progress.DML, progressEntryFromDMLKey(key, fileIdx))
+	}
+	slices.SortStableFunc(progress.DML, func(x, y progressEntry) int {
+		if r := cmp.Compare(x.Schema, y.Schema); r != 0 {
+			return r
+		}
+		if r := cmp.Compare(x.Table, y.Table); r != 0 {
+			return r
+		}
+		if r := cmp.Compare(x.TableVersion, y.TableVersion); r != 0 {
+			return r
+		}
+		if r := cmp.Compare(x.PartitionNum, y.PartitionNum); r != 0 {
+			return r
+		}
+		return cmp.Compare(x.Date, y.Date)
+	})
+	data, err := json.MarshalIndent(progress, "", "  ")
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if err := sess.externalStorage.WriteFile(sess.ctx, sess.progressPath(), data); err != nil {
+		return errors.Annotate(err, "write increment progress")
+	}
+	return nil
+}
+
+func (sess *IncrementReplicateSession) markDMLApplied(key cloudstorage.DmlPathKey, fileIdx uint64) error {
+	if key.PartitionNum == fakePartitionNumForSchemaFile && key.Date == "" {
+		return nil
+	}
+	if cur, ok := sess.progressDMLIdxMap[key]; ok && cur >= fileIdx {
+		return nil
+	}
+	sess.progressDMLIdxMap[key] = fileIdx
+	return sess.saveProgress()
+}
+
 // getNewFiles returns newly created dml files in specific ranges
 func (sess *IncrementReplicateSession) getNewFiles() (map[cloudstorage.DmlPathKey]fileIndexRange, error) {
 	tableDMLMap := make(map[cloudstorage.DmlPathKey]fileIndexRange)
@@ -197,31 +325,42 @@ func (sess *IncrementReplicateSession) getNewFiles() (map[cloudstorage.DmlPathKe
 		origDMLIdxMap[k] = v
 	}
 	sess.dataFileMap = make(map[string]int64)
+	files := make([]objectFile, 0)
+	checkpointSet := make(map[string]struct{})
 	opt := &storage.WalkOption{SubDir: fmt.Sprintf("%s/%s", sess.sourceDatabase, sess.sourceTable)}
 	err := sess.externalStorage.WalkDir(sess.ctx, opt, func(path string, size int64) error {
+		if strings.HasSuffix(path, checkpointFileExtension) {
+			checkpointSet[path] = struct{}{}
+			return nil
+		}
+		files = append(files, objectFile{path: path, size: size})
+		return nil
+	})
+	if err != nil {
+		return tableDMLMap, err
+	}
+
+	for _, file := range files {
+		path := file.path
 		if cloudstorage.IsSchemaFile(path) {
 			if err := sess.parseSchemaFilePath(path); err != nil {
 				sess.logger.Error("failed to parse schema file path", zap.Error(err))
 				// skip handling this file
-				return nil
+				continue
 			}
 		} else if strings.HasSuffix(path, sess.fileExtension) {
 			if err := sess.parseDMLFilePath(path); err != nil {
 				sess.logger.Error("failed to parse dml file path", zap.Error(err))
 				// skip handling this file
-				return nil
+				continue
 			}
-			if !sess.CheckpointExists(path) {
-				sess.dataFileMap[path] = size
-				metrics.AddGauge(metrics.IncrementPendingSizeGauge, float64(size), sess.tableFQN)
+			if !checkpointExistsInSet(path, sess.fileExtension, checkpointSet) {
+				sess.dataFileMap[path] = file.size
+				metrics.AddGauge(metrics.IncrementPendingSizeGauge, float64(file.size), sess.tableFQN)
 			}
 		} else {
 			sess.logger.Debug("ignore handling file", zap.String("path", path))
 		}
-		return nil
-	})
-	if err != nil {
-		return tableDMLMap, err
 	}
 
 	tableDMLMap = diffDMLMaps(sess.tableDMLIdxMap, origDMLIdxMap)
@@ -238,12 +377,21 @@ func (sess *IncrementReplicateSession) getTableDef(tableVersion uint64) cloudsto
 }
 
 func (sess *IncrementReplicateSession) CheckpointExists(filePath string) bool {
-	checkpointFileName := strings.TrimSuffix(filePath, sess.fileExtension) + ".checkpoint"
+	checkpointFileName := checkpointPath(filePath, sess.fileExtension)
 	exist, err := sess.externalStorage.FileExists(sess.ctx, checkpointFileName)
 	if err != nil {
 		return false
 	}
 	return exist
+}
+
+func checkpointPath(filePath, fileExtension string) string {
+	return strings.TrimSuffix(filePath, fileExtension) + checkpointFileExtension
+}
+
+func checkpointExistsInSet(filePath, fileExtension string, checkpointSet map[string]struct{}) bool {
+	_, ok := checkpointSet[checkpointPath(filePath, fileExtension)]
+	return ok
 }
 
 func (sess *IncrementReplicateSession) syncExecDMLEvents(
@@ -252,7 +400,7 @@ func (sess *IncrementReplicateSession) syncExecDMLEvents(
 	fileIdx uint64,
 ) error {
 	filePath := key.GenerateDMLFilePath(fileIdx, sess.fileExtension, config.DefaultFileIndexWidth)
-	checkpointFileName := strings.TrimSuffix(filePath, sess.fileExtension) + ".checkpoint"
+	checkpointFileName := checkpointPath(filePath, sess.fileExtension)
 
 	// check if the file has been loaded into data warehouse
 	exist, err := sess.externalStorage.FileExists(sess.ctx, checkpointFileName)
@@ -261,7 +409,11 @@ func (sess *IncrementReplicateSession) syncExecDMLEvents(
 	}
 	if exist {
 		sess.logger.Info("file has been loaded into data warehouse, just ignore", zap.String("filePath", filePath))
-		return nil
+		if size, ok := sess.dataFileMap[filePath]; ok {
+			metrics.SubGauge(metrics.IncrementPendingSizeGauge, float64(size), sess.tableFQN)
+			delete(sess.dataFileMap, filePath)
+		}
+		return sess.markDMLApplied(key, fileIdx)
 	}
 
 	// merge file into data warehouse
@@ -273,10 +425,14 @@ func (sess *IncrementReplicateSession) syncExecDMLEvents(
 	if err := sess.externalStorage.WriteFile(sess.ctx, checkpointFileName, []byte{}); err != nil {
 		return errors.Trace(err)
 	}
+	if err := sess.markDMLApplied(key, fileIdx); err != nil {
+		return errors.Trace(err)
+	}
 
 	// update metrics
 	metrics.SubGauge(metrics.IncrementPendingSizeGauge, float64(sess.dataFileMap[filePath]), sess.tableFQN)
 	metrics.AddCounter(metrics.IncrementLoadedSizeCounter, float64(sess.dataFileMap[filePath]), sess.tableFQN)
+	delete(sess.dataFileMap, filePath)
 	return nil
 }
 

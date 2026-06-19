@@ -20,6 +20,8 @@ SNOWFLAKE_DATABASE="${SNOWFLAKE_DATABASE:-TIDB2SNOWFLAKE_E2E}"
 SNOWFLAKE_SCHEMA="${SNOWFLAKE_SCHEMA:-LOCAL_${RUN_ID//[^0-9A-Za-z_]/_}}"
 CHANGEFEED_ID="${CHANGEFEED_ID:-tidb2sf-${RUN_ID//[^0-9A-Za-z-]/-}}"
 WORKDIR="${WORKDIR:-$ROOT/.local-e2e/$RUN_ID}"
+SNAPSHOT_LOAD_MODE="${SNAPSHOT_LOAD_MODE:-bulk}"
+SNAPSHOT_COMPRESSION="${SNAPSHOT_COMPRESSION:-none}"
 mkdir -p "$WORKDIR"
 
 log() {
@@ -253,6 +255,7 @@ main() {
   log "workdir: $WORKDIR"
   log "storage root: $STORAGE_ROOT"
   log "snowflake database/schema: $SNOWFLAKE_DATABASE.$SNOWFLAKE_SCHEMA"
+  log "snapshot load mode/compression: $SNAPSHOT_LOAD_MODE/$SNAPSHOT_COMPRESSION"
 
   log "building tidb2snowflake"
   make -C "$ROOT" build >/dev/null
@@ -277,11 +280,17 @@ SQL
     aws s3 rm "$STORAGE_ROOT" --recursive --region "$S3_REGION" >/dev/null 2>&1 || true
 
   log "dumping snapshot to S3"
+  dumpling_extra_args=()
+  if [[ "$SNAPSHOT_COMPRESSION" == "gzip" ]]; then
+    dumpling_extra_args+=(--compress gzip)
+  elif [[ "$SNAPSHOT_COMPRESSION" != "none" ]]; then
+    die "unsupported SNAPSHOT_COMPRESSION: $SNAPSHOT_COMPRESSION"
+  fi
   AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN:-}" \
     tiup dumpling -h "$TIDB_HOST" -P "$TIDB_PORT" -u root \
       --filetype csv --no-header --no-schemas --csv-output-dialect snowflake --escape-backslash=false \
       --tables-list "$TABLE_FQN" --output "$STORAGE_ROOT/snapshot" --s3.region "$S3_REGION" \
-      --output-filename-template '{{.DB}}.{{.Table}}.{{.Index}}' >"$WORKDIR/dumpling.log" 2>&1
+      --output-filename-template '{{.DB}}.{{.Table}}.{{.Index}}' "${dumpling_extra_args[@]}" >"$WORKDIR/dumpling.log" 2>&1
   wait_for_s3_objects "$STORAGE_ROOT/snapshot" 1
 
   log "creating TiCDC changefeed to S3"
@@ -313,6 +322,8 @@ SQL
     --aws.access-key "$AWS_ACCESS_KEY_ID" \
     --aws.secret-key "$AWS_SECRET_ACCESS_KEY" \
     --table "$TABLE_FQN" \
+    --snapshot.load-mode "$SNAPSHOT_LOAD_MODE" \
+    --snapshot.compression "$SNAPSHOT_COMPRESSION" \
     --changefeed.flush-interval 10s \
     --log.level info >"$WORKDIR/tidb2snowflake.log" 2>&1 &
   TOOL_PID=$!

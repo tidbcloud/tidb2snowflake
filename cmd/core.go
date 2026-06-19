@@ -53,6 +53,16 @@ const (
 	incrementDirName = "increment"
 )
 
+const (
+	SnapshotLoadModeBulk    = "bulk"
+	SnapshotLoadModePerFile = "per-file"
+)
+
+const (
+	SnapshotCompressionNone = "none"
+	SnapshotCompressionGzip = "gzip"
+)
+
 // Config is the full configuration for one replication run.
 type Config struct {
 	TiDB      *tidbsql.TiDBConfig
@@ -71,6 +81,8 @@ type Config struct {
 
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int
+	SnapshotLoadMode        string
+	SnapshotCompression     string
 
 	PollInterval time.Duration
 	Mode         RunMode
@@ -317,11 +329,12 @@ func replicateTable(
 			fmt.Sprintf("snapshot_external_%s_%s", sourceDatabase, sourceTable),
 			snapshotURI,
 			cred,
+			snowsql.WithStageFileCompression(snapshotCompression(cfg)),
 		)
 		if err != nil {
 			return errors.Trace(err)
 		}
-		err = replicate.StartReplicateSnapshot(ctx, conn, tableFQN, cfg.TiDB, snapshotURI, true)
+		err = replicate.StartReplicateSnapshot(ctx, conn, tableFQN, cfg.TiDB, snapshotURI, snapshotLoadMode(cfg) == SnapshotLoadModePerFile)
 		conn.Close()
 		if err != nil {
 			return errors.Trace(err)
@@ -348,12 +361,26 @@ func replicateTable(
 	return nil
 }
 
+func snapshotLoadMode(cfg *Config) string {
+	if cfg.SnapshotLoadMode == "" {
+		return SnapshotLoadModeBulk
+	}
+	return cfg.SnapshotLoadMode
+}
+
+func snapshotCompression(cfg *Config) string {
+	if cfg.SnapshotCompression == "" {
+		return SnapshotCompressionNone
+	}
+	return cfg.SnapshotCompression
+}
+
 func buildExportRequest(cfg *Config, cleanSnapshotURI string, cred *credentials.Value) *tidbcloud.CreateExportRequest {
 	req := &tidbcloud.CreateExportRequest{
 		DisplayName: "tidb2snowflake-snapshot",
 		ExportOptions: &tidbcloud.ExportOptions{
 			FileType:    tidbcloud.ExportFileTypeCSV,
-			Compression: tidbcloud.ExportCompressionNone,
+			Compression: exportCompression(snapshotCompression(cfg)),
 			// Disable backslash escaping to match the Snowflake-dialect CSV the
 			// loader's COPY expects.
 			EscapeBackslash: boolPtr(false),
@@ -383,6 +410,15 @@ func buildExportRequest(cfg *Config, cleanSnapshotURI string, cred *credentials.
 		req.ExportOptions.SnapshotTSO = cfg.SnapshotTSO
 	}
 	return req
+}
+
+func exportCompression(compression string) tidbcloud.ExportCompression {
+	switch compression {
+	case SnapshotCompressionGzip:
+		return tidbcloud.ExportCompressionGzip
+	default:
+		return tidbcloud.ExportCompressionNone
+	}
 }
 
 func buildChangefeedRequest(cfg *Config, cleanIncrementURI string, cred *credentials.Value, snapshotTSO string) *tidbcloud.CreateChangefeedRequest {
