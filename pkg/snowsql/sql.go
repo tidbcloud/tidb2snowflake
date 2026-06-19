@@ -3,6 +3,7 @@ package snowsql
 import (
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -48,21 +49,77 @@ DROP STAGE IF EXISTS {stageName};
 	return err
 }
 
-func LoadSnapshotFromStage(db *sql.DB, targetTable, stageName, filePath string) error {
+func LoadSnapshotFromStage(db *sql.DB, targetTable, stageName, filePath string, compression ...string) error {
+	fileFormat := snapshotFileFormat(compressionValue(compression))
+	if strings.Contains(filePath, "*") {
+		return LoadSnapshotFromStagePattern(db, targetTable, stageName, stagePatternFromGlob(filePath), compression...)
+	}
 	sql, err := formatter.Format(`
 COPY INTO {targetTable}
 FROM @{stageName}/{filePath}
-FILE_FORMAT = (TYPE = 'CSV' EMPTY_FIELD_AS_NULL = FALSE NULL_IF=('\\N') FIELD_OPTIONALLY_ENCLOSED_BY='"' ESCAPE='\\' BINARY_FORMAT = 'UTF8');
+FILE_FORMAT = ({fileFormat});
 `, formatter.Named{
 		"targetTable": utils.EscapeString(targetTable),
 		"stageName":   utils.EscapeString(stageName),
 		"filePath":    utils.EscapeString(filePath),
+		"fileFormat":  fileFormat,
 	})
 	if err != nil {
 		return errors.Trace(err)
 	}
 	_, err = db.Exec(sql)
 	return err
+}
+
+func LoadSnapshotFromStagePattern(db *sql.DB, targetTable, stageName, pattern string, compression ...string) error {
+	fileFormat := snapshotFileFormat(compressionValue(compression))
+	sql, err := formatter.Format(`
+COPY INTO {targetTable}
+FROM @{stageName}
+FILE_FORMAT = ({fileFormat})
+PATTERN = '{pattern}';
+`, formatter.Named{
+		"targetTable": utils.EscapeString(targetTable),
+		"stageName":   utils.EscapeString(stageName),
+		"fileFormat":  fileFormat,
+		"pattern":     utils.EscapeString(pattern),
+	})
+	if err != nil {
+		return errors.Trace(err)
+	}
+	_, err = db.Exec(sql)
+	return err
+}
+
+func compressionValue(compression []string) string {
+	if len(compression) == 0 || compression[0] == "" {
+		return "none"
+	}
+	return compression[0]
+}
+
+func snapshotFileFormat(compression string) string {
+	parts := []string{
+		"TYPE = 'CSV'",
+		"EMPTY_FIELD_AS_NULL = FALSE",
+		"NULL_IF=('\\\\N')",
+		`FIELD_OPTIONALLY_ENCLOSED_BY='"'`,
+		`ESCAPE='\\'`,
+		"BINARY_FORMAT = 'UTF8'",
+	}
+	switch strings.ToLower(compression) {
+	case "gzip":
+		parts = append(parts, "COMPRESSION = 'GZIP'")
+	default:
+		parts = append(parts, "COMPRESSION = 'NONE'")
+	}
+	return strings.Join(parts, " ")
+}
+
+func stagePatternFromGlob(glob string) string {
+	pattern := regexp.QuoteMeta(glob)
+	pattern = strings.ReplaceAll(pattern, `\*`, ".*")
+	return ".*" + pattern
 }
 
 func GetDefaultString(val interface{}) string {

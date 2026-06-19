@@ -82,6 +82,8 @@ func NewSnowflakeCmd() *cobra.Command {
 
 	// consistency / changefeed tuning
 	f.StringVar(&cfg.SnapshotTSO, "snapshot-tso", "", "pin the snapshot to a specific TiDB TSO (optional; default: chosen at export time)")
+	f.StringVar(&cfg.SnapshotLoadMode, "snapshot.load-mode", SnapshotLoadModeBulk, "snapshot load mode: bulk or per-file")
+	f.StringVar(&cfg.SnapshotCompression, "snapshot.compression", SnapshotCompressionNone, "snapshot export compression: none or gzip")
 	f.DurationVar(&cfg.ChangefeedFlushInterval, "changefeed.flush-interval", 60*time.Second, "changefeed flush interval")
 	f.IntVar(&cfg.ChangefeedFileSizeMiB, "changefeed.file-size", 64, "changefeed file size in MiB")
 	f.DurationVar(&cfg.PollInterval, "poll-interval", 10*time.Second, "interval to poll export/changefeed status")
@@ -99,6 +101,16 @@ func NewSnowflakeCmd() *cobra.Command {
 func validateConfig(cfg *Config) error {
 	if cfg.AWSAccessKey == "" || cfg.AWSSecretKey == "" {
 		return errors.New("--aws.access-key and --aws.secret-key are required")
+	}
+	switch snapshotLoadMode(cfg) {
+	case SnapshotLoadModeBulk, SnapshotLoadModePerFile:
+	default:
+		return errors.Errorf("--snapshot.load-mode must be %q or %q", SnapshotLoadModeBulk, SnapshotLoadModePerFile)
+	}
+	switch snapshotCompression(cfg) {
+	case SnapshotCompressionNone, SnapshotCompressionGzip:
+	default:
+		return errors.Errorf("--snapshot.compression must be %q or %q", SnapshotCompressionNone, SnapshotCompressionGzip)
 	}
 	// TiDB Cloud API credentials are only required when an export/changefeed has
 	// to be created (i.e. the snapshot/increment data does not already exist), so
