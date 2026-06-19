@@ -290,7 +290,7 @@ SQL
     tiup dumpling -h "$TIDB_HOST" -P "$TIDB_PORT" -u root \
       --filetype csv --no-header --no-schemas --csv-output-dialect snowflake --escape-backslash=false \
       --tables-list "$TABLE_FQN" --output "$STORAGE_ROOT/snapshot" --s3.region "$S3_REGION" \
-      --output-filename-template '{{.DB}}.{{.Table}}.{{.Index}}' "${dumpling_extra_args[@]}" >"$WORKDIR/dumpling.log" 2>&1
+      --output-filename-template '{{.DB}}.{{.Table}}.{{.Index}}' ${dumpling_extra_args[@]+"${dumpling_extra_args[@]}"} >"$WORKDIR/dumpling.log" 2>&1
   wait_for_s3_objects "$STORAGE_ROOT/snapshot" 1
 
   log "creating TiCDC changefeed to S3"
