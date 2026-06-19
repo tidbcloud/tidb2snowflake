@@ -151,6 +151,9 @@ the current implementation or existing runners do not satisfy it yet.
 | Restart idempotency | partial/manual | not a release-quality gate | add scripted rerun with same storage prefix and marker assertions |
 | Failure injection | not yet implemented | design-required only | add hooks or fake connector/storage tests before making it a release gate |
 | Progress without checkpoint | not yet fixed | expected failure / known P0 risk | add regression test and fix loader reconciliation |
+| Unsupported type failures | type mapper errors partially covered | documented/partially covered | add negative tests that assert error context and no Snowflake/marker side effects |
+| Unsupported table admission | not yet implemented | expected failure / known P0 risk | add pre-snapshot admission checks for no-PK tables and PK changes |
+| Identifier escaping | not yet implemented | not covered / likely failure outside simple identifiers | define first-release identifier subset and add escaping/collision tests |
 
 P0 case-to-runner matrix:
 
@@ -164,7 +167,9 @@ P0 case-to-runner matrix:
 | stored state-ID reuse with API credentials | Cloud e2e | not fully covered |
 | supported type value round-trip | new matrix Snowflake e2e | not covered |
 | supported DDL final-state correctness | new matrix Snowflake e2e | not covered |
-| unsupported cases fail clearly | unit tests and negative e2e | partially covered/documented |
+| unsupported type cases fail clearly | unit tests and negative e2e | documented only; type mapper errors partially covered |
+| unsupported table-admission cases fail before side effects | local negative e2e and unit tests | not covered; no-PK admission is a known P0 risk |
+| identifier escaping and supported identifier subset | unit tests and e2e | not covered |
 
 ## P0 End-to-End Cases
 
@@ -306,8 +311,10 @@ Supported types to verify:
 - unsigned integer family, especially max values
 - `DECIMAL` and `NUMERIC` up to Snowflake precision 38
 - `FLOAT` and `DOUBLE`
-- `DATE`, `DATETIME`, `TIMESTAMP`, `TIME`
+- `DATE`, `DATETIME`, `TIMESTAMP`, `TIME`, `YEAR`
 - `CHAR`, `VARCHAR`, `TINYTEXT`, `TEXT`, `MEDIUMTEXT`, `LONGTEXT`
+- `ENUM` as the selected label text
+- `VECTOR` as the textual vector representation
 - `BINARY`, `VARBINARY`, `TINYBLOB`, `BLOB`
 - nullable and non-null columns
 - default values that are represented in TiDB metadata
@@ -407,32 +414,76 @@ Drop schema expected state:
 
 These cases must not silently produce incorrect Snowflake data.
 
+Split unsupported behavior into type-mapping failures and table-admission
+failures. They have different side-effect risks.
+
 Unsupported types:
 
 - `JSON`
-- `ENUM`
 - `SET`
-- `YEAR`
 - `BIT` and `BIT(n)`
 - `MEDIUMBLOB`
 - `LONGBLOB`
-- `VECTOR`
 - `DECIMAL` precision greater than 38
 
-Unsupported DDL/table semantics:
+Type-mapping expected state:
+
+- the tool returns a clear error before writing incorrect values
+- error context identifies the table, column, and TiDB type
+- if Snowflake objects were created before type discovery, the test must assert
+  the object is empty or cleaned up according to the documented behavior
+- no `loadinfo`, `.checkpoint`, or `_consumer/progress.json` marker claims the
+  unsupported data was applied
+
+Unsupported table-admission semantics:
 
 - table without a stable primary key
 - primary-key add/drop/change after table admission
+
+Table-admission expected state:
+
+- the tool rejects the table before Snowflake table creation, snapshot `COPY`,
+  `loadinfo`, CDC progress, or CDC checkpoints
+- no partial target table is left behind unless the behavior is explicitly
+  documented and the table is empty
+- error context identifies the table and the admission rule that failed
+
+Unsupported DDL/task semantics:
+
 - `CREATE TABLE` during a running task
 - `CREATE SCHEMA` during a running task
 - `RENAME TABLE`
 - drop and recreate the same table name with a changed shape
 
-Expected:
+DDL/task expected state:
 
 - the tool returns a clear error or documented skip
 - no partial incorrect Snowflake data is committed for the unsupported table
 - error messages include enough context to identify table, column, or DDL
+
+Required negative gates:
+
+- no-PK table admission: create a source table without primary key and assert the
+  tool fails before Snowflake table creation, snapshot load, `loadinfo`,
+  `_consumer/progress.json`, or `.checkpoint`
+- PK change after admission: add/drop/change the primary key and assert the tool
+  fails before applying later DML with ambiguous merge semantics
+- unsupported type table: include one unsupported column and assert error context
+  plus absence of success markers
+- running-task `CREATE TABLE` and `CREATE SCHEMA`: assert explicit rejection or
+  documented skip without silent data loss
+- `RENAME TABLE`: assert explicit rejection and no later DML is merged into the
+  old table identity
+- drop/recreate changed shape: assert explicit rejection or versioned-table
+  behavior before any mixed-shape data is merged
+
+Current status:
+
+- unsupported cases are documented in `test/fixtures/unsupported_or_skipped.sql`
+- type mapper errors are partially covered by unit behavior
+- executable negative e2e coverage is not yet present
+- no-PK admission is an expected-failing P0 risk until pre-snapshot admission
+  validation exists
 
 ## P1 Multi-Table Cases
 
@@ -468,11 +519,33 @@ Expected:
 Use identifiers with mixed case, underscores, digits, and characters that affect
 SQL or regex generation where supported by TiDB and the tool.
 
+First-release decision:
+
+- define the supported identifier subset before release
+- if the first release supports only simple unquoted identifiers, the tool must
+  reject unsupported names before Snowflake table creation or data load
+- if broader identifiers are supported, all generated Snowflake SQL and S3
+  patterns must quote/escape consistently
+
 Expected:
 
 - Snowflake SQL escapes identifiers correctly
 - S3 pattern generation matches only the intended files
 - table names do not collide after normalization
+
+Cases:
+
+- mixed-case table and column names
+- reserved words such as `order`, `group`, and `select`
+- names containing underscores and digits
+- names requiring Snowflake quotes, such as spaces, punctuation, or symbols
+- names that differ only by case or normalize to the same target spelling
+
+Current status:
+
+- not covered by existing runners
+- expected to fail or be unsupported outside the simple identifier subset until
+  identifier policy and escaping tests are implemented
 
 ## P1 Snapshot Edge Cases
 

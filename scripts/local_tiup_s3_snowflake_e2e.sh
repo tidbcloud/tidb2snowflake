@@ -226,11 +226,19 @@ func main() {
 	for time.Now().Before(deadline) {
 		var count int
 		var amount sql.NullInt64
+		var year sql.NullInt64
+		var enumVal sql.NullString
+		var vectorVal sql.NullString
 		var deleted int
-		err = db.QueryRow(fmt.Sprintf("SELECT COUNT(*), COALESCE(MAX(IFF(id=2, amount, NULL)), -1), SUM(IFF(id=3, 1, 0)) FROM %s", table)).Scan(&count, &amount, &deleted)
+		err = db.QueryRow(fmt.Sprintf("SELECT COUNT(*), COALESCE(MAX(IFF(id=2, amount, NULL)), -1), COALESCE(MAX(IFF(id=2, c_year, NULL)), -1), COALESCE(MAX(IFF(id=2, c_enum, NULL)), ''), COALESCE(MAX(IFF(id=2, c_vector, NULL)), ''), SUM(IFF(id=3, 1, 0)) FROM %s", table)).Scan(&count, &amount, &year, &enumVal, &vectorVal, &deleted)
 		if err == nil {
-			last = fmt.Sprintf("count=%d id2_amount=%d id3_rows=%d", count, amount.Int64, deleted)
-			if count == 4 && amount.Valid && amount.Int64 == 222 && deleted == 0 {
+			last = fmt.Sprintf("count=%d id2_amount=%d id2_year=%d id2_enum=%s id2_vector=%s id3_rows=%d", count, amount.Int64, year.Int64, enumVal.String, vectorVal.String, deleted)
+			if count == 4 &&
+				amount.Valid && amount.Int64 == 222 &&
+				year.Valid && year.Int64 == 2030 &&
+				enumVal.Valid && enumVal.String == "large" &&
+				vectorVal.Valid && vectorVal.String == "[9,8,7]" &&
+				deleted == 0 {
 				fmt.Println(last)
 				return
 			}
@@ -271,8 +279,18 @@ main() {
   "$MYSQL" -h "$TIDB_HOST" -P "$TIDB_PORT" -uroot <<SQL
 CREATE DATABASE IF NOT EXISTS $SOURCE_DB;
 DROP TABLE IF EXISTS $TABLE_FQN;
-CREATE TABLE $TABLE_FQN (id BIGINT PRIMARY KEY, name VARCHAR(64), amount BIGINT);
-INSERT INTO $TABLE_FQN (id, name, amount) VALUES (1,'a',100),(2,'b',200),(3,'c',300);
+CREATE TABLE $TABLE_FQN (
+  id BIGINT PRIMARY KEY,
+  name VARCHAR(64),
+  amount BIGINT,
+  c_year YEAR,
+  c_enum ENUM('small', 'medium', 'large'),
+  c_vector VECTOR(3)
+);
+INSERT INTO $TABLE_FQN (id, name, amount, c_year, c_enum, c_vector) VALUES
+  (1,'a',100,2026,'small','[1,2,3]'),
+  (2,'b',200,2027,'medium','[4,5,6]'),
+  (3,'c',300,2028,'large','[7,8,9]');
 SQL
 
   log "clearing S3 run prefix"
@@ -302,8 +320,10 @@ SQL
 
   log "applying incremental DMLs"
   "$MYSQL" -h "$TIDB_HOST" -P "$TIDB_PORT" -uroot <<SQL
-INSERT INTO $TABLE_FQN (id, name, amount) VALUES (4,'d',400),(5,'e',500);
-UPDATE $TABLE_FQN SET amount = 222 WHERE id = 2;
+INSERT INTO $TABLE_FQN (id, name, amount, c_year, c_enum, c_vector) VALUES
+  (4,'d',400,2029,'small','[0.1,0.2,0.3]'),
+  (5,'e',500,2031,'medium','[-1,0,1]');
+UPDATE $TABLE_FQN SET amount = 222, c_year = 2030, c_enum = 'large', c_vector = '[9,8,7]' WHERE id = 2;
 DELETE FROM $TABLE_FQN WHERE id = 3;
 SQL
   wait_for_s3_objects "$STORAGE_ROOT/increment/$SOURCE_DB/$SOURCE_TABLE" 2

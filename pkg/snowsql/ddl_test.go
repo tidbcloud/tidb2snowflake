@@ -72,3 +72,33 @@ func TestGenDDLViaColumnsDiff(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, expectedDDLs, ddl)
 }
+
+func TestGetSnowflakeTypeString_NewScalarMappings(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		col  cloudstorage.TableCol
+		want string
+	}{
+		{
+			name: "year",
+			col:  cloudstorage.TableCol{Name: "c_year", Tp: "year"},
+			want: "c_year NUMBER",
+		},
+		{
+			name: "enum",
+			col:  cloudstorage.TableCol{Name: "c_enum", Tp: "enum"},
+			want: "c_enum VARCHAR",
+		},
+		{
+			name: "vector",
+			col:  cloudstorage.TableCol{Name: "c_vector", Tp: "vector"},
+			want: "c_vector VARCHAR",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := snowsql.GetSnowflakeTypeString(tc.col)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}

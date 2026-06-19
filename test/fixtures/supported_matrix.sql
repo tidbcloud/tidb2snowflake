@@ -36,6 +36,7 @@ CREATE TABLE supported_type_matrix (
   c_datetime DATETIME(6) NULL,
   c_timestamp TIMESTAMP(6) NULL DEFAULT NULL,
   c_time TIME(6) NULL,
+  c_year YEAR NULL,
 
   c_char CHAR(16) NULL,
   c_varchar VARCHAR(255) NULL,
@@ -43,11 +44,13 @@ CREATE TABLE supported_type_matrix (
   c_text TEXT NULL,
   c_mediumtext MEDIUMTEXT NULL,
   c_longtext LONGTEXT NULL,
+  c_enum ENUM('small', 'medium', 'large') NULL,
 
   c_binary BINARY(16) NULL,
   c_varbinary VARBINARY(255) NULL,
   c_tinyblob TINYBLOB NULL,
   c_blob BLOB NULL,
+  c_vector VECTOR(3) NULL,
 
   PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
@@ -79,16 +82,19 @@ INSERT INTO supported_type_matrix VALUES
     '2026-06-04 12:34:56.123456',
     '2026-06-04 12:34:56.123456',
     '23:59:59.123456',
+    2026,
     'char-value',
     'varchar parameter value',
     'tiny text value',
     'text value',
     'medium text value',
     'long text value',
+    'medium',
     X'00112233445566778899AABBCCDDEEFF',
     X'FFFE000102',
     X'01',
-    X'0203'
+    X'0203',
+    '[0.1,0.2,0.3]'
   ),
   (
     2,
@@ -116,14 +122,17 @@ INSERT INTO supported_type_matrix VALUES
     NULL,
     NULL,
     NULL,
+    NULL,
     '',
     '',
     '',
     '',
     '',
     '',
+    NULL,
     X'00000000000000000000000000000000',
     X'',
+    NULL,
     NULL,
     NULL
   ),
@@ -153,16 +162,19 @@ INSERT INTO supported_type_matrix VALUES
     '1000-01-01 00:00:00.000001',
     '1970-01-01 00:00:02.000001',
     '00:00:01.000001',
+    1970,
     '                ',
     'row to update',
     'tiny text two',
     'text before update',
     'medium text two',
     'long text two',
+    'small',
     X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF',
     X'CAFEBABE',
     X'11',
-    X'1213'
+    X'1213',
+    '[1,2,3]'
   ),
   (
     4,
@@ -190,16 +202,19 @@ INSERT INTO supported_type_matrix VALUES
     '9999-12-31 23:59:59.999999',
     '2038-01-19 03:14:07.999999',
     '838:59:58.999999',
+    2155,
     '1234567890abcdef',
     REPEAT('x', 255),
     REPEAT('t', 255),
     REPEAT('x', 1024),
     REPEAT('m', 1024),
     REPEAT('l', 1024),
+    'large',
     X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF',
     UNHEX(REPEAT('FF', 255)),
     UNHEX(REPEAT('FF', 255)),
-    UNHEX(REPEAT('FF', 1024))
+    UNHEX(REPEAT('FF', 1024)),
+    '[-0.5,0,0.5]'
   );
 
 INSERT INTO supported_type_matrix (id, c_varchar, c_text) VALUES

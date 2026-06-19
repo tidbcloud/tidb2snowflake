@@ -122,6 +122,9 @@ func checkSupportedTypes(db *sql.DB) {
 		"c_mediumint_unsigned": "mediumint unsigned",
 		"c_int_unsigned":       "int unsigned",
 		"c_bigint_unsigned":    "bigint unsigned",
+		"c_year":               "year",
+		"c_enum":               "enum",
+		"c_vector":             "vector",
 	} {
 		if got := byName[name].Tp; got != want {
 			panic(fmt.Sprintf("%s type = %q, want %q", name, got, want))
