@@ -81,6 +81,28 @@ Incremental replay writes a per-table `_consumer/progress.json` under the
 incremental storage prefix after each successfully applied CDC file. On restart,
 the loader restores that applied-file cursor before scanning object storage.
 
+## Type mapping
+
+The target Snowflake type is derived from TiDB column metadata. The table below
+documents the intended mapping for the supported scalar type families.
+
+| TiDB type family | Snowflake type | Notes |
+|---|---|---|
+| `BOOL`, `BOOLEAN` | `BOOLEAN` | Boolean values. |
+| `TINYINT`, `SMALLINT`, `MEDIUMINT`, `INT`, `BIGINT` | `NUMBER` | Signed and unsigned integer variants map to `NUMBER`. |
+| `YEAR` | `NUMBER` | Preserves the numeric year value. |
+| `FLOAT`, `DOUBLE` | `FLOAT` | Approximate numeric values. |
+| `DECIMAL`, `NUMERIC` | `NUMBER(p, s)` | Must fit Snowflake precision/scale limits. |
+| `DATE` | `DATE` | Date values. |
+| `DATETIME` | `DATETIME(p)` | Precision follows TiDB metadata. |
+| `TIMESTAMP` | `TIMESTAMP(p)` | Precision follows TiDB metadata. |
+| `TIME` | `TIME(p)` | Precision follows TiDB metadata. |
+| `CHAR`, `VARCHAR` | `CHAR(n)`, `VARCHAR(n)` | Length follows TiDB metadata. |
+| `TINYTEXT`, `TEXT`, `MEDIUMTEXT`, `LONGTEXT` | `TEXT` | Text values. |
+| `ENUM` | `VARCHAR` | Stores the selected enum label as text. |
+| `VECTOR` | `VARCHAR` | Stores the textual vector representation. |
+| `BINARY`, `VARBINARY`, `TINYBLOB`, `BLOB` | `BINARY(n)` | Binary values are loaded with hex decoding for incremental files. |
+
 ## Known limitations
 
 - Only Snowflake is supported as the target.

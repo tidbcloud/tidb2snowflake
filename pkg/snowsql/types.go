@@ -41,10 +41,13 @@ var TiDB2SnowflakeTypeMap map[string]string = map[string]string{
 	"numeric":            "NUMBER",
 	"bool":               "BOOLEAN",
 	"boolean":            "BOOLEAN",
+	"year":               "NUMBER",
 	"date":               "DATE",
 	"datetime":           "DATETIME",
 	"timestamp":          "TIMESTAMP",
 	"time":               "TIME",
+	"enum":               "VARCHAR",
+	"vector":             "VARCHAR",
 }
 
 func GetSnowflakeTypeString(column cloudstorage.TableCol) (string, error) {
@@ -56,7 +59,7 @@ func GetSnowflakeTypeString(column cloudstorage.TableCol) (string, error) {
 		return fmt.Sprintf("%s %s(%s)", column.Name, TiDB2SnowflakeTypeMap[tp], column.Precision), nil
 	case "longblob", "mediumblob":
 		return "", errors.Errorf("The maximum size of Snowflake's BINARY type is 8 MB, so can not support mediumblob and longblob.")
-	case "int", "mediumint", "bigint", "tinyint", "smallint", "float", "double", "bool", "boolean", "date":
+	case "int", "mediumint", "bigint", "tinyint", "smallint", "float", "double", "bool", "boolean", "year", "date":
 		return fmt.Sprintf("%s %s", column.Name, TiDB2SnowflakeTypeMap[tp]), nil
 	case "int unsigned", "mediumint unsigned", "tinyint unsigned", "smallint unsigned", "bigint unsigned", "float unsigned", "double unsigned":
 		return fmt.Sprintf("%s %s", column.Name, TiDB2SnowflakeTypeMap[tp]), nil
@@ -66,6 +69,8 @@ func GetSnowflakeTypeString(column cloudstorage.TableCol) (string, error) {
 		return fmt.Sprintf("%s %s(%s, %s)", column.Name, TiDB2SnowflakeTypeMap[tp], column.Precision, column.Scale), nil
 	case "datetime", "timestamp", "time":
 		return fmt.Sprintf("%s %s(%s)", column.Name, TiDB2SnowflakeTypeMap[tp], column.Precision), nil
+	case "enum", "vector":
+		return fmt.Sprintf("%s %s", column.Name, TiDB2SnowflakeTypeMap[tp]), nil
 	default:
 		return "", errors.Errorf("Unsupported data type: %s", column.Tp)
 	}

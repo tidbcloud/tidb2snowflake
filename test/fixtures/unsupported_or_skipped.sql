@@ -8,11 +8,9 @@
 -- target policy and value encoding in this project before we execute them here:
 --   BIT / BIT(n)
 --   JSON
---   ENUM / SET
---   YEAR
+--   SET
 --   MEDIUMBLOB / LONGBLOB (Snowflake BINARY is limited to 8 MB)
 --   DECIMAL precision greater than Snowflake's max precision 38
---   VECTOR
 --   Tables whose primary key contains BIT(n>1)
 
 -- Unsupported or intentionally rejected DDL semantics today:
@@ -27,10 +25,9 @@
 -- Kept as executable examples for future enablement, but not sourced by the
 -- smoke script:
 --
--- CREATE TABLE unsupported_json_enum_set (
+-- CREATE TABLE unsupported_json_set (
 --   id BIGINT NOT NULL PRIMARY KEY,
 --   c_json JSON NULL,
---   c_enum ENUM('small', 'medium', 'large') NULL,
 --   c_set SET('red', 'green', 'blue') NULL
 -- );
 --
@@ -39,9 +36,4 @@
 --   c_bit BIT(8) NULL,
 --   c_mediumblob MEDIUMBLOB NULL,
 --   c_longblob LONGBLOB NULL
--- );
---
--- CREATE TABLE unsupported_vector (
---   id BIGINT NOT NULL PRIMARY KEY,
---   c_vector VECTOR(3) NULL
 -- );
