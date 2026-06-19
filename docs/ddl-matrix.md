@@ -1,6 +1,6 @@
 # DDL and Type Matrix Smoke Test
 
-`test/fixtures/fivetran_supported_matrix.sql` is derived from
+`test/fixtures/supported_matrix.sql` is derived from
 `tidb-fivetran-connector/e2e-test/test.sql`. It keeps the TiDB data types and
 DML shapes currently supported by tidb2snowflake:
 
@@ -27,7 +27,7 @@ then uses the project code to verify:
   widening modify, nullability changes, dropping defaults, truncate table,
   drop table, and drop schema.
 
-`test/fixtures/fivetran_unsupported_or_skipped.sql` records Fivetran cases that
+`test/fixtures/unsupported_or_skipped.sql` records upstream connector cases that
 are intentionally not executed yet by tidb2snowflake's local smoke test. Some of
 these are supported by the Fivetran connector but do not have a tidb2snowflake
 Snowflake type policy yet, such as JSON, SET, YEAR, BIT(1), VECTOR, and larger
