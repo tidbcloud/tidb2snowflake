@@ -8,11 +8,11 @@ import (
 	"github.com/pingcap/log"
 	timodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
-	"github.com/tidbcloud/tidb2snowflake/pkg/tidbsql"
+	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"go.uber.org/zap"
 )
 
-func GetColumnModifyString(diff *tidbsql.ColumnDiff) (string, error) {
+func GetColumnModifyString(diff *tidb.ColumnDiff) (string, error) {
 	strs := make([]string, 0, 3)
 	if diff.Before.Tp != diff.After.Tp || diff.Before.Precision != diff.After.Precision || diff.Before.Scale != diff.After.Scale {
 		colStr, err := GetSnowflakeTypeString(*diff.After)
@@ -59,7 +59,7 @@ func GenDDLViaColumnsDiff(prevColumns []cloudstorage.TableCol, curTableDef cloud
 		return nil, errors.New("Received create schema ddl, which should not happen") // FIXME: drop schema and create schema
 	}
 
-	columnDiff, err := tidbsql.GetColumnDiff(prevColumns, curTableDef.Columns)
+	columnDiff, err := tidb.GetColumnDiff(prevColumns, curTableDef.Columns)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -67,23 +67,23 @@ func GenDDLViaColumnsDiff(prevColumns []cloudstorage.TableCol, curTableDef cloud
 	for _, item := range columnDiff {
 		ddl := ""
 		switch item.Action {
-		case tidbsql.ADD_COLUMN:
+		case tidb.ADD_COLUMN:
 			ddl += fmt.Sprintf("ALTER TABLE %s ADD COLUMN ", curTableDef.Table)
 			colStr, err := GetSnowflakeColumnString(*item.After)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
 			ddl += colStr
-		case tidbsql.DROP_COLUMN:
+		case tidb.DROP_COLUMN:
 			ddl += fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", curTableDef.Table, item.Before.Name)
-		case tidbsql.MODIFY_COLUMN:
+		case tidb.MODIFY_COLUMN:
 			ddl += fmt.Sprintf("ALTER TABLE %s MODIFY ", curTableDef.Table)
 			modifyStr, err := GetColumnModifyString(&item)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
 			ddl += modifyStr
-		case tidbsql.RENAME_COLUMN:
+		case tidb.RENAME_COLUMN:
 			ddl += fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", curTableDef.Table, item.Before.Name, item.After.Name)
 		default:
 			// UNCHANGE
