@@ -45,7 +45,7 @@ make build       # produces bin/tidb2snowflake
 | Path | Description |
 |------|-------------|
 | `main.go` | CLI entrypoint (cobra) |
-| `pkg/snowsql` | Snowflake connector, DDL translation, type mapping |
+| `pkg/snowflake` | Snowflake connector, DDL translation, type mapping |
 | `pkg/tidbsql` | TiDB connection and schema/DDL helpers |
 | `pkg/coreinterfaces` | Connector interfaces |
 | `pkg/utils` | Shared helpers (CSV escaping, incremental table columns) |

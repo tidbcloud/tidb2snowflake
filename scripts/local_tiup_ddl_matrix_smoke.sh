@@ -62,8 +62,8 @@ import (
 
 	timodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
-	"github.com/tidbcloud/tidb2snowflake/pkg/snowsql"
-	"github.com/tidbcloud/tidb2snowflake/pkg/tidbsql"
+	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
+	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 )
 
 const (
@@ -73,7 +73,7 @@ const (
 )
 
 func main() {
-	cfg := &tidbsql.TiDBConfig{
+	cfg := &tidb.Config{
 		Host: os.Getenv("TIDB_HOST"),
 		Port: atoi(os.Getenv("TIDB_PORT")),
 		User: "root",
@@ -101,7 +101,7 @@ func must(err error) {
 }
 
 func checkSupportedTypes(db *sql.DB) {
-	cols, err := tidbsql.GetTiDBTableColumn(db, dbName, typeTable)
+	cols, err := tidb.GetTiDBTableColumn(db, dbName, typeTable)
 	must(err)
 	if len(cols) < 30 {
 		panic(fmt.Sprintf("expected many type columns, got %d", len(cols)))
@@ -193,7 +193,7 @@ func expectDDL(db *sql.DB, aliases map[string]string, newAliases map[string]stri
 }
 
 func columns(db *sql.DB, aliases map[string]string) []cloudstorage.TableCol {
-	cols, err := tidbsql.GetTiDBTableColumn(db, dbName, ddlTable)
+	cols, err := tidb.GetTiDBTableColumn(db, dbName, ddlTable)
 	must(err)
 	for i := range cols {
 		if id, ok := aliases[cols[i].Name]; ok {

@@ -17,7 +17,7 @@ import (
 	"github.com/thediveo/enumflag"
 	"github.com/tidbcloud/tidb2snowflake/pkg/coreinterfaces"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
-	"github.com/tidbcloud/tidb2snowflake/pkg/snowsql"
+	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
@@ -66,7 +66,7 @@ const (
 // Config is the full configuration for one replication run.
 type Config struct {
 	TiDB      *tidb.Config
-	Snowflake *snowsql.SnowflakeConfig
+	Snowflake *snowflake.Config
 	TiDBCloud TiDBCloudConfig
 
 	Tables       []string
@@ -364,12 +364,12 @@ func replicateTable(
 		log.Info("starting snapshot load for table",
 			zap.String("table", tableFQN),
 			zap.String("stage", fmt.Sprintf("snapshot_external_%s_%s", sourceDatabase, sourceTable)))
-		conn, err := snowsql.NewSnowflakeConnector(
+		conn, err := snowflake.NewSnowflakeConnector(
 			cfg.Snowflake,
 			fmt.Sprintf("snapshot_external_%s_%s", sourceDatabase, sourceTable),
 			snapshotURI,
 			cred,
-			snowsql.WithStageFileCompression(snapshotCompression(cfg)),
+			snowflake.WithStageFileCompression(snapshotCompression(cfg)),
 		)
 		if err != nil {
 			return errors.Trace(err)
@@ -386,7 +386,7 @@ func replicateTable(
 			zap.String("table", tableFQN),
 			zap.String("stage", fmt.Sprintf("increment_external_%s_%s", sourceDatabase, sourceTable)),
 			zap.Duration("scanInterval", cfg.ChangefeedFlushInterval/5))
-		conn, err := snowsql.NewSnowflakeConnector(
+		conn, err := snowflake.NewSnowflakeConnector(
 			cfg.Snowflake,
 			fmt.Sprintf("increment_external_%s_%s", sourceDatabase, sourceTable),
 			incrementURI,

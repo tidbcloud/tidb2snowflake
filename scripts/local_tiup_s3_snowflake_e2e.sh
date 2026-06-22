@@ -195,7 +195,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/tidbcloud/tidb2snowflake/pkg/snowsql"
+	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 )
 
 func main() {
@@ -208,7 +208,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "--table is required")
 		os.Exit(2)
 	}
-	cfg := &snowsql.SnowflakeConfig{
+	cfg := &snowflake.Config{
 		AccountId: os.Getenv("SNOWFLAKE_ACCOUNT_ID"),
 		Warehouse: os.Getenv("SNOWFLAKE_WAREHOUSE"),
 		User:      os.Getenv("SNOWFLAKE_USER"),
