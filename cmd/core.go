@@ -113,6 +113,18 @@ func Replicate(ctx context.Context, cfg *Config) error {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 10 * time.Second
 	}
+	log.Info("replication run started",
+		zap.Strings("tables", cfg.Tables),
+		zap.String("mode", runModeString(cfg.Mode)),
+		zap.String("storage", redactURLRawQuery(cfg.StoragePath)),
+		zap.String("snapshotLoadMode", snapshotLoadMode(cfg)),
+		zap.String("snapshotCompression", snapshotCompression(cfg)),
+		zap.Duration("changefeedFlushInterval", cfg.ChangefeedFlushInterval),
+		zap.Int("changefeedFileSizeMiB", cfg.ChangefeedFileSizeMiB),
+		zap.Duration("pollInterval", cfg.PollInterval),
+		zap.Bool("tidbCloudConfigured", cfg.TiDBCloud.ClusterID != ""),
+		zap.String("snowflakeDatabase", cfg.Snowflake.Database),
+		zap.String("snowflakeSchema", cfg.Snowflake.Schema))
 
 	cred := &credentials.Value{
 		AccessKeyID:     cfg.AWSAccessKey,
@@ -140,6 +152,11 @@ func Replicate(ctx context.Context, cfg *Config) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	log.Info("replication state loaded",
+		zap.String("stateFile", stateFileName),
+		zap.Bool("hasExportID", state.ExportID != ""),
+		zap.Bool("hasChangefeedID", state.ChangefeedID != ""),
+		zap.String("snapshotTSO", state.SnapshotTSO))
 
 	// The TiDB Cloud client is created lazily: when the snapshot/increment data
 	// already exists (created by a previous run or by the user directly), no
@@ -184,7 +201,9 @@ func Replicate(ctx context.Context, cfg *Config) error {
 				state.SnapshotTSO = export.SnapshotTSO
 			}
 			waitForExport = true
-			log.Info("resuming existing export", zap.String("exportID", export.ExportID))
+			log.Info("resuming existing export",
+				zap.String("exportID", export.ExportID),
+				zap.String("snapshotTSO", state.SnapshotTSO))
 		default:
 			exists, err := dirHasObjects(ctx, store, snapshotDirName)
 			if err != nil {
@@ -211,7 +230,8 @@ func Replicate(ctx context.Context, cfg *Config) error {
 				waitForExport = true
 				log.Info("export created",
 					zap.String("exportID", export.ExportID),
-					zap.String("snapshotTSO", export.SnapshotTSO))
+					zap.String("snapshotTSO", export.SnapshotTSO),
+					zap.String("target", redactURLRawQuery(cleanSnapshotURI)))
 			}
 		}
 	}
@@ -222,7 +242,9 @@ func Replicate(ctx context.Context, cfg *Config) error {
 		switch {
 		case state.ChangefeedID != "":
 			waitForChangefeed = true
-			log.Info("resuming existing changefeed", zap.String("changefeedID", state.ChangefeedID))
+			log.Info("resuming existing changefeed",
+				zap.String("changefeedID", state.ChangefeedID),
+				zap.String("startTSO", state.SnapshotTSO))
 		default:
 			exists, err := dirHasObjects(ctx, store, incrementDirName)
 			if err != nil {
@@ -248,7 +270,10 @@ func Replicate(ctx context.Context, cfg *Config) error {
 				waitForChangefeed = true
 				log.Info("changefeed created",
 					zap.String("changefeedID", cf.ChangefeedID),
-					zap.String("startTSO", state.SnapshotTSO))
+					zap.String("startTSO", state.SnapshotTSO),
+					zap.String("target", redactURLRawQuery(cleanIncrementURI)),
+					zap.Duration("flushInterval", cfg.ChangefeedFlushInterval),
+					zap.Int("fileSizeMiB", cfg.ChangefeedFileSizeMiB))
 			}
 		}
 	}
@@ -259,22 +284,26 @@ func Replicate(ctx context.Context, cfg *Config) error {
 		if err != nil {
 			return err
 		}
-		log.Info("waiting for export to finish", zap.String("exportID", state.ExportID))
+		log.Info("waiting for export to finish",
+			zap.String("exportID", state.ExportID),
+			zap.Duration("pollInterval", cfg.PollInterval))
 		if _, err := c.WaitExport(ctx, cfg.TiDBCloud.ClusterID, state.ExportID, cfg.PollInterval); err != nil {
 			return errors.Annotate(err, "wait export")
 		}
-		log.Info("export finished")
+		log.Info("export finished", zap.String("exportID", state.ExportID))
 	}
 	if waitForChangefeed {
 		c, err := getClient()
 		if err != nil {
 			return err
 		}
-		log.Info("waiting for changefeed to be running", zap.String("changefeedID", state.ChangefeedID))
+		log.Info("waiting for changefeed to be running",
+			zap.String("changefeedID", state.ChangefeedID),
+			zap.Duration("pollInterval", cfg.PollInterval))
 		if _, err := c.WaitChangefeed(ctx, cfg.TiDBCloud.ClusterID, state.ChangefeedID, cfg.PollInterval); err != nil {
 			return errors.Annotate(err, "wait changefeed")
 		}
-		log.Info("changefeed running")
+		log.Info("changefeed running", zap.String("changefeedID", state.ChangefeedID))
 	}
 
 	// ---- Load object-storage files into Snowflake ----
@@ -288,6 +317,10 @@ func loadIntoSnowflake(
 	snapshotURI, incrementURI *url.URL,
 ) error {
 	metrics.TableNumGauge.Add(float64(len(cfg.Tables)))
+	log.Info("starting Snowflake load phase",
+		zap.Int("tableCount", len(cfg.Tables)),
+		zap.String("snapshotStorage", safeURLForLog(snapshotURI)),
+		zap.String("incrementStorage", safeURLForLog(incrementURI)))
 
 	var (
 		wg      sync.WaitGroup
@@ -298,11 +331,15 @@ func loadIntoSnowflake(
 		wg.Add(1)
 		go func(tableFQN string) {
 			defer wg.Done()
+			log.Info("starting table replication", zap.String("table", tableFQN))
 			if err := replicateTable(ctx, cfg, cred, tableFQN, snapshotURI, incrementURI); err != nil {
 				metrics.AddCounter(metrics.ErrorCounter, 1, tableFQN)
+				log.Error("table replication failed", zap.String("table", tableFQN), zap.Error(err))
 				mu.Lock()
 				errList = append(errList, errors.Annotatef(err, "table %s", tableFQN))
 				mu.Unlock()
+			} else {
+				log.Info("table replication finished", zap.String("table", tableFQN))
 			}
 		}(table)
 	}
@@ -324,6 +361,9 @@ func replicateTable(
 	sourceDatabase, sourceTable := utils.SplitTableFQN(tableFQN)
 
 	if cfg.Mode != RunModeIncrementalOnly {
+		log.Info("starting snapshot load for table",
+			zap.String("table", tableFQN),
+			zap.String("stage", fmt.Sprintf("snapshot_external_%s_%s", sourceDatabase, sourceTable)))
 		conn, err := snowsql.NewSnowflakeConnector(
 			cfg.Snowflake,
 			fmt.Sprintf("snapshot_external_%s_%s", sourceDatabase, sourceTable),
@@ -342,6 +382,10 @@ func replicateTable(
 	}
 
 	if cfg.Mode != RunModeSnapshotOnly {
+		log.Info("starting incremental load for table",
+			zap.String("table", tableFQN),
+			zap.String("stage", fmt.Sprintf("increment_external_%s_%s", sourceDatabase, sourceTable)),
+			zap.Duration("scanInterval", cfg.ChangefeedFlushInterval/5))
 		conn, err := snowsql.NewSnowflakeConnector(
 			cfg.Snowflake,
 			fmt.Sprintf("increment_external_%s_%s", sourceDatabase, sourceTable),
@@ -373,6 +417,31 @@ func snapshotCompression(cfg *Config) string {
 		return SnapshotCompressionNone
 	}
 	return cfg.SnapshotCompression
+}
+
+func runModeString(mode RunMode) string {
+	if ids, ok := RunModeIds[mode]; ok && len(ids) > 0 {
+		return ids[0]
+	}
+	return fmt.Sprintf("unknown(%d)", mode)
+}
+
+func redactURLRawQuery(raw string) string {
+	uri, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	uri.RawQuery = ""
+	return uri.String()
+}
+
+func safeURLForLog(uri *url.URL) string {
+	if uri == nil {
+		return ""
+	}
+	clone := *uri
+	clone.RawQuery = ""
+	return clone.String()
 }
 
 func buildExportRequest(cfg *Config, cleanSnapshotURI string, cred *credentials.Value) *tidbcloud.CreateExportRequest {
@@ -574,6 +643,11 @@ func saveState(ctx context.Context, store storage.ExternalStorage, state *runSta
 	if err := store.WriteFile(ctx, stateFileName, data); err != nil {
 		return errors.Annotate(err, "write state file")
 	}
+	log.Info("replication state saved",
+		zap.String("stateFile", stateFileName),
+		zap.Bool("hasExportID", state.ExportID != ""),
+		zap.Bool("hasChangefeedID", state.ChangefeedID != ""),
+		zap.String("snapshotTSO", state.SnapshotTSO))
 	return nil
 }
 

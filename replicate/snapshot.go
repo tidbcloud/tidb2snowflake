@@ -69,7 +69,9 @@ func NewSnapshotReplicateSession(
 		logger:              logger,
 	}
 	sess.logger.Info("Creating replicate session",
-		zap.String("storage", sess.StorageWorkspaceUri.Path))
+		zap.String("storageScheme", sess.StorageWorkspaceUri.Scheme),
+		zap.String("storagePath", sess.StorageWorkspaceUri.Path),
+		zap.Bool("parallelLoad", sess.ParrallelLoad))
 	{
 		db, err := tidbConfig.OpenDB()
 		if err != nil {
@@ -95,6 +97,7 @@ func (sess *SnapshotReplicateSession) Close() {
 
 func (sess *SnapshotReplicateSession) Run() error {
 	loadInfoPath := snapshotLoadInfoPath(sess.SourceDatabase, sess.SourceTable)
+	sess.logger.Info("checking snapshot load marker", zap.String("loadinfo", loadInfoPath))
 	loaded, err := sess.externalStorage.FileExists(sess.ctx, loadInfoPath)
 	if err != nil {
 		return errors.Annotate(err, "check snapshot loadinfo")
@@ -107,6 +110,7 @@ func (sess *SnapshotReplicateSession) Run() error {
 
 	switch sess.StorageWorkspaceUri.Scheme {
 	case "s3", "gcs", "gs":
+		sess.logger.Info("copying source table schema to data warehouse")
 		if err := sess.DataWarehousePool.CopyTableSchema(sess.SourceDatabase, sess.SourceTable, sess.TiDBPool); err != nil {
 			return errors.Trace(err)
 		}
@@ -130,6 +134,10 @@ func (sess *SnapshotReplicateSession) Run() error {
 		}); err != nil {
 			return errors.Trace(err)
 		}
+		sess.logger.Info("snapshot files discovered",
+			zap.Int64("fileCount", fileCount),
+			zap.Int64("totalBytes", snapshotFileSize),
+			zap.Int("loadConcurrency", DataWarehouseLoadConcurrency))
 		metrics.AddCounter(metrics.SnapshotTotalSizeCounter, float64(snapshotFileSize), tableFQN)
 		errFileCh := make(chan string, fileCount)
 		blockCh := make(chan struct{}, DataWarehouseLoadConcurrency)
@@ -168,7 +176,9 @@ func (sess *SnapshotReplicateSession) Run() error {
 			return errors.Errorf("Failed to load snapshot data into data warehouse, error files: %v", errFileList)
 		}
 	} else {
-		if err := sess.DataWarehousePool.LoadSnapshot(sess.SourceTable, fmt.Sprintf("%s.%s.*%s*", sess.SourceDatabase, sess.SourceTable, CSVFileExtension)); err != nil {
+		pattern := fmt.Sprintf("%s.%s.*%s*", sess.SourceDatabase, sess.SourceTable, CSVFileExtension)
+		sess.logger.Info("loading snapshot data into data warehouse", zap.String("pattern", pattern))
+		if err := sess.DataWarehousePool.LoadSnapshot(sess.SourceTable, pattern); err != nil {
 			sess.logger.Error("Failed to load snapshot data into data warehouse", zap.Error(err))
 			return errors.Trace(err)
 		}
@@ -183,7 +193,10 @@ func (sess *SnapshotReplicateSession) Run() error {
 		sess.logger.Error("Failed to upload loadinfo", zap.Error(err))
 		return errors.Annotate(err, "upload snapshot loadinfo")
 	}
-	sess.logger.Info("Successfully upload loadinfo", zap.String("loadinfo", loadinfo))
+	sess.logger.Info("Successfully upload loadinfo",
+		zap.String("path", loadInfoPath),
+		zap.Time("startTime", startTime),
+		zap.Time("endTime", endTime))
 	return nil
 }
 

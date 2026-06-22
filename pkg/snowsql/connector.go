@@ -42,6 +42,9 @@ func NewSnowflakeConnector(sfConfig *SnowflakeConfig, stageName string, storageU
 	}
 	// create stage
 	stageUrl := fmt.Sprintf("%s://%s%s", storageURI.Scheme, storageURI.Host, storageURI.Path)
+	log.Info("creating Snowflake external stage",
+		zap.String("stage", stageName),
+		zap.String("url", stageUrl))
 	if err := CreateExternalStage(db, stageName, stageUrl, credentials); err != nil {
 		return nil, errors.Annotate(err, "Failed to create stage")
 	}
@@ -55,6 +58,9 @@ func NewSnowflakeConnector(sfConfig *SnowflakeConfig, stageName string, storageU
 	for _, opt := range opts {
 		opt(sc)
 	}
+	log.Info("Snowflake connector initialized",
+		zap.String("stage", stageName),
+		zap.String("stageFileCompression", sc.stageFileCompression))
 	return sc, nil
 }
 
@@ -66,7 +72,9 @@ func (sc *SnowflakeConnector) InitSchema(columns []cloudstorage.TableCol) error 
 		return errors.New("Columns in schema is empty")
 	}
 	sc.columns = columns
-	log.Info("table columns initialized", zap.Any("Columns", columns))
+	log.Info("table columns initialized",
+		zap.Int("columnCount", len(columns)),
+		zap.Strings("columns", tableColumnNames(columns)))
 	return nil
 }
 
@@ -79,20 +87,28 @@ func (sc *SnowflakeConnector) ExecDDL(tableDef cloudstorage.TableDefinition) err
 		return errors.Trace(err)
 	}
 	if len(ddls) == 0 {
-		log.Info("No need to execute this DDL in Snowflake", zap.String("ddl", tableDef.Query))
+		log.Info("No need to execute this DDL in Snowflake",
+			zap.String("ddl", tableDef.Query),
+			zap.Uint64("tableVersion", tableDef.TableVersion))
 		return nil
 	}
 	// One DDL may be rewritten to multiple DDLs
 	for _, ddl := range ddls {
 		_, err := sc.db.Exec(ddl)
 		if err != nil {
-			log.Error("Failed to executed DDL", zap.String("received", tableDef.Query), zap.String("rewritten", strings.Join(ddls, "\n")))
+			log.Error("Failed to executed DDL",
+				zap.String("received", tableDef.Query),
+				zap.String("rewritten", strings.Join(ddls, "\n")),
+				zap.Uint64("tableVersion", tableDef.TableVersion))
 			return errors.Annotate(err, fmt.Sprint("failed to execute", ddl))
 		}
 	}
 	// update columns
 	sc.columns = tableDef.Columns
-	log.Info("Successfully executed DDL", zap.String("received", tableDef.Query), zap.String("rewritten", strings.Join(ddls, "\n")))
+	log.Info("Successfully executed DDL",
+		zap.String("received", tableDef.Query),
+		zap.String("rewritten", strings.Join(ddls, "\n")),
+		zap.Uint64("tableVersion", tableDef.TableVersion))
 	return nil
 }
 
@@ -103,6 +119,11 @@ func (sc *SnowflakeConnector) CopyTableSchema(sourceDatabase string, sourceTable
 	}
 	log.Info("Creating table in Snowflake", zap.String("query", createTableQuery))
 	_, err = sc.db.Exec(createTableQuery)
+	if err == nil {
+		log.Info("Snowflake table schema is ready",
+			zap.String("sourceDatabase", sourceDatabase),
+			zap.String("sourceTable", sourceTable))
+	}
 	return err
 }
 
@@ -110,6 +131,10 @@ func (sc *SnowflakeConnector) LoadSnapshot(targetTable, filePath string) error {
 	if err := LoadSnapshotFromStage(sc.db, targetTable, sc.stageName, filePath, sc.stageFileCompression); err != nil {
 		return errors.Trace(err)
 	}
+	log.Info("Successfully loaded snapshot file",
+		zap.String("table", targetTable),
+		zap.String("file", filePath),
+		zap.String("stage", sc.stageName))
 	return nil
 }
 
@@ -128,6 +153,16 @@ func (sc *SnowflakeConnector) Close() {
 	// drop stage
 	if err := DropStage(sc.db, sc.stageName); err != nil {
 		log.Error("fail to drop stage", zap.Error(err))
+	} else {
+		log.Info("Snowflake external stage dropped", zap.String("stage", sc.stageName))
 	}
 	sc.db.Close()
+}
+
+func tableColumnNames(columns []cloudstorage.TableCol) []string {
+	names := make([]string, 0, len(columns))
+	for _, col := range columns {
+		names = append(names, col.Name)
+	}
+	return names
 }

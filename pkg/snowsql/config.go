@@ -7,6 +7,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/snowflakedb/gosnowflake"
+	"go.uber.org/zap"
 )
 
 type SnowflakeConfig struct {
@@ -65,6 +66,10 @@ func (config *SnowflakeConfig) OpenDB() (*sql.DB, error) {
 		return nil, err
 	}
 
-	log.Info("Snowflake connection established")
+	log.Info("Snowflake connection established",
+		zap.String("account", config.AccountId),
+		zap.String("warehouse", config.Warehouse),
+		zap.String("database", config.Database),
+		zap.String("schema", config.Schema))
 	return db, nil
 }

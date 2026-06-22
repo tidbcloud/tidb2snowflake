@@ -41,6 +41,16 @@ type objectFile struct {
 	size int64
 }
 
+type incrementalScanStats struct {
+	objectFiles     int
+	schemaFiles     int
+	dmlFiles        int
+	checkpointFiles int
+	pendingFiles    int
+	pendingBytes    int64
+	ignoredFiles    int
+}
+
 type progressFile struct {
 	DML []progressEntry `json:"dml"`
 }
@@ -99,6 +109,10 @@ func NewIncrementReplicateSession(
 		tableFQN:          tableFQN,
 		logger:            logger,
 	}
+	sess.logger.Info("creating increment replicate session",
+		zap.String("storageScheme", storageURI.Scheme),
+		zap.String("storagePath", storageURI.Path),
+		zap.String("fileExtension", fileExtension))
 	if err := sess.loadProgress(); err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -249,6 +263,7 @@ func (sess *IncrementReplicateSession) loadProgress() error {
 		return errors.Annotate(err, "check increment progress")
 	}
 	if !exists {
+		sess.logger.Info("no increment progress found", zap.String("path", path))
 		return nil
 	}
 	data, err := sess.externalStorage.ReadFile(sess.ctx, path)
@@ -303,6 +318,9 @@ func (sess *IncrementReplicateSession) saveProgress() error {
 	if err := sess.externalStorage.WriteFile(sess.ctx, sess.progressPath(), data); err != nil {
 		return errors.Annotate(err, "write increment progress")
 	}
+	sess.logger.Debug("increment progress saved",
+		zap.String("path", sess.progressPath()),
+		zap.Int("entries", len(progress.DML)))
 	return nil
 }
 
@@ -314,7 +332,15 @@ func (sess *IncrementReplicateSession) markDMLApplied(key cloudstorage.DmlPathKe
 		return nil
 	}
 	sess.progressDMLIdxMap[key] = fileIdx
-	return sess.saveProgress()
+	if err := sess.saveProgress(); err != nil {
+		return err
+	}
+	sess.logger.Info("marked DML file applied",
+		zap.Uint64("tableVersion", key.TableVersion),
+		zap.Int64("partitionNum", key.PartitionNum),
+		zap.String("date", key.Date),
+		zap.Uint64("fileIndex", fileIdx))
+	return nil
 }
 
 // getNewFiles returns newly created dml files in specific ranges
@@ -327,12 +353,15 @@ func (sess *IncrementReplicateSession) getNewFiles() (map[cloudstorage.DmlPathKe
 	sess.dataFileMap = make(map[string]int64)
 	files := make([]objectFile, 0)
 	checkpointSet := make(map[string]struct{})
+	stats := incrementalScanStats{}
 	opt := &storage.WalkOption{SubDir: fmt.Sprintf("%s/%s", sess.sourceDatabase, sess.sourceTable)}
 	err := sess.externalStorage.WalkDir(sess.ctx, opt, func(path string, size int64) error {
 		if strings.HasSuffix(path, checkpointFileExtension) {
+			stats.checkpointFiles++
 			checkpointSet[path] = struct{}{}
 			return nil
 		}
+		stats.objectFiles++
 		files = append(files, objectFile{path: path, size: size})
 		return nil
 	})
@@ -343,27 +372,47 @@ func (sess *IncrementReplicateSession) getNewFiles() (map[cloudstorage.DmlPathKe
 	for _, file := range files {
 		path := file.path
 		if cloudstorage.IsSchemaFile(path) {
+			stats.schemaFiles++
 			if err := sess.parseSchemaFilePath(path); err != nil {
 				sess.logger.Error("failed to parse schema file path", zap.Error(err))
 				// skip handling this file
 				continue
 			}
 		} else if strings.HasSuffix(path, sess.fileExtension) {
+			stats.dmlFiles++
 			if err := sess.parseDMLFilePath(path); err != nil {
 				sess.logger.Error("failed to parse dml file path", zap.Error(err))
 				// skip handling this file
 				continue
 			}
 			if !checkpointExistsInSet(path, sess.fileExtension, checkpointSet) {
+				stats.pendingFiles++
+				stats.pendingBytes += file.size
 				sess.dataFileMap[path] = file.size
 				metrics.AddGauge(metrics.IncrementPendingSizeGauge, float64(file.size), sess.tableFQN)
 			}
 		} else {
+			stats.ignoredFiles++
 			sess.logger.Debug("ignore handling file", zap.String("path", path))
 		}
 	}
 
 	tableDMLMap = diffDMLMaps(sess.tableDMLIdxMap, origDMLIdxMap)
+	if len(tableDMLMap) > 0 || stats.pendingFiles > 0 {
+		sess.logger.Info("increment storage scan completed",
+			zap.Int("newRanges", len(tableDMLMap)),
+			zap.Int("objectFiles", stats.objectFiles),
+			zap.Int("schemaFiles", stats.schemaFiles),
+			zap.Int("dmlFiles", stats.dmlFiles),
+			zap.Int("checkpointFiles", stats.checkpointFiles),
+			zap.Int("pendingFiles", stats.pendingFiles),
+			zap.Int64("pendingBytes", stats.pendingBytes),
+			zap.Int("ignoredFiles", stats.ignoredFiles))
+	} else {
+		sess.logger.Debug("increment storage scan completed",
+			zap.Int("objectFiles", stats.objectFiles),
+			zap.Int("checkpointFiles", stats.checkpointFiles))
+	}
 	return tableDMLMap, err
 }
 
@@ -408,7 +457,13 @@ func (sess *IncrementReplicateSession) syncExecDMLEvents(
 		return errors.Annotate(err, "failed to check if checkpoint file exists")
 	}
 	if exist {
-		sess.logger.Info("file has been loaded into data warehouse, just ignore", zap.String("filePath", filePath))
+		sess.logger.Info("DML file already has checkpoint, skipping load",
+			zap.String("filePath", filePath),
+			zap.String("checkpoint", checkpointFileName),
+			zap.Uint64("tableVersion", key.TableVersion),
+			zap.Int64("partitionNum", key.PartitionNum),
+			zap.String("date", key.Date),
+			zap.Uint64("fileIndex", fileIdx))
 		if size, ok := sess.dataFileMap[filePath]; ok {
 			metrics.SubGauge(metrics.IncrementPendingSizeGauge, float64(size), sess.tableFQN)
 			delete(sess.dataFileMap, filePath)
@@ -417,21 +472,43 @@ func (sess *IncrementReplicateSession) syncExecDMLEvents(
 	}
 
 	// merge file into data warehouse
+	fileSize := sess.dataFileMap[filePath]
+	sess.logger.Info("loading DML file into data warehouse",
+		zap.String("filePath", filePath),
+		zap.Int64("fileSize", fileSize),
+		zap.Uint64("tableVersion", key.TableVersion),
+		zap.Int64("partitionNum", key.PartitionNum),
+		zap.String("date", key.Date),
+		zap.Uint64("fileIndex", fileIdx))
 	if err := sess.dwConnector.LoadIncrement(tableDef, filePath); err != nil {
+		sess.logger.Error("failed to load DML file into data warehouse",
+			zap.Error(err),
+			zap.String("filePath", filePath),
+			zap.Uint64("tableVersion", key.TableVersion),
+			zap.Int64("partitionNum", key.PartitionNum),
+			zap.String("date", key.Date),
+			zap.Uint64("fileIndex", fileIdx))
 		return errors.Trace(err)
 	}
 
 	// upload a checkpoint file to indicate that the file has been loaded into data warehouse
 	if err := sess.externalStorage.WriteFile(sess.ctx, checkpointFileName, []byte{}); err != nil {
-		return errors.Trace(err)
+		return errors.Annotate(err, "write DML checkpoint")
 	}
+	sess.logger.Info("DML checkpoint written",
+		zap.String("filePath", filePath),
+		zap.String("checkpoint", checkpointFileName),
+		zap.Uint64("tableVersion", key.TableVersion),
+		zap.Int64("partitionNum", key.PartitionNum),
+		zap.String("date", key.Date),
+		zap.Uint64("fileIndex", fileIdx))
 	if err := sess.markDMLApplied(key, fileIdx); err != nil {
 		return errors.Trace(err)
 	}
 
 	// update metrics
-	metrics.SubGauge(metrics.IncrementPendingSizeGauge, float64(sess.dataFileMap[filePath]), sess.tableFQN)
-	metrics.AddCounter(metrics.IncrementLoadedSizeCounter, float64(sess.dataFileMap[filePath]), sess.tableFQN)
+	metrics.SubGauge(metrics.IncrementPendingSizeGauge, float64(fileSize), sess.tableFQN)
+	metrics.AddCounter(metrics.IncrementLoadedSizeCounter, float64(fileSize), sess.tableFQN)
 	delete(sess.dataFileMap, filePath)
 	return nil
 }
@@ -439,10 +516,17 @@ func (sess *IncrementReplicateSession) syncExecDMLEvents(
 func (sess *IncrementReplicateSession) syncExecDDLEvents(tableDef cloudstorage.TableDefinition) error {
 	if len(tableDef.Query) == 0 {
 		// schema.json file without query is used to initialize the schema.
+		sess.logger.Info("initializing table schema from schema file",
+			zap.Uint64("tableVersion", tableDef.TableVersion),
+			zap.Int("columnCount", len(tableDef.Columns)))
 		err := sess.dwConnector.InitSchema(tableDef.Columns)
 		return errors.Wrap(err, "failed to init schema")
 	}
 
+	sess.logger.Info("executing DDL from schema file",
+		zap.Uint64("tableVersion", tableDef.TableVersion),
+		zap.String("query", tableDef.Query),
+		zap.Int("columnCount", len(tableDef.Columns)))
 	if err := sess.dwConnector.ExecDDL(tableDef); err != nil {
 		// FIXME: if there is a DDL before all the DMLs, will return error here.
 		return errors.Annotate(err,
@@ -481,7 +565,13 @@ func (sess *IncrementReplicateSession) syncExecDDLEvents(tableDef cloudstorage.T
 		return errors.Trace(err)
 	}
 	// update the current table definition file.
-	return sess.externalStorage.WriteFile(sess.ctx, filePath, data)
+	if err := sess.externalStorage.WriteFile(sess.ctx, filePath, data); err != nil {
+		return errors.Annotate(err, "update current schema file")
+	}
+	sess.logger.Info("schema file marked as applied",
+		zap.String("path", filePath),
+		zap.Uint64("tableVersion", tableDef.TableVersion))
+	return nil
 }
 
 func (sess *IncrementReplicateSession) handleNewFiles(dmlFileMap map[cloudstorage.DmlPathKey]fileIndexRange) error {
@@ -490,7 +580,7 @@ func (sess *IncrementReplicateSession) handleNewFiles(dmlFileMap map[cloudstorag
 		keys = append(keys, k)
 	}
 	if len(keys) == 0 {
-		sess.logger.Info("no new files found since last round")
+		sess.logger.Debug("no new files found since last round")
 		return nil
 	}
 	slices.SortStableFunc(keys, func(x, y cloudstorage.DmlPathKey) int {
@@ -502,7 +592,9 @@ func (sess *IncrementReplicateSession) handleNewFiles(dmlFileMap map[cloudstorag
 		}
 		return cmp.Compare(x.Date, y.Date)
 	})
-	sess.logger.Info("new files found since last round", zap.Any("keys", keys))
+	sess.logger.Info("new increment ranges found",
+		zap.Int("rangeCount", len(keys)),
+		zap.Uint64("fileCount", countFilesInRanges(dmlFileMap)))
 
 	for _, key := range keys {
 		tableDef := sess.getTableDef(key.SchemaPathKey.TableVersion)
@@ -516,6 +608,12 @@ func (sess *IncrementReplicateSession) handleNewFiles(dmlFileMap map[cloudstorag
 		}
 
 		fileRange := dmlFileMap[key]
+		sess.logger.Info("processing increment range",
+			zap.Uint64("tableVersion", key.TableVersion),
+			zap.Int64("partitionNum", key.PartitionNum),
+			zap.String("date", key.Date),
+			zap.Uint64("startFileIndex", fileRange.start),
+			zap.Uint64("endFileIndex", fileRange.end))
 		for i := fileRange.start; i <= fileRange.end; i++ {
 			if err := sess.syncExecDMLEvents(tableDef, key, i); err != nil {
 				return errors.Trace(err)
@@ -526,8 +624,23 @@ func (sess *IncrementReplicateSession) handleNewFiles(dmlFileMap map[cloudstorag
 	return nil
 }
 
+func countFilesInRanges(ranges map[cloudstorage.DmlPathKey]fileIndexRange) uint64 {
+	var count uint64
+	for key, fileRange := range ranges {
+		if key.PartitionNum == fakePartitionNumForSchemaFile && key.Date == "" {
+			continue
+		}
+		if fileRange.end >= fileRange.start {
+			count += fileRange.end - fileRange.start + 1
+		}
+	}
+	return count
+}
+
 func (sess *IncrementReplicateSession) Run(flushInterval time.Duration) error {
+	sess.logger.Info("increment replicate session started", zap.Duration("scanInterval", flushInterval))
 	ticker := time.NewTicker(flushInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-sess.ctx.Done():
