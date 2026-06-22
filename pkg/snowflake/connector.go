@@ -1,4 +1,4 @@
-package snowsql
+package snowflake
 
 import (
 	"database/sql"
@@ -35,8 +35,8 @@ func WithStageFileCompression(compression string) ConnectorOption {
 	}
 }
 
-func NewSnowflakeConnector(sfConfig *SnowflakeConfig, stageName string, storageURI *url.URL, credentials *credentials.Value, opts ...ConnectorOption) (*SnowflakeConnector, error) {
-	db, err := sfConfig.OpenDB()
+func NewSnowflakeConnector(sfConfig *Config, stageName string, storageURI *url.URL, credentials *credentials.Value, opts ...ConnectorOption) (*SnowflakeConnector, error) {
+	db, err := OpenDB(sfConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

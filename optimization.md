@@ -89,13 +89,13 @@ TiCDC 在每个日期目录写了 `meta/CDC.index`，内容是该目录**最新�
 
 ### 前提：同步阻塞不是问题，不要动
 
-`COPY INTO` 和 `MERGE INTO` 都走 Go `database/sql` 的 `db.Exec`，**同步阻塞到 Snowflake 真正落表并提交才返回**（`pkg/snowsql/sql.go:64`、`pkg/snowsql/connector.go:106`；全仓库无 async 模式）。tidb2dw **只在 `Exec` 成功返回后才写 `loadinfo`/`.checkpoint` 标记**，正是这个同步语义让「标记 = 已落表」成立，从而支撑幂等与断点续传。**这是正确性地基，不能改成异步。** 优化空间在装载**策略**，不在同步性。
+`COPY INTO` 和 `MERGE INTO` 都走 Go `database/sql` 的 `db.Exec`，**同步阻塞到 Snowflake 真正落表并提交才返回**（`pkg/snowflake/sql.go:64`、`pkg/snowflake/connector.go:106`；全仓库无 async 模式）。tidb2dw **只在 `Exec` 成功返回后才写 `loadinfo`/`.checkpoint` 标记**，正是这个同步语义让「标记 = 已落表」成立，从而支撑幂等与断点续传。**这是正确性地基，不能改成异步。** 优化空间在装载**策略**，不在同步性。
 
 ### 现状与问题（大表时尤其痛）
 
 | 问题 | 说明 | 大表影响 |
 |---|---|---|
-| **整表 all-or-nothing，无文件级续传** | 装到一半崩溃 → 没写 loadinfo → 重启 `CREATE OR REPLACE TABLE`（`pkg/snowsql/sql.go:108`，经 `CopyTableSchema` 触发，`replicate/snapshot.go:91`）清空重建 → **全部重灌** | 几 TB 表装到 99% 崩了也从零再来，致命 |
+| **整表 all-or-nothing，无文件级续传** | 装到一半崩溃 → 没写 loadinfo → 重启 `CREATE OR REPLACE TABLE`（`pkg/snowflake/sql.go:108`，经 `CopyTableSchema` 触发，`replicate/snapshot.go:91`）清空重建 → **全部重灌** | 几 TB 表装到 99% 崩了也从零再来，致命 |
 | **逐文件一条 COPY（反模式）** | 默认 `parrallelLoad=true`（`cmd/snowflake.go:112`），对每个 CSV 发一条 `COPY INTO @stage/<单文件>`，Go 侧 16 并发（`DataWarehouseLoadConcurrency=16`，`replicate/snapshot.go:24/116`） | 没用上 Snowflake 单条 COPY 内部跨 warehouse 线程并行的能力，被 16 卡住，statement 开销 ×N |
 | **dump 与 load 串行，不流水线** | `Export()`（Dumpling 全量导出）整表导完才进 load（`cmd/core.go`） | 大表先等 dump 全写完 load 才开始，墙钟 ≈ dump + load |
 | **5GiB 大文件，COPY 并行度差** | Dumpling `FileSize=5GiB`（`pkg/dumpling/dump.go:47`） | Snowflake 按文件分配线程，单个超大文件只能少数线程处理，远超官方推荐的 100–250MB |

@@ -73,7 +73,7 @@ func NewSnapshotReplicateSession(
 		zap.String("storagePath", sess.StorageWorkspaceUri.Path),
 		zap.Bool("parallelLoad", sess.ParrallelLoad))
 	{
-		db, err := tidbConfig.OpenDB()
+		db, err := tidb.OpenDB(tidbConfig)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}

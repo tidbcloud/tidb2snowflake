@@ -1,4 +1,4 @@
-package snowsql
+package snowflake
 
 import (
 	"database/sql"
@@ -10,7 +10,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type SnowflakeConfig struct {
+type Config struct {
 	AccountId string
 	Warehouse string
 	User      string
@@ -19,32 +19,14 @@ type SnowflakeConfig struct {
 	Schema    string
 }
 
-func testSnowflakeConnection(sfConfig *gosnowflake.Config) (*sql.DB, error) {
-	dsn, err := gosnowflake.DSN(sfConfig)
-	if err != nil {
-		return nil, errors.Annotate(err, "Failed to generate Snowflake DSN")
-	}
-	db, err := sql.Open("snowflake", dsn)
-	if err != nil {
-		return nil, errors.Annotate(err, "Failed to open Snowflake connection")
-	}
-	// make sure the connection is available
-	if err = db.Ping(); err != nil {
-		return nil, errors.Annotate(err, "Failed to open Snowflake connection")
-	}
-	return db, nil
-}
-
-/// Implement the Config interface.
-
 // Open a connection to Snowflake.
-func (config *SnowflakeConfig) OpenDB() (*sql.DB, error) {
+func OpenDB(config *Config) (*sql.DB, error) {
 	sfConfig := gosnowflake.Config{
 		Account:  config.AccountId,
 		User:     config.User,
 		Password: config.Pass,
 	}
-	db, err := testSnowflakeConnection(&sfConfig)
+	db, err := establishSnowflakeConnection(&sfConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +43,7 @@ func (config *SnowflakeConfig) OpenDB() (*sql.DB, error) {
 	sfConfig.Database = config.Database
 	sfConfig.Schema = config.Schema
 	sfConfig.Warehouse = config.Warehouse
-	db, err = testSnowflakeConnection(&sfConfig)
+	db, err = establishSnowflakeConnection(&sfConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -71,5 +53,21 @@ func (config *SnowflakeConfig) OpenDB() (*sql.DB, error) {
 		zap.String("warehouse", config.Warehouse),
 		zap.String("database", config.Database),
 		zap.String("schema", config.Schema))
+	return db, nil
+}
+
+func establishSnowflakeConnection(sfConfig *gosnowflake.Config) (*sql.DB, error) {
+	dsn, err := gosnowflake.DSN(sfConfig)
+	if err != nil {
+		return nil, errors.Annotate(err, "Failed to generate Snowflake DSN")
+	}
+	db, err := sql.Open("snowflake", dsn)
+	if err != nil {
+		return nil, errors.Annotate(err, "Failed to open Snowflake connection")
+	}
+	// make sure the connection is available
+	if err = db.Ping(); err != nil {
+		return nil, errors.Annotate(err, "Failed to open Snowflake connection")
+	}
 	return db, nil
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/pingcap/tiflow/pkg/logutil"
 	"github.com/spf13/cobra"
 	"github.com/thediveo/enumflag"
-	"github.com/tidbcloud/tidb2snowflake/pkg/snowsql"
+	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"go.uber.org/zap"
 )
@@ -20,7 +20,7 @@ import (
 func NewSnowflakeCmd() *cobra.Command {
 	cfg := &Config{
 		TiDB:      &tidb.Config{},
-		Snowflake: &snowsql.SnowflakeConfig{},
+		Snowflake: &snowflake.Config{},
 	}
 	var (
 		logFile  string
