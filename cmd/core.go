@@ -18,8 +18,8 @@ import (
 	"github.com/tidbcloud/tidb2snowflake/pkg/coreinterfaces"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowsql"
+	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
-	"github.com/tidbcloud/tidb2snowflake/pkg/tidbsql"
 	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
 	"github.com/tidbcloud/tidb2snowflake/replicate"
 	"go.uber.org/zap"
@@ -65,7 +65,7 @@ const (
 
 // Config is the full configuration for one replication run.
 type Config struct {
-	TiDB      *tidbsql.TiDBConfig
+	TiDB      *tidb.Config
 	Snowflake *snowsql.SnowflakeConfig
 	TiDBCloud TiDBCloudConfig
 

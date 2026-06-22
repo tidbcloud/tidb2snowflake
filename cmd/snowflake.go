@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/thediveo/enumflag"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowsql"
-	"github.com/tidbcloud/tidb2snowflake/pkg/tidbsql"
+	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"go.uber.org/zap"
 )
 
@@ -19,7 +19,7 @@ import (
 // through the TiDB Cloud OpenAPI.
 func NewSnowflakeCmd() *cobra.Command {
 	cfg := &Config{
-		TiDB:      &tidbsql.TiDBConfig{},
+		TiDB:      &tidb.Config{},
 		Snowflake: &snowsql.SnowflakeConfig{},
 	}
 	var (

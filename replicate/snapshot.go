@@ -15,7 +15,7 @@ import (
 	putil "github.com/pingcap/tiflow/pkg/util"
 	"github.com/tidbcloud/tidb2snowflake/pkg/coreinterfaces"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
-	"github.com/tidbcloud/tidb2snowflake/pkg/tidbsql"
+	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
 	"go.uber.org/zap"
 )
@@ -33,7 +33,7 @@ func isSnapshotDataFile(path string) bool {
 }
 
 type SnapshotReplicateSession struct {
-	TiDBConfig *tidbsql.TiDBConfig
+	TiDBConfig *tidb.Config
 
 	DataWarehousePool coreinterfaces.Connector
 	TiDBPool          *sql.DB
@@ -52,7 +52,7 @@ type SnapshotReplicateSession struct {
 func NewSnapshotReplicateSession(
 	ctx context.Context,
 	dwConnector coreinterfaces.Connector,
-	tidbConfig *tidbsql.TiDBConfig,
+	tidbConfig *tidb.Config,
 	sourceDatabase, sourceTable string,
 	storageUri *url.URL,
 	parrallelLoad bool,
@@ -204,7 +204,7 @@ func StartReplicateSnapshot(
 	ctx context.Context,
 	dwConnector coreinterfaces.Connector,
 	tableFQN string,
-	tidbConfig *tidbsql.TiDBConfig,
+	tidbConfig *tidb.Config,
 	storageUri *url.URL,
 	parrallelLoad bool,
 ) error {

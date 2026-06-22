@@ -1,4 +1,4 @@
-package tidbsql
+package tidb
 
 import (
 	"crypto/tls"
@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type TiDBConfig struct {
+type Config struct {
 	Host  string
 	Port  int
 	User  string
@@ -22,34 +22,41 @@ type TiDBConfig struct {
 	SSLCA string
 }
 
-/// implement the Config interface
-
-// func Open opens a connection to TiDB
-func (config *TiDBConfig) OpenDB() (*sql.DB, error) {
-	tidbConfig := mysql.NewConfig()
-	tidbConfig.User = config.User
-	tidbConfig.Passwd = config.Pass
-	tidbConfig.Net = "tcp"
-	tidbConfig.Addr = fmt.Sprintf("%s:%d", config.Host, config.Port)
-	if config.SSLCA != "" {
+func newMySQLConfig(cfg *Config) (*mysql.Config, error) {
+	config := &mysql.Config{
+		User:   cfg.User,
+		Passwd: cfg.Pass,
+		Net:    "tcp",
+		Addr:   fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+	}
+	if cfg.SSLCA != "" {
 		rootCertPool := x509.NewCertPool()
-		pem, err := os.ReadFile(config.SSLCA)
+		pem, err := os.ReadFile(cfg.SSLCA)
 		if err != nil {
 			return nil, err
 		}
 		if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
-			return nil, errors.Errorf("Failed to append PEM.")
+			return nil, errors.Errorf("Failed to append PEM from SSL CA file: %s", cfg.SSLCA)
 		}
 		mysql.RegisterTLSConfig("tidb", &tls.Config{
 			RootCAs:    rootCertPool,
 			MinVersion: tls.VersionTLS12,
-			ServerName: config.Host,
+			ServerName: cfg.Host,
 		})
-		tidbConfig.TLSConfig = "tidb"
-	} else if config.TLS {
-		tidbConfig.TLSConfig = "true"
+		config.TLSConfig = "tidb"
+	} else if cfg.TLS {
+		config.TLSConfig = "true"
 	}
-	db, err := sql.Open("mysql", tidbConfig.FormatDSN())
+	return config, nil
+}
+
+// OpenDB opens a connection to TiDB
+func OpenDB(config *Config) (*sql.DB, error) {
+	cfg, err := newMySQLConfig(config)
+	if err != nil {
+		return nil, errors.Annotate(err, "Failed to create MySQL config")
+	}
+	db, err := sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {
 		return nil, errors.Annotate(err, "Failed to open TiDB connection")
 	}
