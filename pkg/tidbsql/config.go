@@ -10,6 +10,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 type TiDBConfig struct {
@@ -56,6 +57,11 @@ func (config *TiDBConfig) OpenDB() (*sql.DB, error) {
 	if err = db.Ping(); err != nil {
 		return nil, errors.Annotate(err, "Failed to open TiDB connection")
 	}
-	log.Info("TiDB connection established")
+	log.Info("TiDB connection established",
+		zap.String("host", config.Host),
+		zap.Int("port", config.Port),
+		zap.String("user", config.User),
+		zap.Bool("tls", config.TLS || config.SSLCA != ""),
+		zap.Bool("sslCAConfigured", config.SSLCA != ""))
 	return db, nil
 }
