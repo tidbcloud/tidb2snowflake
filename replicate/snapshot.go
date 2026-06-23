@@ -2,7 +2,6 @@ package replicate
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"net/url"
 	"strings"
@@ -15,7 +14,7 @@ import (
 	putil "github.com/pingcap/tiflow/pkg/util"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
-	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
+	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
 	"go.uber.org/zap"
 )
@@ -33,10 +32,7 @@ func isSnapshotDataFile(path string) bool {
 }
 
 type session struct {
-	TiDBConfig *tidb.Config
-
 	connector *snowflake.Connector
-	TiDBPool  *sql.DB
 
 	SourceDatabase string
 	SourceTable    string
@@ -52,7 +48,6 @@ type session struct {
 func newSession(
 	ctx context.Context,
 	connector *snowflake.Connector,
-	tidbConfig *tidb.Config,
 	sourceDatabase, sourceTable string,
 	storageUri *url.URL,
 	parrallelLoad bool,
@@ -60,7 +55,6 @@ func newSession(
 ) (*session, error) {
 	sess := &session{
 		connector:           connector,
-		TiDBConfig:          tidbConfig,
 		SourceDatabase:      sourceDatabase,
 		SourceTable:         sourceTable,
 		StorageWorkspaceUri: *storageUri,
@@ -73,24 +67,12 @@ func newSession(
 		zap.String("storagePath", sess.StorageWorkspaceUri.Path),
 		zap.Bool("parallelLoad", sess.ParrallelLoad))
 
-	db, err := tidb.OpenDB(tidbConfig)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	sess.TiDBPool = db
-
 	externalStorage, err := putil.GetExternalStorageFromURI(sess.ctx, storageUri.String())
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	sess.externalStorage = externalStorage
 	return sess, nil
-}
-
-func (sess *session) Close() {
-	if sess.TiDBPool != nil {
-		sess.TiDBPool.Close()
-	}
 }
 
 func (sess *session) Run() error {
@@ -109,10 +91,15 @@ func (sess *session) Run() error {
 	switch sess.StorageWorkspaceUri.Scheme {
 	case "s3", "gcs", "gs":
 		sess.logger.Info("copying source table schema to data warehouse")
-		if err := sess.connector.CopyTableSchema(sess.SourceDatabase, sess.SourceTable, sess.TiDBPool); err != nil {
+		schemaFilePath := table.SchemaFilePath(sess.SourceDatabase, sess.SourceTable)
+		schemaSQL, err := sess.externalStorage.ReadFile(sess.ctx, schemaFilePath)
+		if err != nil {
+			return errors.Annotatef(err, "read snapshot schema file %s", schemaFilePath)
+		}
+		tableSchema := table.BuildSchema(sess.SourceDatabase, sess.SourceTable, string(schemaSQL))
+		if err := sess.connector.CopyTableSchema(tableSchema); err != nil {
 			return errors.Trace(err)
 		}
-		sess.logger.Info("Successfully copy table schema")
 	default:
 		return errors.Errorf("%s does not supprt data warehouse connector now...", sess.StorageWorkspaceUri.Scheme)
 	}
@@ -202,18 +189,16 @@ func Snapshot(
 	ctx context.Context,
 	connector *snowflake.Connector,
 	tableFQN string,
-	tidbConfig *tidb.Config,
 	storageUri *url.URL,
 	parrallelLoad bool,
 ) error {
 	logger := log.L().With(zap.String("table", tableFQN))
 	sourceDatabase, sourceTable := utils.SplitTableFQN(tableFQN)
-	session, err := newSession(ctx, connector, tidbConfig, sourceDatabase, sourceTable, storageUri, parrallelLoad, logger)
+	session, err := newSession(ctx, connector, sourceDatabase, sourceTable, storageUri, parrallelLoad, logger)
 	if err != nil {
 		logger.Error("Failed to create snapshot replicate session", zap.Error(err))
 		return errors.Trace(err)
 	}
-	defer session.Close()
 	if err := session.Run(); err != nil {
 		logger.Error("Failed to load snapshot", zap.Error(err))
 		return errors.Trace(err)
