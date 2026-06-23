@@ -7,12 +7,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
-	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"gitlab.com/tymonx/go-formatter/formatter"
 )
 
@@ -122,7 +122,14 @@ func stagePatternFromGlob(glob string) string {
 	return ".*" + pattern
 }
 
+type defaultSQLExpression interface {
+	SQLExpression() string
+}
+
 func GetDefaultString(val any) string {
+	if expr, ok := val.(defaultSQLExpression); ok {
+		return expr.SQLExpression()
+	}
 	_, err := strconv.ParseFloat(fmt.Sprintf("%v", val), 64)
 	if err != nil {
 		return fmt.Sprintf("'%v'", val) // FIXME: escape
@@ -130,31 +137,16 @@ func GetDefaultString(val any) string {
 	return fmt.Sprintf("%v", val)
 }
 
-func GenCreateSchema(sourceDatabase string, sourceTable string, sourceTiDBConn *sql.DB) (string, error) {
-	tableColumns, err := tidb.GetTiDBTableColumn(sourceTiDBConn, sourceDatabase, sourceTable)
-	if err != nil {
-		return "", errors.Trace(err)
-	}
-	columnRows := make([]string, 0, len(tableColumns))
-	for _, column := range tableColumns {
-		row, err := GetSnowflakeColumnString(column)
-		if err != nil {
-			return "", errors.Trace(err)
-		}
-		columnRows = append(columnRows, row)
+func buildCreateSchemaSQL(tableSchema *table.Meta) string {
+	columns := make([]string, 0, len(tableSchema.Columns))
+	for _, column := range tableSchema.Columns {
+		columns = append(columns, buildColumn(column))
 	}
 
-	snowflakePKColumns, err := tidb.GetTiDBTablePKColumns(sourceTiDBConn, sourceDatabase, sourceTable)
-	if err != nil {
-		return "", errors.Trace(err)
-	}
-
-	// TODO: Support unique key
-
-	sqlRows := make([]string, 0, len(columnRows)+1)
-	sqlRows = append(sqlRows, columnRows...)
-	if len(snowflakePKColumns) > 0 {
-		sqlRows = append(sqlRows, fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(snowflakePKColumns, ", ")))
+	sqlRows := make([]string, 0, len(columns)+1)
+	sqlRows = append(sqlRows, columns...)
+	if len(tableSchema.PrimaryKeys) > 0 {
+		sqlRows = append(sqlRows, fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(tableSchema.PrimaryKeys, ", ")))
 	}
 	// Add idents
 	for i := 0; i < len(sqlRows); i++ {
@@ -162,11 +154,11 @@ func GenCreateSchema(sourceDatabase string, sourceTable string, sourceTiDBConn *
 	}
 
 	sql := []string{}
-	sql = append(sql, fmt.Sprintf(`CREATE OR REPLACE TABLE %s (`, sourceTable)) // TODO: Escape
+	sql = append(sql, fmt.Sprintf(`CREATE OR REPLACE TABLE %s (`, tableSchema.Table)) // TODO: Escape
 	sql = append(sql, strings.Join(sqlRows, ",\n"))
 	sql = append(sql, ")")
 
-	return strings.Join(sql, "\n"), nil
+	return strings.Join(sql, "\n")
 }
 
 func GenMergeInto(tableDef cloudstorage.TableDefinition, filePath string, stageName string) string {

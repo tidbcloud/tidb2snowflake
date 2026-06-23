@@ -109,12 +109,6 @@ func checkSupportedTypes(db *sql.DB) {
 	byName := map[string]cloudstorage.TableCol{}
 	for _, col := range cols {
 		byName[col.Name] = col
-		if col.Name == "id" {
-			continue
-		}
-		if _, err := snowsql.GetSnowflakeTypeString(col); err != nil {
-			panic(fmt.Sprintf("type mapping failed for %s (%s): %v", col.Name, col.Tp, err))
-		}
 	}
 	for name, want := range map[string]string{
 		"c_tinyint_unsigned":   "tinyint unsigned",

@@ -12,13 +12,10 @@ import (
 	"go.uber.org/zap"
 )
 
-func GetColumnModifyString(diff *tidb.ColumnDiff) (string, error) {
+func GetColumnModifyString(diff *tidb.ColumnDiff) string {
 	strs := make([]string, 0, 3)
 	if diff.Before.Tp != diff.After.Tp || diff.Before.Precision != diff.After.Precision || diff.Before.Scale != diff.After.Scale {
-		colStr, err := GetSnowflakeTypeString(*diff.After)
-		if err != nil {
-			return "", errors.Trace(err)
-		}
+		colStr := buildColumn(*diff.After)
 		strs = append(strs, fmt.Sprintf("COLUMN %s", colStr))
 	}
 	if diff.Before.Default != diff.After.Default {
@@ -35,7 +32,7 @@ func GetColumnModifyString(diff *tidb.ColumnDiff) (string, error) {
 			strs = append(strs, fmt.Sprintf("COLUMN %s SET NOT NULL", diff.After.Name))
 		}
 	}
-	return strings.Join(strs, ", "), nil
+	return strings.Join(strs, ", ")
 }
 
 func GenDDLViaColumnsDiff(prevColumns []cloudstorage.TableCol, curTableDef cloudstorage.TableDefinition) ([]string, error) {
@@ -69,19 +66,13 @@ func GenDDLViaColumnsDiff(prevColumns []cloudstorage.TableCol, curTableDef cloud
 		switch item.Action {
 		case tidb.ADD_COLUMN:
 			ddl += fmt.Sprintf("ALTER TABLE %s ADD COLUMN ", curTableDef.Table)
-			colStr, err := GetSnowflakeColumnString(*item.After)
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
+			colStr := buildColumn(*item.After)
 			ddl += colStr
 		case tidb.DROP_COLUMN:
 			ddl += fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", curTableDef.Table, item.Before.Name)
 		case tidb.MODIFY_COLUMN:
 			ddl += fmt.Sprintf("ALTER TABLE %s MODIFY ", curTableDef.Table)
-			modifyStr, err := GetColumnModifyString(&item)
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
+			modifyStr := GetColumnModifyString(&item)
 			ddl += modifyStr
 		case tidb.RENAME_COLUMN:
 			ddl += fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", curTableDef.Table, item.Before.Name, item.After.Name)
@@ -103,18 +94,15 @@ func GenDDLViaColumnsDiff(prevColumns []cloudstorage.TableCol, curTableDef cloud
 // Refer to:
 // https://dev.mysql.com/doc/refman/8.0/en/data-types.html
 // https://docs.snowflake.com/en/sql-reference/intro-summary-data-types
-func GetSnowflakeColumnString(column cloudstorage.TableCol) (string, error) {
+func buildColumn(column cloudstorage.TableCol) string {
 	var sb strings.Builder
-	typeStr, err := GetSnowflakeTypeString(column)
-	if err != nil {
-		return "", errors.Trace(err)
-	}
-	sb.WriteString(typeStr)
+
+	sb.WriteString(newType(column))
 	if column.Nullable == "false" {
 		sb.WriteString(" NOT NULL")
 	}
 	if column.Default != nil {
 		sb.WriteString(fmt.Sprintf(` DEFAULT %s`, GetDefaultString(column.Default)))
 	}
-	return sb.String(), nil
+	return sb.String()
 }
