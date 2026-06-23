@@ -60,8 +60,8 @@ import (
 	"sort"
 	"strings"
 
-	timodel "github.com/pingcap/tidb/pkg/parser/model"
-	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 )
@@ -207,17 +207,17 @@ func checkSyntheticTableDDL() {
 	}{
 		{
 			name: "truncate",
-			def:  cloudstorage.TableDefinition{Table: "t_truncate", Type: timodel.ActionTruncateTable},
+			def:  cloudstorage.TableDefinition{Table: "t_truncate", Type: model.ActionTruncateTable},
 			want: []string{"TRUNCATE TABLE t_truncate"},
 		},
 		{
 			name: "drop table",
-			def:  cloudstorage.TableDefinition{Table: "t_drop", Type: timodel.ActionDropTable},
+			def:  cloudstorage.TableDefinition{Table: "t_drop", Type: model.ActionDropTable},
 			want: []string{"DROP TABLE t_drop"},
 		},
 		{
 			name: "drop schema",
-			def:  cloudstorage.TableDefinition{Schema: "s_drop", Type: timodel.ActionDropSchema},
+			def:  cloudstorage.TableDefinition{Schema: "s_drop", Type: model.ActionDropSchema},
 			want: []string{"DROP SCHEMA s_drop"},
 		},
 	} {
