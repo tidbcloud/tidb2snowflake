@@ -1,4 +1,4 @@
-package snowsql
+package snowflake
 
 import (
 	"database/sql"
@@ -12,7 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
-	"github.com/tidbcloud/tidb2snowflake/pkg/tidbsql"
+	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"gitlab.com/tymonx/go-formatter/formatter"
 )
 
@@ -122,7 +122,7 @@ func stagePatternFromGlob(glob string) string {
 	return ".*" + pattern
 }
 
-func GetDefaultString(val interface{}) string {
+func GetDefaultString(val any) string {
 	_, err := strconv.ParseFloat(fmt.Sprintf("%v", val), 64)
 	if err != nil {
 		return fmt.Sprintf("'%v'", val) // FIXME: escape
@@ -131,7 +131,7 @@ func GetDefaultString(val interface{}) string {
 }
 
 func GenCreateSchema(sourceDatabase string, sourceTable string, sourceTiDBConn *sql.DB) (string, error) {
-	tableColumns, err := tidbsql.GetTiDBTableColumn(sourceTiDBConn, sourceDatabase, sourceTable)
+	tableColumns, err := tidb.GetTiDBTableColumn(sourceTiDBConn, sourceDatabase, sourceTable)
 	if err != nil {
 		return "", errors.Trace(err)
 	}
@@ -144,7 +144,7 @@ func GenCreateSchema(sourceDatabase string, sourceTable string, sourceTiDBConn *
 		columnRows = append(columnRows, row)
 	}
 
-	snowflakePKColumns, err := tidbsql.GetTiDBTablePKColumns(sourceTiDBConn, sourceDatabase, sourceTable)
+	snowflakePKColumns, err := tidb.GetTiDBTablePKColumns(sourceTiDBConn, sourceDatabase, sourceTable)
 	if err != nil {
 		return "", errors.Trace(err)
 	}

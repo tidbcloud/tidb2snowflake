@@ -22,9 +22,9 @@ import (
 
 	"github.com/pingcap/tidb/br/pkg/storage"
 	putil "github.com/pingcap/tiflow/pkg/util"
-	"github.com/tidbcloud/tidb2snowflake/pkg/snowsql"
+	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
+	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
-	"github.com/tidbcloud/tidb2snowflake/pkg/tidbsql"
 )
 
 // e2eConfig is the full set of credentials/endpoints an e2e run needs, read
@@ -103,12 +103,12 @@ func loadE2EConfig(t *testing.T) *e2eConfig {
 	}
 }
 
-func (c *e2eConfig) tidbConfig() *tidbsql.TiDBConfig {
-	return &tidbsql.TiDBConfig{Host: c.TiDBHost, Port: c.TiDBPort, User: c.TiDBUser, Pass: c.TiDBPass, TLS: true}
+func (c *e2eConfig) tidbConfig() *tidb.Config {
+	return &tidb.Config{Host: c.TiDBHost, Port: c.TiDBPort, User: c.TiDBUser, Pass: c.TiDBPass, TLS: true}
 }
 
-func (c *e2eConfig) snowflakeConfig(schema string) *snowsql.SnowflakeConfig {
-	return &snowsql.SnowflakeConfig{
+func (c *e2eConfig) Config(schema string) *snowflake.Config {
+	return &snowflake.Config{
 		AccountId: c.SFAccountID,
 		Warehouse: c.SFWarehouse,
 		User:      c.SFUser,
@@ -120,7 +120,7 @@ func (c *e2eConfig) snowflakeConfig(schema string) *snowsql.SnowflakeConfig {
 
 func (c *e2eConfig) tidbDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := c.tidbConfig().OpenDB()
+	db, err := tidb.OpenDB(c.tidbConfig())
 	if err != nil {
 		t.Fatalf("open TiDB: %v", err)
 	}
@@ -131,7 +131,7 @@ func (c *e2eConfig) tidbDB(t *testing.T) *sql.DB {
 // database/schema if needed).
 func (c *e2eConfig) snowflakeDB(t *testing.T, schema string) *sql.DB {
 	t.Helper()
-	db, err := c.snowflakeConfig(schema).OpenDB()
+	db, err := snowflake.OpenDB(c.Config(schema))
 	if err != nil {
 		t.Fatalf("open Snowflake: %v", err)
 	}
@@ -268,7 +268,7 @@ func waitForColValue(t *testing.T, db *sql.DB, table, col string, id, want int, 
 func cleanup(t *testing.T, cfg *e2eConfig, storagePath, schema, dbTable string) {
 	t.Helper()
 	// Snowflake schema (drops the loaded table too).
-	if db, err := cfg.snowflakeConfig(schema).OpenDB(); err == nil {
+	if db, err := snowflake.OpenDB(cfg.Config(schema)); err == nil {
 		if _, err := db.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %s.%s", cfg.SFDatabase, schema)); err != nil {
 			t.Logf("cleanup: drop snowflake schema: %v", err)
 		}
@@ -299,7 +299,7 @@ func cleanup(t *testing.T, cfg *e2eConfig, storagePath, schema, dbTable string) 
 }
 
 func mustTiDB(cfg *e2eConfig) *sql.DB {
-	db, err := cfg.tidbConfig().OpenDB()
+	db, err := tidb.OpenDB(cfg.tidbConfig())
 	if err != nil {
 		return nil
 	}

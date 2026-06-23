@@ -1,11 +1,11 @@
-package snowsql_test
+package snowflake_test
 
 import (
 	"testing"
 
 	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
 	"github.com/stretchr/testify/require"
-	"github.com/tidbcloud/tidb2snowflake/pkg/snowsql"
+	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 )
 
 func TestGenDDLViaColumnsDiff(t *testing.T) {
@@ -68,7 +68,7 @@ func TestGenDDLViaColumnsDiff(t *testing.T) {
 		"ALTER TABLE test_table ADD COLUMN gender VARCHAR(10);",
 	}
 
-	ddl, err := snowsql.GenDDLViaColumnsDiff(prevColumns, curTableDef)
+	ddl, err := snowflake.GenDDLViaColumnsDiff(prevColumns, curTableDef)
 	require.NoError(t, err)
 	require.ElementsMatch(t, expectedDDLs, ddl)
 }
@@ -96,7 +96,7 @@ func TestGetSnowflakeTypeString_NewScalarMappings(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := snowsql.GetSnowflakeTypeString(tc.col)
+			got, err := snowflake.GetSnowflakeTypeString(tc.col)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
