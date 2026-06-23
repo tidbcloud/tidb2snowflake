@@ -122,7 +122,7 @@ func stagePatternFromGlob(glob string) string {
 	return ".*" + pattern
 }
 
-func GetDefaultString(val interface{}) string {
+func GetDefaultString(val any) string {
 	_, err := strconv.ParseFloat(fmt.Sprintf("%v", val), 64)
 	if err != nil {
 		return fmt.Sprintf("'%v'", val) // FIXME: escape

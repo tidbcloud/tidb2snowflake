@@ -13,8 +13,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	putil "github.com/pingcap/tiflow/pkg/util"
-	"github.com/tidbcloud/tidb2snowflake/pkg/coreinterfaces"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
+	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
 	"go.uber.org/zap"
@@ -32,11 +32,11 @@ func isSnapshotDataFile(path string) bool {
 	return strings.HasSuffix(path, CSVFileExtension) || strings.HasSuffix(path, CSVFileExtension+".gz")
 }
 
-type SnapshotReplicateSession struct {
+type session struct {
 	TiDBConfig *tidb.Config
 
-	DataWarehousePool coreinterfaces.Connector
-	TiDBPool          *sql.DB
+	connector *snowflake.Connector
+	TiDBPool  *sql.DB
 
 	SourceDatabase string
 	SourceTable    string
@@ -49,17 +49,17 @@ type SnapshotReplicateSession struct {
 	logger *zap.Logger
 }
 
-func NewSnapshotReplicateSession(
+func newSession(
 	ctx context.Context,
-	dwConnector coreinterfaces.Connector,
+	connector *snowflake.Connector,
 	tidbConfig *tidb.Config,
 	sourceDatabase, sourceTable string,
 	storageUri *url.URL,
 	parrallelLoad bool,
 	logger *zap.Logger,
-) (*SnapshotReplicateSession, error) {
-	sess := &SnapshotReplicateSession{
-		DataWarehousePool:   dwConnector,
+) (*session, error) {
+	sess := &session{
+		connector:           connector,
 		TiDBConfig:          tidbConfig,
 		SourceDatabase:      sourceDatabase,
 		SourceTable:         sourceTable,
@@ -72,30 +72,28 @@ func NewSnapshotReplicateSession(
 		zap.String("storageScheme", sess.StorageWorkspaceUri.Scheme),
 		zap.String("storagePath", sess.StorageWorkspaceUri.Path),
 		zap.Bool("parallelLoad", sess.ParrallelLoad))
-	{
-		db, err := tidb.OpenDB(tidbConfig)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		sess.TiDBPool = db
+
+	db, err := tidb.OpenDB(tidbConfig)
+	if err != nil {
+		return nil, errors.Trace(err)
 	}
-	{
-		externalStorage, err := putil.GetExternalStorageFromURI(sess.ctx, storageUri.String())
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		sess.externalStorage = externalStorage
+	sess.TiDBPool = db
+
+	externalStorage, err := putil.GetExternalStorageFromURI(sess.ctx, storageUri.String())
+	if err != nil {
+		return nil, errors.Trace(err)
 	}
+	sess.externalStorage = externalStorage
 	return sess, nil
 }
 
-func (sess *SnapshotReplicateSession) Close() {
+func (sess *session) Close() {
 	if sess.TiDBPool != nil {
 		sess.TiDBPool.Close()
 	}
 }
 
-func (sess *SnapshotReplicateSession) Run() error {
+func (sess *session) Run() error {
 	loadInfoPath := snapshotLoadInfoPath(sess.SourceDatabase, sess.SourceTable)
 	sess.logger.Info("checking snapshot load marker", zap.String("loadinfo", loadInfoPath))
 	loaded, err := sess.externalStorage.FileExists(sess.ctx, loadInfoPath)
@@ -111,7 +109,7 @@ func (sess *SnapshotReplicateSession) Run() error {
 	switch sess.StorageWorkspaceUri.Scheme {
 	case "s3", "gcs", "gs":
 		sess.logger.Info("copying source table schema to data warehouse")
-		if err := sess.DataWarehousePool.CopyTableSchema(sess.SourceDatabase, sess.SourceTable, sess.TiDBPool); err != nil {
+		if err := sess.connector.CopyTableSchema(sess.SourceDatabase, sess.SourceTable, sess.TiDBPool); err != nil {
 			return errors.Trace(err)
 		}
 		sess.logger.Info("Successfully copy table schema")
@@ -152,7 +150,7 @@ func (sess *SnapshotReplicateSession) Run() error {
 						wg.Done()
 					}()
 					sess.logger.Info("Loading snapshot data into data warehouse", zap.String("path", path))
-					if err := sess.DataWarehousePool.LoadSnapshot(sess.SourceTable, path); err != nil {
+					if err := sess.connector.LoadSnapshot(sess.SourceTable, path); err != nil {
 						sess.logger.Error("Failed to load snapshot data into data warehouse", zap.Error(err), zap.String("path", path))
 						errFileCh <- path
 					} else {
@@ -178,7 +176,7 @@ func (sess *SnapshotReplicateSession) Run() error {
 	} else {
 		pattern := fmt.Sprintf("%s.%s.*%s*", sess.SourceDatabase, sess.SourceTable, CSVFileExtension)
 		sess.logger.Info("loading snapshot data into data warehouse", zap.String("pattern", pattern))
-		if err := sess.DataWarehousePool.LoadSnapshot(sess.SourceTable, pattern); err != nil {
+		if err := sess.connector.LoadSnapshot(sess.SourceTable, pattern); err != nil {
 			sess.logger.Error("Failed to load snapshot data into data warehouse", zap.Error(err))
 			return errors.Trace(err)
 		}
@@ -200,9 +198,9 @@ func (sess *SnapshotReplicateSession) Run() error {
 	return nil
 }
 
-func StartReplicateSnapshot(
+func Snapshot(
 	ctx context.Context,
-	dwConnector coreinterfaces.Connector,
+	connector *snowflake.Connector,
 	tableFQN string,
 	tidbConfig *tidb.Config,
 	storageUri *url.URL,
@@ -210,7 +208,7 @@ func StartReplicateSnapshot(
 ) error {
 	logger := log.L().With(zap.String("table", tableFQN))
 	sourceDatabase, sourceTable := utils.SplitTableFQN(tableFQN)
-	session, err := NewSnapshotReplicateSession(ctx, dwConnector, tidbConfig, sourceDatabase, sourceTable, storageUri, parrallelLoad, logger)
+	session, err := newSession(ctx, connector, tidbConfig, sourceDatabase, sourceTable, storageUri, parrallelLoad, logger)
 	if err != nil {
 		logger.Error("Failed to create snapshot replicate session", zap.Error(err))
 		return errors.Trace(err)

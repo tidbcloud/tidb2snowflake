@@ -17,8 +17,8 @@ import (
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
 	putil "github.com/pingcap/tiflow/pkg/util"
-	"github.com/tidbcloud/tidb2snowflake/pkg/coreinterfaces"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
+	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
@@ -65,7 +65,7 @@ type progressEntry struct {
 }
 
 type IncrementReplicateSession struct {
-	dwConnector     coreinterfaces.Connector
+	dwConnector     *snowflake.Connector
 	externalStorage storage.ExternalStorage
 	ctx             context.Context
 	// tableDMLIdxMap maintains a map of <dmlPathKey, max file index>
@@ -85,7 +85,7 @@ type IncrementReplicateSession struct {
 
 func NewIncrementReplicateSession(
 	ctx context.Context,
-	dwConnector coreinterfaces.Connector,
+	dwConnector *snowflake.Connector,
 	fileExtension string,
 	storageURI *url.URL,
 	tableFQN string,
@@ -660,7 +660,7 @@ func (sess *IncrementReplicateSession) Run(flushInterval time.Duration) error {
 
 func StartReplicateIncrement(
 	ctx context.Context,
-	dwConnector coreinterfaces.Connector,
+	dwConnector *snowflake.Connector,
 	tableFQN string,
 	storageURI *url.URL,
 	flushInterval time.Duration,
