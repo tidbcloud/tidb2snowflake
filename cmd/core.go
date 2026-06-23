@@ -130,15 +130,12 @@ type managedSourceJobResult struct {
 	SnapshotTSO string
 }
 
-type managedSourceJob interface {
-	Name() string
-	StorageDir() string
-	ExistingID(*runState) string
-	SetID(*runState, string)
-	Resume(context.Context, string) (*managedSourceJobResult, error)
-	Create(context.Context, *runState) (*managedSourceJobResult, error)
-	Wait(context.Context, string) error
-}
+type sourceJobType string
+
+const (
+	sourceJobExport     sourceJobType = "export"
+	sourceJobChangefeed sourceJobType = "changefeed"
+)
 
 type sourcePrepareContext struct {
 	store             storage.ExternalStorage
@@ -152,38 +149,23 @@ type sourcePrepareContext struct {
 
 type sourceRunner interface {
 	prepare(context.Context, sourcePrepareContext) error
+	sourceJobName(sourceJobType) string
+	sourceJobStorageDir(sourceJobType) string
+	existingSourceJobID(sourceJobType, *runState) string
+	setSourceJobID(sourceJobType, *runState, string)
+	resumeSourceJob(context.Context, sourcePrepareContext, sourceJobType, string) (*managedSourceJobResult, error)
+	createSourceJob(context.Context, sourcePrepareContext, sourceJobType) (*managedSourceJobResult, error)
+	waitSourceJob(context.Context, sourcePrepareContext, sourceJobType, string) error
 }
 
 type tidbCloudSourceRunner struct {
-	cfg *Config
+	cfg       *Config
+	cdcClient *tidbcloud.Client
 }
 
 type opSourceRunner struct {
-	cfg *Config
-}
-
-type tidbCloudClientGetter func() (*tidbcloud.Client, error)
-
-type tidbCloudExportJob struct {
-	cfg              *Config
-	getClient        tidbCloudClientGetter
-	cleanSnapshotURI string
-	cred             *credentials.Value
-}
-
-type tidbCloudChangefeedJob struct {
-	cfg               *Config
-	getClient         tidbCloudClientGetter
-	cleanIncrementURI string
-	cred              *credentials.Value
-}
-
-type ticdcClientGetter func() (*ticdc.Client, error)
-
-type opTiCDCChangefeedJob struct {
-	cfg          *Config
-	getClient    ticdcClientGetter
-	incrementURI *url.URL
+	cfg       *Config
+	cdcClient *ticdc.Client
 }
 
 func newSourceRunner(cfg *Config) (sourceRunner, error) {
@@ -197,109 +179,175 @@ func newSourceRunner(cfg *Config) (sourceRunner, error) {
 	}
 }
 
-func (j *tidbCloudExportJob) Name() string { return "TiDB Cloud export" }
-
-func (j *tidbCloudExportJob) StorageDir() string { return snapshotDirName }
-
-func (j *tidbCloudExportJob) ExistingID(state *runState) string { return state.ExportID }
-
-func (j *tidbCloudExportJob) SetID(state *runState, id string) { state.ExportID = id }
-
-func (j *tidbCloudExportJob) Resume(ctx context.Context, id string) (*managedSourceJobResult, error) {
-	c, err := j.getClient()
-	if err != nil {
-		return nil, err
+func (r *tidbCloudSourceRunner) sourceJobName(jobType sourceJobType) string {
+	switch jobType {
+	case sourceJobExport:
+		return "TiDB Cloud export"
+	case sourceJobChangefeed:
+		return "TiDB Cloud changefeed"
+	default:
+		return string(jobType)
 	}
-	export, err := c.GetExport(ctx, j.cfg.TiDBCloud.ClusterID, id)
-	if err != nil {
-		return nil, err
-	}
-	return &managedSourceJobResult{ID: export.ExportID, SnapshotTSO: export.SnapshotTSO}, nil
 }
 
-func (j *tidbCloudExportJob) Create(ctx context.Context, _ *runState) (*managedSourceJobResult, error) {
-	c, err := j.getClient()
-	if err != nil {
-		return nil, err
-	}
-	req := buildExportRequest(j.cfg, j.cleanSnapshotURI, j.cred)
-	export, err := c.CreateExport(ctx, j.cfg.TiDBCloud.ClusterID, req)
-	if err != nil {
-		return nil, err
-	}
-	return &managedSourceJobResult{ID: export.ExportID, SnapshotTSO: export.SnapshotTSO}, nil
+func (r *tidbCloudSourceRunner) sourceJobStorageDir(jobType sourceJobType) string {
+	return managedSourceJobStorageDir(jobType)
 }
 
-func (j *tidbCloudExportJob) Wait(ctx context.Context, id string) error {
-	c, err := j.getClient()
+func (r *tidbCloudSourceRunner) existingSourceJobID(jobType sourceJobType, state *runState) string {
+	return existingManagedSourceJobID(jobType, state)
+}
+
+func (r *tidbCloudSourceRunner) setSourceJobID(jobType sourceJobType, state *runState, id string) {
+	setManagedSourceJobID(jobType, state, id)
+}
+
+func (r *tidbCloudSourceRunner) resumeSourceJob(
+	ctx context.Context,
+	_ sourcePrepareContext,
+	jobType sourceJobType,
+	id string,
+) (*managedSourceJobResult, error) {
+	switch jobType {
+	case sourceJobExport:
+		c, err := r.tidbCloudClient()
+		if err != nil {
+			return nil, err
+		}
+		export, err := c.GetExport(ctx, r.cfg.TiDBCloud.ClusterID, id)
+		if err != nil {
+			return nil, err
+		}
+		return &managedSourceJobResult{ID: export.ExportID, SnapshotTSO: export.SnapshotTSO}, nil
+	case sourceJobChangefeed:
+		return nil, nil
+	default:
+		return nil, errors.Errorf("unsupported source job %s", jobType)
+	}
+}
+
+func (r *tidbCloudSourceRunner) createSourceJob(
+	ctx context.Context,
+	prepareCtx sourcePrepareContext,
+	jobType sourceJobType,
+) (*managedSourceJobResult, error) {
+	c, err := r.tidbCloudClient()
+	if err != nil {
+		return nil, err
+	}
+	switch jobType {
+	case sourceJobExport:
+		req := buildExportRequest(r.cfg, prepareCtx.cleanSnapshotURI, prepareCtx.cred)
+		export, err := c.CreateExport(ctx, r.cfg.TiDBCloud.ClusterID, req)
+		if err != nil {
+			return nil, err
+		}
+		return &managedSourceJobResult{ID: export.ExportID, SnapshotTSO: export.SnapshotTSO}, nil
+	case sourceJobChangefeed:
+		req := buildChangefeedRequest(r.cfg, prepareCtx.cleanIncrementURI, prepareCtx.cred, prepareCtx.state.SnapshotTSO)
+		cf, err := c.CreateChangefeed(ctx, r.cfg.TiDBCloud.ClusterID, req)
+		if err != nil {
+			return nil, err
+		}
+		return &managedSourceJobResult{ID: cf.ChangefeedID}, nil
+	default:
+		return nil, errors.Errorf("unsupported source job %s", jobType)
+	}
+}
+
+func (r *tidbCloudSourceRunner) waitSourceJob(
+	ctx context.Context,
+	_ sourcePrepareContext,
+	jobType sourceJobType,
+	id string,
+) error {
+	c, err := r.tidbCloudClient()
 	if err != nil {
 		return err
 	}
-	_, err = c.WaitExport(ctx, j.cfg.TiDBCloud.ClusterID, id, j.cfg.PollInterval)
-	return err
-}
-
-func (j *tidbCloudChangefeedJob) Name() string { return "TiDB Cloud changefeed" }
-
-func (j *tidbCloudChangefeedJob) StorageDir() string { return incrementDirName }
-
-func (j *tidbCloudChangefeedJob) ExistingID(state *runState) string { return state.ChangefeedID }
-
-func (j *tidbCloudChangefeedJob) SetID(state *runState, id string) { state.ChangefeedID = id }
-
-func (j *tidbCloudChangefeedJob) Resume(context.Context, string) (*managedSourceJobResult, error) {
-	return nil, nil
-}
-
-func (j *tidbCloudChangefeedJob) Create(ctx context.Context, state *runState) (*managedSourceJobResult, error) {
-	c, err := j.getClient()
-	if err != nil {
-		return nil, err
-	}
-	req := buildChangefeedRequest(j.cfg, j.cleanIncrementURI, j.cred, state.SnapshotTSO)
-	cf, err := c.CreateChangefeed(ctx, j.cfg.TiDBCloud.ClusterID, req)
-	if err != nil {
-		return nil, err
-	}
-	return &managedSourceJobResult{ID: cf.ChangefeedID}, nil
-}
-
-func (j *tidbCloudChangefeedJob) Wait(ctx context.Context, id string) error {
-	c, err := j.getClient()
-	if err != nil {
+	switch jobType {
+	case sourceJobExport:
+		_, err = c.WaitExport(ctx, r.cfg.TiDBCloud.ClusterID, id, r.cfg.PollInterval)
 		return err
+	case sourceJobChangefeed:
+		_, err = c.WaitChangefeed(ctx, r.cfg.TiDBCloud.ClusterID, id, r.cfg.PollInterval)
+		return err
+	default:
+		return errors.Errorf("unsupported source job %s", jobType)
 	}
-	_, err = c.WaitChangefeed(ctx, j.cfg.TiDBCloud.ClusterID, id, j.cfg.PollInterval)
-	return err
 }
 
-func (j *opTiCDCChangefeedJob) Name() string { return "OP TiCDC changefeed" }
-
-func (j *opTiCDCChangefeedJob) StorageDir() string { return incrementDirName }
-
-func (j *opTiCDCChangefeedJob) ExistingID(state *runState) string { return state.ChangefeedID }
-
-func (j *opTiCDCChangefeedJob) SetID(state *runState, id string) { state.ChangefeedID = id }
-
-func (j *opTiCDCChangefeedJob) Resume(context.Context, string) (*managedSourceJobResult, error) {
-	return nil, nil
-}
-
-func (j *opTiCDCChangefeedJob) Create(ctx context.Context, state *runState) (*managedSourceJobResult, error) {
-	client, err := j.getClient()
+func (r *tidbCloudSourceRunner) tidbCloudClient() (*tidbcloud.Client, error) {
+	if r.cdcClient != nil {
+		return r.cdcClient, nil
+	}
+	if r.cfg.TiDBCloud.ClusterID == "" {
+		return nil, errors.New("--tidbcloud.cluster-id is required to create or wait on an export/changefeed")
+	}
+	var opts []tidbcloud.Option
+	if r.cfg.TiDBCloud.Host != "" {
+		opts = append(opts, tidbcloud.WithHost(r.cfg.TiDBCloud.Host))
+	}
+	c, err := tidbcloud.NewClient(r.cfg.TiDBCloud.PublicKey, r.cfg.TiDBCloud.PrivateKey, opts...)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	startTSO, err := parseOptionalTSO(state.SnapshotTSO)
+	r.cdcClient = c
+	return c, nil
+}
+
+func (r *opSourceRunner) sourceJobName(jobType sourceJobType) string {
+	switch jobType {
+	case sourceJobChangefeed:
+		return "OP TiCDC changefeed"
+	default:
+		return string(jobType)
+	}
+}
+
+func (r *opSourceRunner) sourceJobStorageDir(jobType sourceJobType) string {
+	return managedSourceJobStorageDir(jobType)
+}
+
+func (r *opSourceRunner) existingSourceJobID(jobType sourceJobType, state *runState) string {
+	return existingManagedSourceJobID(jobType, state)
+}
+
+func (r *opSourceRunner) setSourceJobID(jobType sourceJobType, state *runState, id string) {
+	setManagedSourceJobID(jobType, state, id)
+}
+
+func (r *opSourceRunner) resumeSourceJob(
+	context.Context,
+	sourcePrepareContext,
+	sourceJobType,
+	string,
+) (*managedSourceJobResult, error) {
+	return nil, nil
+}
+
+func (r *opSourceRunner) createSourceJob(
+	ctx context.Context,
+	prepareCtx sourcePrepareContext,
+	jobType sourceJobType,
+) (*managedSourceJobResult, error) {
+	if jobType != sourceJobChangefeed {
+		return nil, errors.Errorf("unsupported source job %s", jobType)
+	}
+	client, err := r.ticdcClient()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	startTSO, err := parseOptionalTSO(prepareCtx.state.SnapshotTSO)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	req, err := ticdc.BuildChangefeedConfig(ticdc.ChangefeedConfigOptions{
-		Tables:        j.cfg.Tables,
-		StorageURI:    j.incrementURI,
+		Tables:        r.cfg.Tables,
+		StorageURI:    prepareCtx.incrementURI,
 		StartTSO:      startTSO,
-		FlushInterval: j.cfg.ChangefeedFlushInterval,
-		FileSizeMiB:   j.cfg.ChangefeedFileSizeMiB,
+		FlushInterval: r.cfg.ChangefeedFlushInterval,
+		FileSizeMiB:   r.cfg.ChangefeedFileSizeMiB,
 	})
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -311,13 +359,64 @@ func (j *opTiCDCChangefeedJob) Create(ctx context.Context, state *runState) (*ma
 	return &managedSourceJobResult{ID: ticdc.ChangefeedID(cf)}, nil
 }
 
-func (j *opTiCDCChangefeedJob) Wait(ctx context.Context, id string) error {
-	client, err := j.getClient()
+func (r *opSourceRunner) waitSourceJob(
+	ctx context.Context,
+	_ sourcePrepareContext,
+	jobType sourceJobType,
+	id string,
+) error {
+	if jobType != sourceJobChangefeed {
+		return errors.Errorf("unsupported source job %s", jobType)
+	}
+	client, err := r.ticdcClient()
 	if err != nil {
 		return err
 	}
-	_, err = client.WaitChangefeed(ctx, id, j.cfg.PollInterval)
+	_, err = client.WaitChangefeed(ctx, id, r.cfg.PollInterval)
 	return err
+}
+
+func (r *opSourceRunner) ticdcClient() (*ticdc.Client, error) {
+	if r.cdcClient != nil {
+		return r.cdcClient, nil
+	}
+	c, err := ticdc.NewClient(r.cfg.OP.TiCDCAddress)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	r.cdcClient = c
+	return c, nil
+}
+
+func managedSourceJobStorageDir(jobType sourceJobType) string {
+	switch jobType {
+	case sourceJobExport:
+		return snapshotDirName
+	case sourceJobChangefeed:
+		return incrementDirName
+	default:
+		return ""
+	}
+}
+
+func existingManagedSourceJobID(jobType sourceJobType, state *runState) string {
+	switch jobType {
+	case sourceJobExport:
+		return state.ExportID
+	case sourceJobChangefeed:
+		return state.ChangefeedID
+	default:
+		return ""
+	}
+}
+
+func setManagedSourceJobID(jobType sourceJobType, state *runState, id string) {
+	switch jobType {
+	case sourceJobExport:
+		state.ExportID = id
+	case sourceJobChangefeed:
+		state.ChangefeedID = id
+	}
 }
 
 // Replicate runs one full orchestration: prepare snapshot and incremental data
@@ -403,55 +502,17 @@ func (r *tidbCloudSourceRunner) prepare(
 	prepareCtx sourcePrepareContext,
 ) error {
 	cfg := r.cfg
-	store := prepareCtx.store
-	state := prepareCtx.state
-	cred := prepareCtx.cred
-
-	// The TiDB Cloud client is created lazily: when the snapshot/increment data
-	// already exists (created by a previous run or by the user directly), no
-	// export/changefeed is created or waited on, so no API credentials are needed.
-	var cdcClient *tidbcloud.Client
-	getClient := func() (*tidbcloud.Client, error) {
-		if cdcClient != nil {
-			return cdcClient, nil
-		}
-		if cfg.TiDBCloud.ClusterID == "" {
-			return nil, errors.New("--tidbcloud.cluster-id is required to create or wait on an export/changefeed")
-		}
-		var opts []tidbcloud.Option
-		if cfg.TiDBCloud.Host != "" {
-			opts = append(opts, tidbcloud.WithHost(cfg.TiDBCloud.Host))
-		}
-		c, err := tidbcloud.NewClient(cfg.TiDBCloud.PublicKey, cfg.TiDBCloud.PrivateKey, opts...)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		cdcClient = c
-		return c, nil
-	}
 
 	// ---- Export: snapshot via OpenAPI (anchors the consistency TSO) ----
 	if cfg.Mode != RunModeIncrementalOnly {
-		job := &tidbCloudExportJob{
-			cfg:              cfg,
-			getClient:        getClient,
-			cleanSnapshotURI: prepareCtx.cleanSnapshotURI,
-			cred:             cred,
-		}
-		if err := ensureManagedSourceJob(ctx, store, state, job); err != nil {
+		if err := ensureManagedSourceJob(ctx, prepareCtx, r, sourceJobExport); err != nil {
 			return errors.Trace(err)
 		}
 	}
 
 	// ---- Changefeed: incremental via OpenAPI, started at the snapshot TSO ----
 	if cfg.Mode != RunModeSnapshotOnly {
-		job := &tidbCloudChangefeedJob{
-			cfg:               cfg,
-			getClient:         getClient,
-			cleanIncrementURI: prepareCtx.cleanIncrementURI,
-			cred:              cred,
-		}
-		if err := ensureManagedSourceJob(ctx, store, state, job); err != nil {
+		if err := ensureManagedSourceJob(ctx, prepareCtx, r, sourceJobChangefeed); err != nil {
 			return errors.Trace(err)
 		}
 	}
@@ -460,18 +521,20 @@ func (r *tidbCloudSourceRunner) prepare(
 
 func ensureManagedSourceJob(
 	ctx context.Context,
-	store storage.ExternalStorage,
-	state *runState,
-	job managedSourceJob,
+	prepareCtx sourcePrepareContext,
+	source sourceRunner,
+	jobType sourceJobType,
 ) error {
-	jobName := job.Name()
-	jobID := job.ExistingID(state)
+	store := prepareCtx.store
+	state := prepareCtx.state
+	jobName := source.sourceJobName(jobType)
+	jobID := source.existingSourceJobID(jobType, state)
 	if jobID != "" {
 		log.Info("resuming existing source job",
 			zap.String("job", jobName),
 			zap.String("jobID", jobID),
 			zap.String("snapshotTSO", state.SnapshotTSO))
-		res, err := job.Resume(ctx, jobID)
+		res, err := source.resumeSourceJob(ctx, prepareCtx, jobType, jobID)
 		if err != nil {
 			return errors.Annotatef(err, "resume %s", jobName)
 		}
@@ -479,7 +542,7 @@ func ensureManagedSourceJob(
 		log.Info("waiting for source job",
 			zap.String("job", jobName),
 			zap.String("jobID", jobID))
-		if err := job.Wait(ctx, jobID); err != nil {
+		if err := source.waitSourceJob(ctx, prepareCtx, jobType, jobID); err != nil {
 			return errors.Annotatef(err, "wait %s", jobName)
 		}
 		log.Info("source job ready",
@@ -488,7 +551,10 @@ func ensureManagedSourceJob(
 		return nil
 	}
 
-	storageDir := job.StorageDir()
+	storageDir := source.sourceJobStorageDir(jobType)
+	if storageDir == "" {
+		return errors.Errorf("unsupported source job %s", jobType)
+	}
 	exists, err := dirHasObjects(ctx, store, storageDir)
 	if err != nil {
 		return errors.Annotatef(err, "check %s directory", storageDir)
@@ -500,14 +566,14 @@ func ensureManagedSourceJob(
 		return nil
 	}
 
-	res, err := job.Create(ctx, state)
+	res, err := source.createSourceJob(ctx, prepareCtx, jobType)
 	if err != nil {
 		return errors.Annotatef(err, "create %s", jobName)
 	}
 	if res == nil || res.ID == "" {
 		return errors.Errorf("create %s returned empty id", jobName)
 	}
-	job.SetID(state, res.ID)
+	source.setSourceJobID(jobType, state, res.ID)
 	applyManagedSourceJobResult(state, res, true)
 	if err := saveState(ctx, store, state); err != nil {
 		return errors.Trace(err)
@@ -520,7 +586,7 @@ func ensureManagedSourceJob(
 	log.Info("waiting for source job",
 		zap.String("job", jobName),
 		zap.String("jobID", res.ID))
-	if err := job.Wait(ctx, res.ID); err != nil {
+	if err := source.waitSourceJob(ctx, prepareCtx, jobType, res.ID); err != nil {
 		return errors.Annotatef(err, "wait %s", jobName)
 	}
 	log.Info("source job ready",
@@ -564,24 +630,7 @@ func (r *opSourceRunner) prepare(
 	}
 
 	if cfg.Mode != RunModeSnapshotOnly {
-		var cdcClient *ticdc.Client
-		getClient := func() (*ticdc.Client, error) {
-			if cdcClient != nil {
-				return cdcClient, nil
-			}
-			c, err := ticdc.NewClient(cfg.OP.TiCDCAddress)
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
-			cdcClient = c
-			return c, nil
-		}
-		job := &opTiCDCChangefeedJob{
-			cfg:          cfg,
-			getClient:    getClient,
-			incrementURI: prepareCtx.incrementURI,
-		}
-		if err := ensureManagedSourceJob(ctx, store, state, job); err != nil {
+		if err := ensureManagedSourceJob(ctx, prepareCtx, r, sourceJobChangefeed); err != nil {
 			return errors.Trace(err)
 		}
 	}
