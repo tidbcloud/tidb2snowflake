@@ -1,4 +1,4 @@
-package snowsql
+package snowflake
 
 import (
 	"database/sql"
@@ -15,7 +15,7 @@ import (
 
 // A Wrapper of snowflake connection.
 // It implements the coreinterfaces.Connector interface.
-type SnowflakeConnector struct {
+type Connector struct {
 	// db is the connection to snowflake.
 	db *sql.DB
 
@@ -27,16 +27,16 @@ type SnowflakeConnector struct {
 	columns []cloudstorage.TableCol
 }
 
-type ConnectorOption func(*SnowflakeConnector)
+type ConnectorOption func(*Connector)
 
 func WithStageFileCompression(compression string) ConnectorOption {
-	return func(sc *SnowflakeConnector) {
+	return func(sc *Connector) {
 		sc.stageFileCompression = compression
 	}
 }
 
-func NewSnowflakeConnector(sfConfig *SnowflakeConfig, stageName string, storageURI *url.URL, credentials *credentials.Value, opts ...ConnectorOption) (*SnowflakeConnector, error) {
-	db, err := sfConfig.OpenDB()
+func NewConnector(sfConfig *Config, stageName string, storageURI *url.URL, credentials *credentials.Value, opts ...ConnectorOption) (*Connector, error) {
+	db, err := OpenDB(sfConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -49,7 +49,7 @@ func NewSnowflakeConnector(sfConfig *SnowflakeConfig, stageName string, storageU
 		return nil, errors.Annotate(err, "Failed to create stage")
 	}
 
-	sc := &SnowflakeConnector{
+	sc := &Connector{
 		db:            db,
 		stageName:     stageName,
 		s3Credentials: credentials,
@@ -64,7 +64,7 @@ func NewSnowflakeConnector(sfConfig *SnowflakeConfig, stageName string, storageU
 	return sc, nil
 }
 
-func (sc *SnowflakeConnector) InitSchema(columns []cloudstorage.TableCol) error {
+func (sc *Connector) InitSchema(columns []cloudstorage.TableCol) error {
 	if len(sc.columns) != 0 {
 		return nil
 	}
@@ -78,7 +78,7 @@ func (sc *SnowflakeConnector) InitSchema(columns []cloudstorage.TableCol) error 
 	return nil
 }
 
-func (sc *SnowflakeConnector) ExecDDL(tableDef cloudstorage.TableDefinition) error {
+func (sc *Connector) ExecDDL(tableDef cloudstorage.TableDefinition) error {
 	if len(sc.columns) == 0 {
 		return errors.New("Columns not initialized. Maybe you execute a DDL before all DMLs, which is not supported now.")
 	}
@@ -112,7 +112,7 @@ func (sc *SnowflakeConnector) ExecDDL(tableDef cloudstorage.TableDefinition) err
 	return nil
 }
 
-func (sc *SnowflakeConnector) CopyTableSchema(sourceDatabase string, sourceTable string, sourceTiDBConn *sql.DB) error {
+func (sc *Connector) CopyTableSchema(sourceDatabase string, sourceTable string, sourceTiDBConn *sql.DB) error {
 	createTableQuery, err := GenCreateSchema(sourceDatabase, sourceTable, sourceTiDBConn)
 	if err != nil {
 		return errors.Trace(err)
@@ -127,7 +127,7 @@ func (sc *SnowflakeConnector) CopyTableSchema(sourceDatabase string, sourceTable
 	return err
 }
 
-func (sc *SnowflakeConnector) LoadSnapshot(targetTable, filePath string) error {
+func (sc *Connector) LoadSnapshot(targetTable, filePath string) error {
 	if err := LoadSnapshotFromStage(sc.db, targetTable, sc.stageName, filePath, sc.stageFileCompression); err != nil {
 		return errors.Trace(err)
 	}
@@ -138,7 +138,7 @@ func (sc *SnowflakeConnector) LoadSnapshot(targetTable, filePath string) error {
 	return nil
 }
 
-func (sc *SnowflakeConnector) LoadIncrement(tableDef cloudstorage.TableDefinition, filePath string) error {
+func (sc *Connector) LoadIncrement(tableDef cloudstorage.TableDefinition, filePath string) error {
 	// merge staged file into table
 	mergeQuery := GenMergeInto(tableDef, filePath, sc.stageName)
 	_, err := sc.db.Exec(mergeQuery)
@@ -149,7 +149,7 @@ func (sc *SnowflakeConnector) LoadIncrement(tableDef cloudstorage.TableDefinitio
 	return nil
 }
 
-func (sc *SnowflakeConnector) Close() {
+func (sc *Connector) Close() {
 	// drop stage
 	if err := DropStage(sc.db, sc.stageName); err != nil {
 		log.Error("fail to drop stage", zap.Error(err))

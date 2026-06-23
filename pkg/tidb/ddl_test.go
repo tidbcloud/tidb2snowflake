@@ -1,11 +1,11 @@
-package tidbsql_test
+package tidb_test
 
 import (
 	"testing"
 
 	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
 	"github.com/stretchr/testify/require"
-	"github.com/tidbcloud/tidb2snowflake/pkg/tidbsql"
+	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 )
 
 func TestGetColumnDiff(t *testing.T) {
@@ -55,34 +55,34 @@ func TestGetColumnDiff(t *testing.T) {
 			Tp:   "varchar",
 		},
 	}
-	expected := []tidbsql.ColumnDiff{
+	expected := []tidb.ColumnDiff{
 		{
-			Action: tidbsql.MODIFY_COLUMN,
+			Action: tidb.MODIFY_COLUMN,
 			Before: &prev[0],
 			After:  &curr[0],
 		},
 		{
-			Action: tidbsql.RENAME_COLUMN,
+			Action: tidb.RENAME_COLUMN,
 			Before: &prev[1],
 			After:  &curr[1],
 		},
 		{
-			Action: tidbsql.DROP_COLUMN,
+			Action: tidb.DROP_COLUMN,
 			Before: &prev[2],
 			After:  nil,
 		},
 		{
-			Action: tidbsql.UNCHANGE,
+			Action: tidb.UNCHANGE,
 			Before: &prev[3],
 			After:  &curr[2],
 		},
 		{
-			Action: tidbsql.ADD_COLUMN,
+			Action: tidb.ADD_COLUMN,
 			Before: nil,
 			After:  &curr[3],
 		},
 	}
-	columnDiff, err := tidbsql.GetColumnDiff(prev, curr)
+	columnDiff, err := tidb.GetColumnDiff(prev, curr)
 	require.NoError(t, err)
 	require.ElementsMatch(t, expected, columnDiff)
 }

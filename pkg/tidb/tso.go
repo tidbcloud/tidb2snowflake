@@ -1,4 +1,4 @@
-package tidbsql
+package tidb
 
 import (
 	"github.com/pingcap/errors"
@@ -6,8 +6,8 @@ import (
 	"go.uber.org/zap"
 )
 
-func GetCurrentTSO(config *TiDBConfig) (uint64, error) {
-	db, err := config.OpenDB()
+func GetCurrentTSO(config *Config) (uint64, error) {
+	db, err := OpenDB(config)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
