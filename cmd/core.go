@@ -366,7 +366,7 @@ func replicateTable(
 		if err != nil {
 			return errors.Trace(err)
 		}
-		err = replicate.Snapshot(ctx, conn, tableFQN, cfg.TiDB, snapshotURI, snapshotLoadMode(cfg) == SnapshotLoadModePerFile)
+		err = replicate.Snapshot(ctx, conn, tableFQN, snapshotURI, snapshotLoadMode(cfg) == SnapshotLoadModePerFile)
 		conn.Close()
 		if err != nil {
 			return errors.Trace(err)

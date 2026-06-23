@@ -10,6 +10,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
+	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 	"go.uber.org/zap"
 )
 
@@ -27,15 +28,15 @@ type Connector struct {
 	columns []cloudstorage.TableCol
 }
 
-type ConnectorOption func(*Connector)
+type Option func(*Connector)
 
-func WithStageFileCompression(compression string) ConnectorOption {
+func WithStageFileCompression(compression string) Option {
 	return func(sc *Connector) {
 		sc.stageFileCompression = compression
 	}
 }
 
-func NewConnector(sfConfig *Config, stageName string, storageURI *url.URL, credentials *credentials.Value, opts ...ConnectorOption) (*Connector, error) {
+func NewConnector(sfConfig *Config, stageName string, storageURI *url.URL, credentials *credentials.Value, opts ...Option) (*Connector, error) {
 	db, err := OpenDB(sfConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -112,19 +113,18 @@ func (sc *Connector) ExecDDL(tableDef cloudstorage.TableDefinition) error {
 	return nil
 }
 
-func (sc *Connector) CopyTableSchema(sourceDatabase string, sourceTable string, sourceTiDBConn *sql.DB) error {
-	createTableQuery, err := GenCreateSchema(sourceDatabase, sourceTable, sourceTiDBConn)
+func (sc *Connector) CopyTableSchema(tableSchema *table.Meta) error {
+	createTableQuery := buildCreateSchemaSQL(tableSchema)
+	_, err := sc.db.Exec(createTableQuery)
 	if err != nil {
+		log.Error("table in Snowflake failed", zap.String("query", createTableQuery), zap.Error(err))
 		return errors.Trace(err)
 	}
-	log.Info("Creating table in Snowflake", zap.String("query", createTableQuery))
-	_, err = sc.db.Exec(createTableQuery)
-	if err == nil {
-		log.Info("Snowflake table schema is ready",
-			zap.String("sourceDatabase", sourceDatabase),
-			zap.String("sourceTable", sourceTable))
-	}
-	return err
+
+	log.Info("Snowflake table schema is ready",
+		zap.String("sourceDatabase", tableSchema.Schema),
+		zap.String("sourceTable", tableSchema.Table))
+	return nil
 }
 
 func (sc *Connector) LoadSnapshot(targetTable, filePath string) error {
