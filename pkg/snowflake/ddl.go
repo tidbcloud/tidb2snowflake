@@ -36,24 +36,21 @@ func GetColumnModifyString(diff *tidb.ColumnDiff) string {
 }
 
 func GenDDLViaColumnsDiff(prevColumns []cloudstorage.TableCol, curTableDef cloudstorage.TableDefinition) ([]string, error) {
-	if curTableDef.Type == model.ActionTruncateTable {
+	switch model.ActionType(curTableDef.Type) {
+	case model.ActionTruncateTable:
 		return []string{fmt.Sprintf("TRUNCATE TABLE %s", curTableDef.Table)}, nil
-	}
-	if curTableDef.Type == model.ActionDropTable {
+	case model.ActionDropTable:
 		return []string{fmt.Sprintf("DROP TABLE %s", curTableDef.Table)}, nil
-	}
-	if curTableDef.Type == model.ActionCreateTable {
+	case model.ActionCreateTable:
 		return nil, errors.New("Received create table ddl, which should not happen") // FIXME: drop table and create table
-	}
-	if curTableDef.Type == model.ActionRenameTables {
-		return nil, errors.New("Received rename table ddl, new change data can not be capture by TiCDC any more." +
-			"If you want to rename table, please start a new task to capture the new table") // FIXME: rename table to new table and rename back
-	}
-	if curTableDef.Type == model.ActionDropSchema {
+	case model.ActionRenameTable:
+		return nil, errors.New("Received rename table ddl, which should not happen") // FIXME: rename table to new table and rename back
+	case model.ActionDropSchema:
 		return []string{fmt.Sprintf("DROP SCHEMA %s", curTableDef.Schema)}, nil
-	}
-	if curTableDef.Type == model.ActionCreateSchema {
+	case model.ActionCreateSchema:
 		return nil, errors.New("Received create schema ddl, which should not happen") // FIXME: drop schema and create schema
+	default:
+		// continue
 	}
 
 	columnDiff, err := tidb.GetColumnDiff(prevColumns, curTableDef.Columns)

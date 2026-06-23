@@ -139,7 +139,7 @@ func TestGenSnapshotAndIncrementURIs(t *testing.T) {
 
 func TestStateRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	store, err := putil.GetExternalStorageFromURI(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
 	require.NoError(t, err)
 
 	// no file yet -> empty state
@@ -162,7 +162,7 @@ func TestStateRoundTrip(t *testing.T) {
 
 func TestDirHasObjects(t *testing.T) {
 	ctx := context.Background()
-	store, err := putil.GetExternalStorageFromURI(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
 	require.NoError(t, err)
 
 	// empty dirs -> no objects
