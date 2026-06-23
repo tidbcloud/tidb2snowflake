@@ -349,7 +349,7 @@ func openRunStorage(t *testing.T, cfg *e2eConfig, storagePath string) storage.Ex
 	q.Set("secret-access-key", cfg.AWSSecretKey)
 	uri.RawQuery = q.Encode()
 	ctx := context.Background()
-	store, err := putil.GetExternalStorageFromURI(ctx, uri.String())
+	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, uri.String())
 	if err != nil {
 		t.Fatalf("open storage: %v", err)
 	}

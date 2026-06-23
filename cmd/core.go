@@ -143,7 +143,7 @@ func Replicate(ctx context.Context, cfg *Config) error {
 		return errors.Trace(err)
 	}
 
-	store, err := putil.GetExternalStorageFromURI(ctx, storageURI.String())
+	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, storageURI.String())
 	if err != nil {
 		return errors.Annotate(err, "open storage")
 	}
