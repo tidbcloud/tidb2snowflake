@@ -196,6 +196,74 @@ func TestDirHasObjects(t *testing.T) {
 	require.False(t, has)
 }
 
+func TestEnsureManagedSourceJobCreatesSavesAndWaits(t *testing.T) {
+	store, err := storage.NewLocalStorage(t.TempDir())
+	require.NoError(t, err)
+	ctx := context.Background()
+	state := &runState{}
+
+	var created bool
+	var waitedID string
+	err = ensureManagedSourceJob(ctx, store, state, managedSourceJob{
+		name:       "test changefeed",
+		storageDir: incrementDirName,
+		existingID: func() string {
+			return state.ChangefeedID
+		},
+		setID: func(id string) {
+			state.ChangefeedID = id
+		},
+		create: func(context.Context) (*managedSourceJobResult, error) {
+			created = true
+			return &managedSourceJobResult{ID: "cf-1", SnapshotTSO: "449"}, nil
+		},
+		wait: func(_ context.Context, id string) error {
+			waitedID = id
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, "cf-1", state.ChangefeedID)
+	require.Equal(t, "449", state.SnapshotTSO)
+	require.Equal(t, "cf-1", waitedID)
+
+	got, err := loadState(ctx, store)
+	require.NoError(t, err)
+	require.Equal(t, "cf-1", got.ChangefeedID)
+	require.Equal(t, "449", got.SnapshotTSO)
+}
+
+func TestEnsureManagedSourceJobSkipsWhenStorageDataExists(t *testing.T) {
+	store, err := storage.NewLocalStorage(t.TempDir())
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, store.WriteFile(ctx, incrementDirName+"/metadata", []byte("ready")))
+
+	state := &runState{}
+	err = ensureManagedSourceJob(ctx, store, state, managedSourceJob{
+		name:       "test changefeed",
+		storageDir: incrementDirName,
+		existingID: func() string {
+			return state.ChangefeedID
+		},
+		setID: func(id string) {
+			state.ChangefeedID = id
+		},
+		create: func(context.Context) (*managedSourceJobResult, error) {
+			t.Fatal("create should not be called when storage data exists")
+			return nil, nil
+		},
+		wait: func(context.Context, string) error {
+			t.Fatal("wait should not be called when storage data exists")
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	require.Empty(t, state.ChangefeedID)
+	require.Empty(t, state.SnapshotTSO)
+}
+
 func validationConfig() *Config {
 	cfg := baseConfig()
 	cfg.TiDB = &tidb.Config{Host: "127.0.0.1", Port: 4000, User: "root"}

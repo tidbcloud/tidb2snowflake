@@ -125,6 +125,21 @@ type runState struct {
 	SnapshotTSO  string `json:"snapshotTso,omitempty"`
 }
 
+type managedSourceJobResult struct {
+	ID          string
+	SnapshotTSO string
+}
+
+type managedSourceJob struct {
+	name       string
+	storageDir string
+	existingID func() string
+	setID      func(string)
+	resume     func(context.Context, string) (*managedSourceJobResult, error)
+	create     func(context.Context) (*managedSourceJobResult, error)
+	wait       func(context.Context, string) error
+}
+
 // Replicate runs one full orchestration: prepare snapshot and incremental data
 // from the selected source deployment, then load the resulting object-storage
 // files into Snowflake.
@@ -190,6 +205,22 @@ func Replicate(ctx context.Context, cfg *Config) error {
 		return loadIntoSnowflake(ctx, cfg, cred, snapshotURI, incrementURI)
 	}
 
+	if err := prepareTiDBCloudSource(ctx, cfg, store, state, cleanSnapshotURI, cleanIncrementURI, cred); err != nil {
+		return errors.Trace(err)
+	}
+
+	// ---- Load object-storage files into Snowflake ----
+	return loadIntoSnowflake(ctx, cfg, cred, snapshotURI, incrementURI)
+}
+
+func prepareTiDBCloudSource(
+	ctx context.Context,
+	cfg *Config,
+	store storage.ExternalStorage,
+	state *runState,
+	cleanSnapshotURI, cleanIncrementURI string,
+	cred *credentials.Value,
+) error {
 	// The TiDB Cloud client is created lazily: when the snapshot/increment data
 	// already exists (created by a previous run or by the user directly), no
 	// export/changefeed is created or waited on, so no API credentials are needed.
@@ -214,132 +245,178 @@ func Replicate(ctx context.Context, cfg *Config) error {
 	}
 
 	// ---- Export: snapshot via OpenAPI (anchors the consistency TSO) ----
-	// waitForExport/waitForChangefeed are only set for jobs this run created or
-	// resumed; jobs whose data already exists (a previous run, or created by the
-	// user directly) are loaded as-is without waiting.
-	waitForExport := false
 	if cfg.Mode != RunModeIncrementalOnly {
-		switch {
-		case state.ExportID != "":
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-			export, err := c.GetExport(ctx, cfg.TiDBCloud.ClusterID, state.ExportID)
-			if err != nil {
-				return errors.Annotate(err, "resume export")
-			}
-			if state.SnapshotTSO == "" {
-				state.SnapshotTSO = export.SnapshotTSO
-			}
-			waitForExport = true
-			log.Info("resuming existing export",
-				zap.String("exportID", export.ExportID),
-				zap.String("snapshotTSO", state.SnapshotTSO))
-		default:
-			exists, err := dirHasObjects(ctx, store, snapshotDirName)
-			if err != nil {
-				return errors.Annotate(err, "check snapshot directory")
-			}
-			if exists {
-				log.Info("snapshot data already exists in storage, skipping export creation",
-					zap.String("dir", snapshotDirName))
-			} else {
+		if err := ensureManagedSourceJob(ctx, store, state, managedSourceJob{
+			name:       "TiDB Cloud export",
+			storageDir: snapshotDirName,
+			existingID: func() string {
+				return state.ExportID
+			},
+			setID: func(id string) {
+				state.ExportID = id
+			},
+			resume: func(ctx context.Context, id string) (*managedSourceJobResult, error) {
 				c, err := getClient()
 				if err != nil {
-					return err
+					return nil, err
+				}
+				export, err := c.GetExport(ctx, cfg.TiDBCloud.ClusterID, id)
+				if err != nil {
+					return nil, err
+				}
+				return &managedSourceJobResult{ID: export.ExportID, SnapshotTSO: export.SnapshotTSO}, nil
+			},
+			create: func(ctx context.Context) (*managedSourceJobResult, error) {
+				c, err := getClient()
+				if err != nil {
+					return nil, err
 				}
 				req := buildExportRequest(cfg, cleanSnapshotURI, cred)
 				export, err := c.CreateExport(ctx, cfg.TiDBCloud.ClusterID, req)
 				if err != nil {
-					return errors.Annotate(err, "create export")
+					return nil, err
 				}
-				state.ExportID = export.ExportID
-				state.SnapshotTSO = export.SnapshotTSO
-				if err := saveState(ctx, store, state); err != nil {
-					return errors.Trace(err)
-				}
-				waitForExport = true
-				log.Info("export created",
-					zap.String("exportID", export.ExportID),
-					zap.String("snapshotTSO", export.SnapshotTSO),
-					zap.String("target", redactURLRawQuery(cleanSnapshotURI)))
-			}
-		}
-	}
-
-	// ---- Changefeed: incremental via OpenAPI, started at the snapshot TSO ----
-	waitForChangefeed := false
-	if cfg.Mode != RunModeSnapshotOnly {
-		switch {
-		case state.ChangefeedID != "":
-			waitForChangefeed = true
-			log.Info("resuming existing changefeed",
-				zap.String("changefeedID", state.ChangefeedID),
-				zap.String("startTSO", state.SnapshotTSO))
-		default:
-			exists, err := dirHasObjects(ctx, store, incrementDirName)
-			if err != nil {
-				return errors.Annotate(err, "check increment directory")
-			}
-			if exists {
-				log.Info("increment data already exists in storage, skipping changefeed creation",
-					zap.String("dir", incrementDirName))
-			} else {
+				return &managedSourceJobResult{ID: export.ExportID, SnapshotTSO: export.SnapshotTSO}, nil
+			},
+			wait: func(ctx context.Context, id string) error {
 				c, err := getClient()
 				if err != nil {
 					return err
 				}
+				_, err = c.WaitExport(ctx, cfg.TiDBCloud.ClusterID, id, cfg.PollInterval)
+				return err
+			},
+		}); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
+	// ---- Changefeed: incremental via OpenAPI, started at the snapshot TSO ----
+	if cfg.Mode != RunModeSnapshotOnly {
+		if err := ensureManagedSourceJob(ctx, store, state, managedSourceJob{
+			name:       "TiDB Cloud changefeed",
+			storageDir: incrementDirName,
+			existingID: func() string {
+				return state.ChangefeedID
+			},
+			setID: func(id string) {
+				state.ChangefeedID = id
+			},
+			create: func(ctx context.Context) (*managedSourceJobResult, error) {
+				c, err := getClient()
+				if err != nil {
+					return nil, err
+				}
 				req := buildChangefeedRequest(cfg, cleanIncrementURI, cred, state.SnapshotTSO)
 				cf, err := c.CreateChangefeed(ctx, cfg.TiDBCloud.ClusterID, req)
 				if err != nil {
-					return errors.Annotate(err, "create changefeed")
+					return nil, err
 				}
-				state.ChangefeedID = cf.ChangefeedID
-				if err := saveState(ctx, store, state); err != nil {
-					return errors.Trace(err)
+				return &managedSourceJobResult{ID: cf.ChangefeedID}, nil
+			},
+			wait: func(ctx context.Context, id string) error {
+				c, err := getClient()
+				if err != nil {
+					return err
 				}
-				waitForChangefeed = true
-				log.Info("changefeed created",
-					zap.String("changefeedID", cf.ChangefeedID),
-					zap.String("startTSO", state.SnapshotTSO),
-					zap.String("target", redactURLRawQuery(cleanIncrementURI)),
-					zap.Duration("flushInterval", cfg.ChangefeedFlushInterval),
-					zap.Int("fileSizeMiB", cfg.ChangefeedFileSizeMiB))
+				_, err = c.WaitChangefeed(ctx, cfg.TiDBCloud.ClusterID, id, cfg.PollInterval)
+				return err
+			},
+		}); err != nil {
+			return errors.Trace(err)
+		}
+	}
+	return nil
+}
+
+func ensureManagedSourceJob(
+	ctx context.Context,
+	store storage.ExternalStorage,
+	state *runState,
+	job managedSourceJob,
+) error {
+	jobID := job.existingID()
+	if jobID != "" {
+		log.Info("resuming existing source job",
+			zap.String("job", job.name),
+			zap.String("jobID", jobID),
+			zap.String("snapshotTSO", state.SnapshotTSO))
+		if job.resume != nil {
+			res, err := job.resume(ctx, jobID)
+			if err != nil {
+				return errors.Annotatef(err, "resume %s", job.name)
 			}
+			applyManagedSourceJobResult(state, res, false)
 		}
+		if job.wait != nil {
+			log.Info("waiting for source job",
+				zap.String("job", job.name),
+				zap.String("jobID", jobID))
+			if err := job.wait(ctx, jobID); err != nil {
+				return errors.Annotatef(err, "wait %s", job.name)
+			}
+			log.Info("source job ready",
+				zap.String("job", job.name),
+				zap.String("jobID", jobID))
+		}
+		return nil
 	}
 
-	// ---- Wait until the jobs this run manages are ready ----
-	if waitForExport {
-		c, err := getClient()
-		if err != nil {
-			return err
-		}
-		log.Info("waiting for export to finish",
-			zap.String("exportID", state.ExportID),
-			zap.Duration("pollInterval", cfg.PollInterval))
-		if _, err := c.WaitExport(ctx, cfg.TiDBCloud.ClusterID, state.ExportID, cfg.PollInterval); err != nil {
-			return errors.Annotate(err, "wait export")
-		}
-		log.Info("export finished", zap.String("exportID", state.ExportID))
+	exists, err := dirHasObjects(ctx, store, job.storageDir)
+	if err != nil {
+		return errors.Annotatef(err, "check %s directory", job.storageDir)
 	}
-	if waitForChangefeed {
-		c, err := getClient()
-		if err != nil {
-			return err
-		}
-		log.Info("waiting for changefeed to be running",
-			zap.String("changefeedID", state.ChangefeedID),
-			zap.Duration("pollInterval", cfg.PollInterval))
-		if _, err := c.WaitChangefeed(ctx, cfg.TiDBCloud.ClusterID, state.ChangefeedID, cfg.PollInterval); err != nil {
-			return errors.Annotate(err, "wait changefeed")
-		}
-		log.Info("changefeed running", zap.String("changefeedID", state.ChangefeedID))
+	if exists {
+		log.Info("source data already exists in storage, skipping source job creation",
+			zap.String("job", job.name),
+			zap.String("dir", job.storageDir))
+		return nil
 	}
 
-	// ---- Load object-storage files into Snowflake ----
-	return loadIntoSnowflake(ctx, cfg, cred, snapshotURI, incrementURI)
+	if job.create == nil {
+		return errors.Errorf("create function is required for %s", job.name)
+	}
+	res, err := job.create(ctx)
+	if err != nil {
+		return errors.Annotatef(err, "create %s", job.name)
+	}
+	if res == nil || res.ID == "" {
+		return errors.Errorf("create %s returned empty id", job.name)
+	}
+	if job.setID == nil {
+		return errors.Errorf("setID function is required for %s", job.name)
+	}
+	job.setID(res.ID)
+	applyManagedSourceJobResult(state, res, true)
+	if err := saveState(ctx, store, state); err != nil {
+		return errors.Trace(err)
+	}
+	log.Info("source job created",
+		zap.String("job", job.name),
+		zap.String("jobID", res.ID),
+		zap.String("snapshotTSO", state.SnapshotTSO))
+
+	if job.wait != nil {
+		log.Info("waiting for source job",
+			zap.String("job", job.name),
+			zap.String("jobID", res.ID))
+		if err := job.wait(ctx, res.ID); err != nil {
+			return errors.Annotatef(err, "wait %s", job.name)
+		}
+		log.Info("source job ready",
+			zap.String("job", job.name),
+			zap.String("jobID", res.ID))
+	}
+	return nil
+}
+
+func applyManagedSourceJobResult(state *runState, res *managedSourceJobResult, overwriteSnapshotTSO bool) {
+	if res == nil {
+		return
+	}
+	if res.SnapshotTSO != "" && (overwriteSnapshotTSO || state.SnapshotTSO == "") {
+		state.SnapshotTSO = res.SnapshotTSO
+	}
 }
 
 func prepareOPSource(
@@ -367,29 +444,35 @@ func prepareOPSource(
 	}
 
 	if cfg.Mode != RunModeSnapshotOnly {
-		waitForChangefeed := false
-		switch {
-		case state.ChangefeedID != "":
-			waitForChangefeed = true
-			log.Info("resuming existing OP TiCDC changefeed",
-				zap.String("changefeedID", state.ChangefeedID),
-				zap.String("startTSO", state.SnapshotTSO))
-		default:
-			exists, err := dirHasObjects(ctx, store, incrementDirName)
-			if err != nil {
-				return errors.Annotate(err, "check increment directory")
+		var cdcClient *ticdc.Client
+		getClient := func() (*ticdc.Client, error) {
+			if cdcClient != nil {
+				return cdcClient, nil
 			}
-			if exists {
-				log.Info("increment data already exists in storage, skipping OP TiCDC changefeed creation",
-					zap.String("dir", incrementDirName))
-			} else {
-				client, err := ticdc.NewClient(cfg.OP.TiCDCAddress)
+			c, err := ticdc.NewClient(cfg.OP.TiCDCAddress)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			cdcClient = c
+			return c, nil
+		}
+		if err := ensureManagedSourceJob(ctx, store, state, managedSourceJob{
+			name:       "OP TiCDC changefeed",
+			storageDir: incrementDirName,
+			existingID: func() string {
+				return state.ChangefeedID
+			},
+			setID: func(id string) {
+				state.ChangefeedID = id
+			},
+			create: func(ctx context.Context) (*managedSourceJobResult, error) {
+				client, err := getClient()
 				if err != nil {
-					return errors.Trace(err)
+					return nil, errors.Trace(err)
 				}
 				startTSO, err := parseOptionalTSO(state.SnapshotTSO)
 				if err != nil {
-					return errors.Trace(err)
+					return nil, errors.Trace(err)
 				}
 				req, err := ticdc.BuildChangefeedConfig(ticdc.ChangefeedConfigOptions{
 					Tables:        cfg.Tables,
@@ -399,41 +482,24 @@ func prepareOPSource(
 					FileSizeMiB:   cfg.ChangefeedFileSizeMiB,
 				})
 				if err != nil {
-					return errors.Trace(err)
+					return nil, errors.Trace(err)
 				}
 				cf, err := client.CreateChangefeed(ctx, req)
 				if err != nil {
-					return errors.Annotate(err, "create OP TiCDC changefeed")
+					return nil, errors.Trace(err)
 				}
-				state.ChangefeedID = ticdc.ChangefeedID(cf)
-				if state.ChangefeedID == "" {
-					return errors.New("create OP TiCDC changefeed returned empty id")
+				return &managedSourceJobResult{ID: ticdc.ChangefeedID(cf)}, nil
+			},
+			wait: func(ctx context.Context, id string) error {
+				client, err := getClient()
+				if err != nil {
+					return err
 				}
-				if err := saveState(ctx, store, state); err != nil {
-					return errors.Trace(err)
-				}
-				waitForChangefeed = true
-				log.Info("OP TiCDC changefeed created",
-					zap.String("changefeedID", state.ChangefeedID),
-					zap.String("startTSO", state.SnapshotTSO),
-					zap.String("target", safeURLForLog(incrementURI)),
-					zap.Duration("flushInterval", cfg.ChangefeedFlushInterval),
-					zap.Int("fileSizeMiB", cfg.ChangefeedFileSizeMiB))
-			}
-		}
-
-		if waitForChangefeed {
-			client, err := ticdc.NewClient(cfg.OP.TiCDCAddress)
-			if err != nil {
-				return errors.Trace(err)
-			}
-			log.Info("waiting for OP TiCDC changefeed to run",
-				zap.String("changefeedID", state.ChangefeedID),
-				zap.Duration("pollInterval", cfg.PollInterval))
-			if _, err := client.WaitChangefeed(ctx, state.ChangefeedID, cfg.PollInterval); err != nil {
-				return errors.Annotate(err, "wait OP TiCDC changefeed")
-			}
-			log.Info("OP TiCDC changefeed running", zap.String("changefeedID", state.ChangefeedID))
+				_, err = client.WaitChangefeed(ctx, id, cfg.PollInterval)
+				return err
+			},
+		}); err != nil {
+			return errors.Trace(err)
 		}
 	}
 
