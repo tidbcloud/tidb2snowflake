@@ -214,20 +214,20 @@ func TestEnsureManagedSourceJobCreatesSavesAndWaits(t *testing.T) {
 
 	var created bool
 	var waitedID string
-	err = ensureManagedSourceJob(ctx, store, state, managedSourceJob{
-		name:       "test changefeed",
-		storageDir: incrementDirName,
-		existingID: func() string {
+	err = ensureManagedSourceJob(ctx, store, state, fakeManagedSourceJob{
+		jobName: "test changefeed",
+		dir:     incrementDirName,
+		id: func(state *runState) string {
 			return state.ChangefeedID
 		},
-		setID: func(id string) {
+		set: func(state *runState, id string) {
 			state.ChangefeedID = id
 		},
-		create: func(context.Context) (*managedSourceJobResult, error) {
+		createFn: func(context.Context, *runState) (*managedSourceJobResult, error) {
 			created = true
 			return &managedSourceJobResult{ID: "cf-1", SnapshotTSO: "449"}, nil
 		},
-		wait: func(_ context.Context, id string) error {
+		waitFn: func(_ context.Context, id string) error {
 			waitedID = id
 			return nil
 		},
@@ -251,20 +251,20 @@ func TestEnsureManagedSourceJobSkipsWhenStorageDataExists(t *testing.T) {
 	require.NoError(t, store.WriteFile(ctx, incrementDirName+"/metadata", []byte("ready")))
 
 	state := &runState{}
-	err = ensureManagedSourceJob(ctx, store, state, managedSourceJob{
-		name:       "test changefeed",
-		storageDir: incrementDirName,
-		existingID: func() string {
+	err = ensureManagedSourceJob(ctx, store, state, fakeManagedSourceJob{
+		jobName: "test changefeed",
+		dir:     incrementDirName,
+		id: func(state *runState) string {
 			return state.ChangefeedID
 		},
-		setID: func(id string) {
+		set: func(state *runState, id string) {
 			state.ChangefeedID = id
 		},
-		create: func(context.Context) (*managedSourceJobResult, error) {
+		createFn: func(context.Context, *runState) (*managedSourceJobResult, error) {
 			t.Fatal("create should not be called when storage data exists")
 			return nil, nil
 		},
-		wait: func(context.Context, string) error {
+		waitFn: func(context.Context, string) error {
 			t.Fatal("wait should not be called when storage data exists")
 			return nil
 		},
@@ -272,6 +272,51 @@ func TestEnsureManagedSourceJobSkipsWhenStorageDataExists(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, state.ChangefeedID)
 	require.Empty(t, state.SnapshotTSO)
+}
+
+type fakeManagedSourceJob struct {
+	jobName  string
+	dir      string
+	id       func(*runState) string
+	set      func(*runState, string)
+	resumeFn func(context.Context, string) (*managedSourceJobResult, error)
+	createFn func(context.Context, *runState) (*managedSourceJobResult, error)
+	waitFn   func(context.Context, string) error
+}
+
+func (j fakeManagedSourceJob) Name() string { return j.jobName }
+
+func (j fakeManagedSourceJob) StorageDir() string { return j.dir }
+
+func (j fakeManagedSourceJob) ExistingID(state *runState) string {
+	if j.id == nil {
+		return ""
+	}
+	return j.id(state)
+}
+
+func (j fakeManagedSourceJob) SetID(state *runState, id string) {
+	if j.set != nil {
+		j.set(state, id)
+	}
+}
+
+func (j fakeManagedSourceJob) Resume(ctx context.Context, id string) (*managedSourceJobResult, error) {
+	if j.resumeFn == nil {
+		return nil, nil
+	}
+	return j.resumeFn(ctx, id)
+}
+
+func (j fakeManagedSourceJob) Create(ctx context.Context, state *runState) (*managedSourceJobResult, error) {
+	return j.createFn(ctx, state)
+}
+
+func (j fakeManagedSourceJob) Wait(ctx context.Context, id string) error {
+	if j.waitFn == nil {
+		return nil
+	}
+	return j.waitFn(ctx, id)
 }
 
 func validationConfig() *Config {
