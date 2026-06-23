@@ -82,6 +82,16 @@ func TestSourceModeDefault(t *testing.T) {
 	require.Equal(t, "op", sourceModeString(SourceModeOP))
 }
 
+func TestNewSourceRunnerSelectsImplementation(t *testing.T) {
+	runner, err := newSourceRunner(&Config{})
+	require.NoError(t, err)
+	require.IsType(t, &tidbCloudSourceRunner{}, runner)
+
+	runner, err = newSourceRunner(&Config{SourceMode: SourceModeOP})
+	require.NoError(t, err)
+	require.IsType(t, &opSourceRunner{}, runner)
+}
+
 func TestBuildChangefeedRequest_FromTSO(t *testing.T) {
 	cfg := baseConfig()
 	req := buildChangefeedRequest(cfg, "s3://bucket/path/increment/", testCred(), "449023000000000000")

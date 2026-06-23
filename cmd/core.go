@@ -140,6 +140,39 @@ type managedSourceJob struct {
 	wait       func(context.Context, string) error
 }
 
+type sourcePrepareContext struct {
+	store             storage.ExternalStorage
+	state             *runState
+	cred              *credentials.Value
+	snapshotURI       *url.URL
+	incrementURI      *url.URL
+	cleanSnapshotURI  string
+	cleanIncrementURI string
+}
+
+type sourceRunner interface {
+	prepare(context.Context, sourcePrepareContext) error
+}
+
+type tidbCloudSourceRunner struct {
+	cfg *Config
+}
+
+type opSourceRunner struct {
+	cfg *Config
+}
+
+func newSourceRunner(cfg *Config) (sourceRunner, error) {
+	switch sourceMode(cfg) {
+	case SourceModeTiDBCloud:
+		return &tidbCloudSourceRunner{cfg: cfg}, nil
+	case SourceModeOP:
+		return &opSourceRunner{cfg: cfg}, nil
+	default:
+		return nil, errors.Errorf("unknown source mode %s", sourceModeString(sourceMode(cfg)))
+	}
+}
+
 // Replicate runs one full orchestration: prepare snapshot and incremental data
 // from the selected source deployment, then load the resulting object-storage
 // files into Snowflake.
@@ -198,14 +231,19 @@ func Replicate(ctx context.Context, cfg *Config) error {
 		zap.Bool("hasChangefeedID", state.ChangefeedID != ""),
 		zap.String("snapshotTSO", state.SnapshotTSO))
 
-	if sourceMode(cfg) == SourceModeOP {
-		if err := prepareOPSource(ctx, cfg, store, state, snapshotURI, incrementURI); err != nil {
-			return errors.Trace(err)
-		}
-		return loadIntoSnowflake(ctx, cfg, cred, snapshotURI, incrementURI)
+	source, err := newSourceRunner(cfg)
+	if err != nil {
+		return errors.Trace(err)
 	}
-
-	if err := prepareTiDBCloudSource(ctx, cfg, store, state, cleanSnapshotURI, cleanIncrementURI, cred); err != nil {
+	if err := source.prepare(ctx, sourcePrepareContext{
+		store:             store,
+		state:             state,
+		cred:              cred,
+		snapshotURI:       snapshotURI,
+		incrementURI:      incrementURI,
+		cleanSnapshotURI:  cleanSnapshotURI,
+		cleanIncrementURI: cleanIncrementURI,
+	}); err != nil {
 		return errors.Trace(err)
 	}
 
@@ -213,14 +251,15 @@ func Replicate(ctx context.Context, cfg *Config) error {
 	return loadIntoSnowflake(ctx, cfg, cred, snapshotURI, incrementURI)
 }
 
-func prepareTiDBCloudSource(
+func (r *tidbCloudSourceRunner) prepare(
 	ctx context.Context,
-	cfg *Config,
-	store storage.ExternalStorage,
-	state *runState,
-	cleanSnapshotURI, cleanIncrementURI string,
-	cred *credentials.Value,
+	prepareCtx sourcePrepareContext,
 ) error {
+	cfg := r.cfg
+	store := prepareCtx.store
+	state := prepareCtx.state
+	cred := prepareCtx.cred
+
 	// The TiDB Cloud client is created lazily: when the snapshot/increment data
 	// already exists (created by a previous run or by the user directly), no
 	// export/changefeed is created or waited on, so no API credentials are needed.
@@ -271,7 +310,7 @@ func prepareTiDBCloudSource(
 				if err != nil {
 					return nil, err
 				}
-				req := buildExportRequest(cfg, cleanSnapshotURI, cred)
+				req := buildExportRequest(cfg, prepareCtx.cleanSnapshotURI, cred)
 				export, err := c.CreateExport(ctx, cfg.TiDBCloud.ClusterID, req)
 				if err != nil {
 					return nil, err
@@ -307,7 +346,7 @@ func prepareTiDBCloudSource(
 				if err != nil {
 					return nil, err
 				}
-				req := buildChangefeedRequest(cfg, cleanIncrementURI, cred, state.SnapshotTSO)
+				req := buildChangefeedRequest(cfg, prepareCtx.cleanIncrementURI, cred, state.SnapshotTSO)
 				cf, err := c.CreateChangefeed(ctx, cfg.TiDBCloud.ClusterID, req)
 				if err != nil {
 					return nil, err
@@ -419,13 +458,14 @@ func applyManagedSourceJobResult(state *runState, res *managedSourceJobResult, o
 	}
 }
 
-func prepareOPSource(
+func (r *opSourceRunner) prepare(
 	ctx context.Context,
-	cfg *Config,
-	store storage.ExternalStorage,
-	state *runState,
-	snapshotURI, incrementURI *url.URL,
+	prepareCtx sourcePrepareContext,
 ) error {
+	cfg := r.cfg
+	store := prepareCtx.store
+	state := prepareCtx.state
+
 	if state.SnapshotTSO == "" && cfg.SnapshotTSO != "" {
 		state.SnapshotTSO = cfg.SnapshotTSO
 		if err := saveState(ctx, store, state); err != nil {
@@ -476,7 +516,7 @@ func prepareOPSource(
 				}
 				req, err := ticdc.BuildChangefeedConfig(ticdc.ChangefeedConfigOptions{
 					Tables:        cfg.Tables,
-					StorageURI:    incrementURI,
+					StorageURI:    prepareCtx.incrementURI,
 					StartTSO:      startTSO,
 					FlushInterval: cfg.ChangefeedFlushInterval,
 					FileSizeMiB:   cfg.ChangefeedFileSizeMiB,
@@ -515,11 +555,11 @@ func prepareOPSource(
 		}
 		log.Info("dumping OP TiDB snapshot with Dumpling",
 			zap.String("snapshotTSO", state.SnapshotTSO),
-			zap.String("target", safeURLForLog(snapshotURI)),
+			zap.String("target", safeURLForLog(prepareCtx.snapshotURI)),
 			zap.Int("concurrency", opSnapshotConcurrency(cfg)))
 		if err := dumpling.Run(ctx, cfg.TiDB, dumpling.Config{
 			Concurrency:  opSnapshotConcurrency(cfg),
-			StorageURI:   snapshotURI,
+			StorageURI:   prepareCtx.snapshotURI,
 			SnapshotTSO:  state.SnapshotTSO,
 			Tables:       cfg.Tables,
 			Compression:  snapshotCompression(cfg),
