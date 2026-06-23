@@ -214,7 +214,10 @@ func TestEnsureManagedSourceJobCreatesSavesAndWaits(t *testing.T) {
 
 	var created bool
 	var waitedID string
-	err = ensureManagedSourceJob(ctx, store, state, fakeManagedSourceJob{
+	err = ensureManagedSourceJob(ctx, sourcePrepareContext{
+		store: store,
+		state: state,
+	}, fakeSourceRunner{
 		jobName: "test changefeed",
 		dir:     incrementDirName,
 		id: func(state *runState) string {
@@ -231,7 +234,7 @@ func TestEnsureManagedSourceJobCreatesSavesAndWaits(t *testing.T) {
 			waitedID = id
 			return nil
 		},
-	})
+	}, sourceJobChangefeed)
 	require.NoError(t, err)
 	require.True(t, created)
 	require.Equal(t, "cf-1", state.ChangefeedID)
@@ -251,7 +254,10 @@ func TestEnsureManagedSourceJobSkipsWhenStorageDataExists(t *testing.T) {
 	require.NoError(t, store.WriteFile(ctx, incrementDirName+"/metadata", []byte("ready")))
 
 	state := &runState{}
-	err = ensureManagedSourceJob(ctx, store, state, fakeManagedSourceJob{
+	err = ensureManagedSourceJob(ctx, sourcePrepareContext{
+		store: store,
+		state: state,
+	}, fakeSourceRunner{
 		jobName: "test changefeed",
 		dir:     incrementDirName,
 		id: func(state *runState) string {
@@ -268,13 +274,13 @@ func TestEnsureManagedSourceJobSkipsWhenStorageDataExists(t *testing.T) {
 			t.Fatal("wait should not be called when storage data exists")
 			return nil
 		},
-	})
+	}, sourceJobChangefeed)
 	require.NoError(t, err)
 	require.Empty(t, state.ChangefeedID)
 	require.Empty(t, state.SnapshotTSO)
 }
 
-type fakeManagedSourceJob struct {
+type fakeSourceRunner struct {
 	jobName  string
 	dir      string
 	id       func(*runState) string
@@ -284,39 +290,55 @@ type fakeManagedSourceJob struct {
 	waitFn   func(context.Context, string) error
 }
 
-func (j fakeManagedSourceJob) Name() string { return j.jobName }
+func (r fakeSourceRunner) prepare(context.Context, sourcePrepareContext) error { return nil }
 
-func (j fakeManagedSourceJob) StorageDir() string { return j.dir }
+func (r fakeSourceRunner) sourceJobName(sourceJobType) string { return r.jobName }
 
-func (j fakeManagedSourceJob) ExistingID(state *runState) string {
-	if j.id == nil {
+func (r fakeSourceRunner) sourceJobStorageDir(sourceJobType) string { return r.dir }
+
+func (r fakeSourceRunner) existingSourceJobID(_ sourceJobType, state *runState) string {
+	if r.id == nil {
 		return ""
 	}
-	return j.id(state)
+	return r.id(state)
 }
 
-func (j fakeManagedSourceJob) SetID(state *runState, id string) {
-	if j.set != nil {
-		j.set(state, id)
+func (r fakeSourceRunner) setSourceJobID(_ sourceJobType, state *runState, id string) {
+	if r.set != nil {
+		r.set(state, id)
 	}
 }
 
-func (j fakeManagedSourceJob) Resume(ctx context.Context, id string) (*managedSourceJobResult, error) {
-	if j.resumeFn == nil {
+func (r fakeSourceRunner) resumeSourceJob(
+	ctx context.Context,
+	_ sourcePrepareContext,
+	_ sourceJobType,
+	id string,
+) (*managedSourceJobResult, error) {
+	if r.resumeFn == nil {
 		return nil, nil
 	}
-	return j.resumeFn(ctx, id)
+	return r.resumeFn(ctx, id)
 }
 
-func (j fakeManagedSourceJob) Create(ctx context.Context, state *runState) (*managedSourceJobResult, error) {
-	return j.createFn(ctx, state)
+func (r fakeSourceRunner) createSourceJob(
+	ctx context.Context,
+	prepareCtx sourcePrepareContext,
+	_ sourceJobType,
+) (*managedSourceJobResult, error) {
+	return r.createFn(ctx, prepareCtx.state)
 }
 
-func (j fakeManagedSourceJob) Wait(ctx context.Context, id string) error {
-	if j.waitFn == nil {
+func (r fakeSourceRunner) waitSourceJob(
+	ctx context.Context,
+	_ sourcePrepareContext,
+	_ sourceJobType,
+	id string,
+) error {
+	if r.waitFn == nil {
 		return nil
 	}
-	return j.waitFn(ctx, id)
+	return r.waitFn(ctx, id)
 }
 
 func validationConfig() *Config {
