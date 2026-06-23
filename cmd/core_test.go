@@ -8,6 +8,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/stretchr/testify/require"
+	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
+	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 )
 
@@ -71,6 +73,13 @@ func TestSnapshotLoadModeDefault(t *testing.T) {
 func TestSnapshotCompressionDefault(t *testing.T) {
 	require.Equal(t, SnapshotCompressionNone, snapshotCompression(&Config{}))
 	require.Equal(t, SnapshotCompressionGzip, snapshotCompression(&Config{SnapshotCompression: SnapshotCompressionGzip}))
+}
+
+func TestSourceModeDefault(t *testing.T) {
+	require.Equal(t, SourceModeTiDBCloud, sourceMode(&Config{}))
+	require.Equal(t, SourceModeOP, sourceMode(&Config{SourceMode: SourceModeOP}))
+	require.Equal(t, "tidbcloud", sourceModeString(SourceModeTiDBCloud))
+	require.Equal(t, "op", sourceModeString(SourceModeOP))
 }
 
 func TestBuildChangefeedRequest_FromTSO(t *testing.T) {
@@ -185,4 +194,36 @@ func TestDirHasObjects(t *testing.T) {
 	has, err = dirHasObjects(ctx, store, incrementDirName)
 	require.NoError(t, err)
 	require.False(t, has)
+}
+
+func validationConfig() *Config {
+	cfg := baseConfig()
+	cfg.TiDB = &tidb.Config{Host: "127.0.0.1", Port: 4000, User: "root"}
+	cfg.Snowflake = &snowflake.Config{Database: "SNOW", Schema: "PUBLIC"}
+	return cfg
+}
+
+func TestValidateConfig_DefaultSourceModeDoesNotRequireTiCDC(t *testing.T) {
+	cfg := validationConfig()
+	require.NoError(t, validateConfig(cfg))
+	require.Equal(t, SourceModeTiDBCloud, sourceMode(cfg))
+}
+
+func TestValidateConfig_OPModeRequiresTiCDCAddress(t *testing.T) {
+	cfg := validationConfig()
+	cfg.SourceMode = SourceModeOP
+	err := validateConfig(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--ticdc.address is required when --source.mode=op")
+
+	cfg.OP.TiCDCAddress = "http://127.0.0.1:8300"
+	require.NoError(t, validateConfig(cfg))
+}
+
+func TestValidateConfig_RejectsUnknownSourceMode(t *testing.T) {
+	cfg := validationConfig()
+	cfg.SourceMode = SourceMode(99)
+	err := validateConfig(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--source.mode must be")
 }

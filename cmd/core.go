@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,8 +15,10 @@ import (
 	"github.com/pingcap/tidb/br/pkg/storage"
 	putil "github.com/pingcap/tiflow/pkg/util"
 	"github.com/thediveo/enumflag"
+	"github.com/tidbcloud/tidb2snowflake/pkg/dumpling"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
+	"github.com/tidbcloud/tidb2snowflake/pkg/ticdc"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
@@ -37,6 +40,19 @@ var RunModeIds = map[RunMode][]string{
 	RunModeFull:            {"full"},
 	RunModeSnapshotOnly:    {"snapshot-only"},
 	RunModeIncrementalOnly: {"incremental-only"},
+}
+
+// SourceMode selects how source snapshot and incremental streams are created.
+type SourceMode enumflag.Flag
+
+const (
+	SourceModeTiDBCloud SourceMode = iota
+	SourceModeOP
+)
+
+var SourceModeIds = map[SourceMode][]string{
+	SourceModeTiDBCloud: {"tidbcloud"},
+	SourceModeOP:        {"op"},
 }
 
 // stateFileName holds the export/changefeed identifiers so a re-run can resume
@@ -67,6 +83,7 @@ type Config struct {
 	TiDB      *tidb.Config
 	Snowflake *snowflake.Config
 	TiDBCloud TiDBCloudConfig
+	OP        OPConfig
 
 	Tables       []string
 	StoragePath  string
@@ -85,6 +102,7 @@ type Config struct {
 
 	PollInterval time.Duration
 	Mode         RunMode
+	SourceMode   SourceMode
 }
 
 // TiDBCloudConfig is the TiDB Cloud OpenAPI access configuration.
@@ -95,6 +113,11 @@ type TiDBCloudConfig struct {
 	Host       string
 }
 
+type OPConfig struct {
+	TiCDCAddress        string
+	SnapshotConcurrency int
+}
+
 // runState is persisted to object storage between runs for idempotent resume.
 type runState struct {
 	ExportID     string `json:"exportId,omitempty"`
@@ -102,9 +125,9 @@ type runState struct {
 	SnapshotTSO  string `json:"snapshotTso,omitempty"`
 }
 
-// Replicate runs one full orchestration: drive a snapshot export and an
-// incremental changefeed through the TiDB Cloud OpenAPI, then load the resulting
-// object-storage files into Snowflake.
+// Replicate runs one full orchestration: prepare snapshot and incremental data
+// from the selected source deployment, then load the resulting object-storage
+// files into Snowflake.
 func Replicate(ctx context.Context, cfg *Config) error {
 	if len(cfg.Tables) == 0 {
 		return errors.New("no tables specified")
@@ -115,6 +138,7 @@ func Replicate(ctx context.Context, cfg *Config) error {
 	log.Info("replication run started",
 		zap.Strings("tables", cfg.Tables),
 		zap.String("mode", runModeString(cfg.Mode)),
+		zap.String("sourceMode", sourceModeString(sourceMode(cfg))),
 		zap.String("storage", redactURLRawQuery(cfg.StoragePath)),
 		zap.String("snapshotLoadMode", snapshotLoadMode(cfg)),
 		zap.String("snapshotCompression", snapshotCompression(cfg)),
@@ -122,6 +146,7 @@ func Replicate(ctx context.Context, cfg *Config) error {
 		zap.Int("changefeedFileSizeMiB", cfg.ChangefeedFileSizeMiB),
 		zap.Duration("pollInterval", cfg.PollInterval),
 		zap.Bool("tidbCloudConfigured", cfg.TiDBCloud.ClusterID != ""),
+		zap.String("ticdcAddress", cfg.OP.TiCDCAddress),
 		zap.String("snowflakeDatabase", cfg.Snowflake.Database),
 		zap.String("snowflakeSchema", cfg.Snowflake.Schema))
 
@@ -157,6 +182,13 @@ func Replicate(ctx context.Context, cfg *Config) error {
 		zap.Bool("hasExportID", state.ExportID != ""),
 		zap.Bool("hasChangefeedID", state.ChangefeedID != ""),
 		zap.String("snapshotTSO", state.SnapshotTSO))
+
+	if sourceMode(cfg) == SourceModeOP {
+		if err := prepareOPSource(ctx, cfg, store, state, snapshotURI, incrementURI); err != nil {
+			return errors.Trace(err)
+		}
+		return loadIntoSnowflake(ctx, cfg, cred, snapshotURI, incrementURI)
+	}
 
 	// The TiDB Cloud client is created lazily: when the snapshot/increment data
 	// already exists (created by a previous run or by the user directly), no
@@ -310,6 +342,134 @@ func Replicate(ctx context.Context, cfg *Config) error {
 	return loadIntoSnowflake(ctx, cfg, cred, snapshotURI, incrementURI)
 }
 
+func prepareOPSource(
+	ctx context.Context,
+	cfg *Config,
+	store storage.ExternalStorage,
+	state *runState,
+	snapshotURI, incrementURI *url.URL,
+) error {
+	if state.SnapshotTSO == "" && cfg.SnapshotTSO != "" {
+		state.SnapshotTSO = cfg.SnapshotTSO
+		if err := saveState(ctx, store, state); err != nil {
+			return errors.Trace(err)
+		}
+	}
+	if cfg.Mode == RunModeFull && state.SnapshotTSO == "" {
+		tso, err := tidb.GetCurrentTSO(cfg.TiDB)
+		if err != nil {
+			return errors.Annotate(err, "get current TiDB TSO")
+		}
+		state.SnapshotTSO = strconv.FormatUint(tso, 10)
+		if err := saveState(ctx, store, state); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
+	if cfg.Mode != RunModeSnapshotOnly {
+		waitForChangefeed := false
+		switch {
+		case state.ChangefeedID != "":
+			waitForChangefeed = true
+			log.Info("resuming existing OP TiCDC changefeed",
+				zap.String("changefeedID", state.ChangefeedID),
+				zap.String("startTSO", state.SnapshotTSO))
+		default:
+			exists, err := dirHasObjects(ctx, store, incrementDirName)
+			if err != nil {
+				return errors.Annotate(err, "check increment directory")
+			}
+			if exists {
+				log.Info("increment data already exists in storage, skipping OP TiCDC changefeed creation",
+					zap.String("dir", incrementDirName))
+			} else {
+				client, err := ticdc.NewClient(cfg.OP.TiCDCAddress)
+				if err != nil {
+					return errors.Trace(err)
+				}
+				startTSO, err := parseOptionalTSO(state.SnapshotTSO)
+				if err != nil {
+					return errors.Trace(err)
+				}
+				req, err := ticdc.BuildChangefeedConfig(ticdc.ChangefeedConfigOptions{
+					Tables:        cfg.Tables,
+					StorageURI:    incrementURI,
+					StartTSO:      startTSO,
+					FlushInterval: cfg.ChangefeedFlushInterval,
+					FileSizeMiB:   cfg.ChangefeedFileSizeMiB,
+				})
+				if err != nil {
+					return errors.Trace(err)
+				}
+				cf, err := client.CreateChangefeed(ctx, req)
+				if err != nil {
+					return errors.Annotate(err, "create OP TiCDC changefeed")
+				}
+				state.ChangefeedID = ticdc.ChangefeedID(cf)
+				if state.ChangefeedID == "" {
+					return errors.New("create OP TiCDC changefeed returned empty id")
+				}
+				if err := saveState(ctx, store, state); err != nil {
+					return errors.Trace(err)
+				}
+				waitForChangefeed = true
+				log.Info("OP TiCDC changefeed created",
+					zap.String("changefeedID", state.ChangefeedID),
+					zap.String("startTSO", state.SnapshotTSO),
+					zap.String("target", safeURLForLog(incrementURI)),
+					zap.Duration("flushInterval", cfg.ChangefeedFlushInterval),
+					zap.Int("fileSizeMiB", cfg.ChangefeedFileSizeMiB))
+			}
+		}
+
+		if waitForChangefeed {
+			client, err := ticdc.NewClient(cfg.OP.TiCDCAddress)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			log.Info("waiting for OP TiCDC changefeed to run",
+				zap.String("changefeedID", state.ChangefeedID),
+				zap.Duration("pollInterval", cfg.PollInterval))
+			if _, err := client.WaitChangefeed(ctx, state.ChangefeedID, cfg.PollInterval); err != nil {
+				return errors.Annotate(err, "wait OP TiCDC changefeed")
+			}
+			log.Info("OP TiCDC changefeed running", zap.String("changefeedID", state.ChangefeedID))
+		}
+	}
+
+	if cfg.Mode != RunModeIncrementalOnly {
+		exists, err := dirHasObjects(ctx, store, snapshotDirName)
+		if err != nil {
+			return errors.Annotate(err, "check snapshot directory")
+		}
+		if exists {
+			log.Info("snapshot data already exists in storage, skipping OP Dumpling snapshot dump",
+				zap.String("dir", snapshotDirName))
+			return nil
+		}
+		log.Info("dumping OP TiDB snapshot with Dumpling",
+			zap.String("snapshotTSO", state.SnapshotTSO),
+			zap.String("target", safeURLForLog(snapshotURI)),
+			zap.Int("concurrency", opSnapshotConcurrency(cfg)))
+		if err := dumpling.Run(ctx, cfg.TiDB, dumpling.Config{
+			Concurrency:  opSnapshotConcurrency(cfg),
+			StorageURI:   snapshotURI,
+			SnapshotTSO:  state.SnapshotTSO,
+			Tables:       cfg.Tables,
+			Compression:  snapshotCompression(cfg),
+			CSVNullValue: "\\N",
+			OnProgress: func(dumpedRows, totalRows int64) {
+				log.Info("OP Dumpling snapshot dump progress",
+					zap.Int64("dumpedRows", dumpedRows),
+					zap.Int64("estimatedTotalRows", totalRows))
+			},
+		}); err != nil {
+			return errors.Trace(err)
+		}
+	}
+	return nil
+}
+
 func loadIntoSnowflake(
 	ctx context.Context,
 	cfg *Config,
@@ -410,11 +570,40 @@ func snapshotCompression(cfg *Config) string {
 	return cfg.SnapshotCompression
 }
 
+func sourceMode(cfg *Config) SourceMode {
+	return cfg.SourceMode
+}
+
 func runModeString(mode RunMode) string {
 	if ids, ok := RunModeIds[mode]; ok && len(ids) > 0 {
 		return ids[0]
 	}
 	return fmt.Sprintf("unknown(%d)", mode)
+}
+
+func sourceModeString(mode SourceMode) string {
+	if ids, ok := SourceModeIds[mode]; ok && len(ids) > 0 {
+		return ids[0]
+	}
+	return fmt.Sprintf("unknown(%d)", mode)
+}
+
+func opSnapshotConcurrency(cfg *Config) int {
+	if cfg.OP.SnapshotConcurrency <= 0 {
+		return 8
+	}
+	return cfg.OP.SnapshotConcurrency
+}
+
+func parseOptionalTSO(tso string) (uint64, error) {
+	if tso == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.ParseUint(tso, 10, 64)
+	if err != nil {
+		return 0, errors.Annotatef(err, "parse snapshot TSO %q", tso)
+	}
+	return parsed, nil
 }
 
 func redactURLRawQuery(raw string) string {
