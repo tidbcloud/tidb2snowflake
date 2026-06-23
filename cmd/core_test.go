@@ -2,11 +2,12 @@ package cmd
 
 import (
 	"context"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 )
@@ -137,9 +138,9 @@ func TestGenSnapshotAndIncrementURIs(t *testing.T) {
 }
 
 func TestStateRoundTrip(t *testing.T) {
-	store, err := storage.NewLocalStorage(t.TempDir())
-	require.NoError(t, err)
 	ctx := context.Background()
+	store, err := putil.GetExternalStorageFromURI(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
 
 	// no file yet -> empty state
 	s, err := loadState(ctx, store)
@@ -160,9 +161,9 @@ func TestStateRoundTrip(t *testing.T) {
 }
 
 func TestDirHasObjects(t *testing.T) {
-	store, err := storage.NewLocalStorage(t.TempDir())
-	require.NoError(t, err)
 	ctx := context.Background()
+	store, err := putil.GetExternalStorageFromURI(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
 
 	// empty dirs -> no objects
 	has, err := dirHasObjects(ctx, store, snapshotDirName)

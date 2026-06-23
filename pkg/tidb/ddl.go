@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/tidb/dumpling/export"
-	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
 )
 
 type columnAction int8

@@ -13,10 +13,10 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
-	putil "github.com/pingcap/tiflow/pkg/util"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	putil "github.com/pingcap/ticdc/pkg/util"
+	storage "github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
@@ -65,9 +65,9 @@ type progressEntry struct {
 }
 
 type IncrementReplicateSession struct {
-	dwConnector     *snowflake.Connector
-	externalStorage storage.ExternalStorage
-	ctx             context.Context
+	dwConnector *snowflake.Connector
+	storage     storage.Storage
+	ctx         context.Context
 	// tableDMLIdxMap maintains a map of <dmlPathKey, max file index>
 	tableDMLIdxMap map[cloudstorage.DmlPathKey]uint64
 	// progressDMLIdxMap maintains a map of <dmlPathKey, max applied file index>
@@ -98,7 +98,7 @@ func NewIncrementReplicateSession(
 	sourceDatabase, sourceTable := utils.SplitTableFQN(tableFQN)
 	sess := &IncrementReplicateSession{
 		dwConnector:       dwConnector,
-		externalStorage:   externalStorage,
+		storage:           externalStorage,
 		ctx:               ctx,
 		tableDMLIdxMap:    make(map[cloudstorage.DmlPathKey]uint64),
 		progressDMLIdxMap: make(map[cloudstorage.DmlPathKey]uint64),
@@ -153,7 +153,7 @@ func (sess *IncrementReplicateSession) parseSchemaFilePath(path string) error {
 
 	// Read tableDef from schema file and check checksum.
 	var tableDef cloudstorage.TableDefinition
-	schemaContent, err := sess.externalStorage.ReadFile(sess.ctx, path)
+	schemaContent, err := sess.storage.ReadFile(sess.ctx, path)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -258,7 +258,7 @@ func progressEntryFromDMLKey(key cloudstorage.DmlPathKey, fileIdx uint64) progre
 
 func (sess *IncrementReplicateSession) loadProgress() error {
 	path := sess.progressPath()
-	exists, err := sess.externalStorage.FileExists(sess.ctx, path)
+	exists, err := sess.storage.FileExists(sess.ctx, path)
 	if err != nil {
 		return errors.Annotate(err, "check increment progress")
 	}
@@ -266,7 +266,7 @@ func (sess *IncrementReplicateSession) loadProgress() error {
 		sess.logger.Info("no increment progress found", zap.String("path", path))
 		return nil
 	}
-	data, err := sess.externalStorage.ReadFile(sess.ctx, path)
+	data, err := sess.storage.ReadFile(sess.ctx, path)
 	if err != nil {
 		return errors.Annotate(err, "read increment progress")
 	}
@@ -315,7 +315,7 @@ func (sess *IncrementReplicateSession) saveProgress() error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	if err := sess.externalStorage.WriteFile(sess.ctx, sess.progressPath(), data); err != nil {
+	if err := sess.storage.WriteFile(sess.ctx, sess.progressPath(), data); err != nil {
 		return errors.Annotate(err, "write increment progress")
 	}
 	sess.logger.Debug("increment progress saved",
@@ -355,7 +355,7 @@ func (sess *IncrementReplicateSession) getNewFiles() (map[cloudstorage.DmlPathKe
 	checkpointSet := make(map[string]struct{})
 	stats := incrementalScanStats{}
 	opt := &storage.WalkOption{SubDir: fmt.Sprintf("%s/%s", sess.sourceDatabase, sess.sourceTable)}
-	err := sess.externalStorage.WalkDir(sess.ctx, opt, func(path string, size int64) error {
+	err := sess.storage.WalkDir(sess.ctx, opt, func(path string, size int64) error {
 		if strings.HasSuffix(path, checkpointFileExtension) {
 			stats.checkpointFiles++
 			checkpointSet[path] = struct{}{}
@@ -427,7 +427,7 @@ func (sess *IncrementReplicateSession) getTableDef(tableVersion uint64) cloudsto
 
 func (sess *IncrementReplicateSession) CheckpointExists(filePath string) bool {
 	checkpointFileName := checkpointPath(filePath, sess.fileExtension)
-	exist, err := sess.externalStorage.FileExists(sess.ctx, checkpointFileName)
+	exist, err := sess.storage.FileExists(sess.ctx, checkpointFileName)
 	if err != nil {
 		return false
 	}
@@ -452,7 +452,7 @@ func (sess *IncrementReplicateSession) syncExecDMLEvents(
 	checkpointFileName := checkpointPath(filePath, sess.fileExtension)
 
 	// check if the file has been loaded into data warehouse
-	exist, err := sess.externalStorage.FileExists(sess.ctx, checkpointFileName)
+	exist, err := sess.storage.FileExists(sess.ctx, checkpointFileName)
 	if err != nil {
 		return errors.Annotate(err, "failed to check if checkpoint file exists")
 	}
@@ -492,7 +492,7 @@ func (sess *IncrementReplicateSession) syncExecDMLEvents(
 	}
 
 	// upload a checkpoint file to indicate that the file has been loaded into data warehouse
-	if err := sess.externalStorage.WriteFile(sess.ctx, checkpointFileName, []byte{}); err != nil {
+	if err := sess.storage.WriteFile(sess.ctx, checkpointFileName, []byte{}); err != nil {
 		return errors.Annotate(err, "write DML checkpoint")
 	}
 	sess.logger.Info("DML checkpoint written",
@@ -534,7 +534,7 @@ func (sess *IncrementReplicateSession) syncExecDDLEvents(tableDef cloudstorage.T
 				"if necessary, please manually execute the DDL query in data warehouse, "+
 				"update the `query` of the %s/%s/%s/meta/schema_%d_{hash}.json to empty, "+
 				"and restart the program",
-				sess.externalStorage.URI(), tableDef.Schema, tableDef.Table, tableDef.TableVersion))
+				sess.storage.URI(), tableDef.Schema, tableDef.Table, tableDef.TableVersion))
 	}
 	metrics.AddCounter(metrics.TableVersionsCounter, float64(tableDef.TableVersion), fmt.Sprintf("%s/%s", sess.sourceDatabase, sess.sourceTable))
 
@@ -548,7 +548,7 @@ func (sess *IncrementReplicateSession) syncExecDDLEvents(tableDef cloudstorage.T
 			if err != nil {
 				return errors.Trace(err)
 			}
-			if err = sess.externalStorage.DeleteFile(sess.ctx, filePath); err != nil {
+			if err = sess.storage.DeleteFile(sess.ctx, filePath); err != nil {
 				return errors.Trace(err)
 			}
 			delete(sess.tableDefMap, item.TableVersion)
@@ -565,7 +565,7 @@ func (sess *IncrementReplicateSession) syncExecDDLEvents(tableDef cloudstorage.T
 		return errors.Trace(err)
 	}
 	// update the current table definition file.
-	if err := sess.externalStorage.WriteFile(sess.ctx, filePath, data); err != nil {
+	if err := sess.storage.WriteFile(sess.ctx, filePath, data); err != nil {
 		return errors.Annotate(err, "update current schema file")
 	}
 	sess.logger.Info("schema file marked as applied",

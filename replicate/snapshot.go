@@ -10,8 +10,8 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/tidb/br/pkg/storage"
-	putil "github.com/pingcap/tiflow/pkg/util"
+	putil "github.com/pingcap/ticdc/pkg/util"
+	storage "github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
@@ -38,7 +38,7 @@ type session struct {
 	SourceTable    string
 
 	StorageWorkspaceUri url.URL
-	externalStorage     storage.ExternalStorage
+	storage             storage.Storage
 	ParrallelLoad       bool
 
 	ctx    context.Context
@@ -71,14 +71,14 @@ func newSession(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	sess.externalStorage = externalStorage
+	sess.storage = externalStorage
 	return sess, nil
 }
 
 func (sess *session) Run() error {
 	loadInfoPath := snapshotLoadInfoPath(sess.SourceDatabase, sess.SourceTable)
 	sess.logger.Info("checking snapshot load marker", zap.String("loadinfo", loadInfoPath))
-	loaded, err := sess.externalStorage.FileExists(sess.ctx, loadInfoPath)
+	loaded, err := sess.storage.FileExists(sess.ctx, loadInfoPath)
 	if err != nil {
 		return errors.Annotate(err, "check snapshot loadinfo")
 	}
@@ -92,7 +92,7 @@ func (sess *session) Run() error {
 	case "s3", "gcs", "gs":
 		sess.logger.Info("copying source table schema to data warehouse")
 		schemaFilePath := table.SchemaFilePath(sess.SourceDatabase, sess.SourceTable)
-		schemaSQL, err := sess.externalStorage.ReadFile(sess.ctx, schemaFilePath)
+		schemaSQL, err := sess.storage.ReadFile(sess.ctx, schemaFilePath)
 		if err != nil {
 			return errors.Annotatef(err, "read snapshot schema file %s", schemaFilePath)
 		}
@@ -110,7 +110,7 @@ func (sess *session) Run() error {
 		var fileCount int64
 		tableFQN := fmt.Sprintf("%s.%s", sess.SourceDatabase, sess.SourceTable)
 		opt := &storage.WalkOption{ObjPrefix: fmt.Sprintf("%s.", tableFQN)}
-		if err := sess.externalStorage.WalkDir(sess.ctx, opt, func(path string, size int64) error {
+		if err := sess.storage.WalkDir(sess.ctx, opt, func(path string, size int64) error {
 			if isSnapshotDataFile(path) {
 				snapshotFileSize += size
 				fileCount++
@@ -127,7 +127,7 @@ func (sess *session) Run() error {
 		errFileCh := make(chan string, fileCount)
 		blockCh := make(chan struct{}, DataWarehouseLoadConcurrency)
 		var wg sync.WaitGroup
-		if err := sess.externalStorage.WalkDir(sess.ctx, opt, func(path string, size int64) error {
+		if err := sess.storage.WalkDir(sess.ctx, opt, func(path string, size int64) error {
 			if isSnapshotDataFile(path) {
 				blockCh <- struct{}{}
 				wg.Add(1)
@@ -174,7 +174,7 @@ func (sess *session) Run() error {
 	// Write load info to workspace to record the status of load,
 	// loadinfo exists means the data has been all loaded into data warehouse.
 	loadinfo := fmt.Sprintf("Copy to data warehouse start time: %s\nCopy to data warehouse end time: %s\n", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
-	if err := sess.externalStorage.WriteFile(sess.ctx, loadInfoPath, []byte(loadinfo)); err != nil {
+	if err := sess.storage.WriteFile(sess.ctx, loadInfoPath, []byte(loadinfo)); err != nil {
 		sess.logger.Error("Failed to upload loadinfo", zap.Error(err))
 		return errors.Annotate(err, "upload snapshot loadinfo")
 	}

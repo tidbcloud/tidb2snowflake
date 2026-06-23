@@ -6,8 +6,8 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	timodel "github.com/pingcap/tidb/pkg/parser/model"
-	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"go.uber.org/zap"
 )
@@ -36,23 +36,23 @@ func GetColumnModifyString(diff *tidb.ColumnDiff) string {
 }
 
 func GenDDLViaColumnsDiff(prevColumns []cloudstorage.TableCol, curTableDef cloudstorage.TableDefinition) ([]string, error) {
-	if curTableDef.Type == timodel.ActionTruncateTable {
+	if curTableDef.Type == model.ActionTruncateTable {
 		return []string{fmt.Sprintf("TRUNCATE TABLE %s", curTableDef.Table)}, nil
 	}
-	if curTableDef.Type == timodel.ActionDropTable {
+	if curTableDef.Type == model.ActionDropTable {
 		return []string{fmt.Sprintf("DROP TABLE %s", curTableDef.Table)}, nil
 	}
-	if curTableDef.Type == timodel.ActionCreateTable {
+	if curTableDef.Type == model.ActionCreateTable {
 		return nil, errors.New("Received create table ddl, which should not happen") // FIXME: drop table and create table
 	}
-	if curTableDef.Type == timodel.ActionRenameTables {
+	if curTableDef.Type == model.ActionRenameTables {
 		return nil, errors.New("Received rename table ddl, new change data can not be capture by TiCDC any more." +
 			"If you want to rename table, please start a new task to capture the new table") // FIXME: rename table to new table and rename back
 	}
-	if curTableDef.Type == timodel.ActionDropSchema {
+	if curTableDef.Type == model.ActionDropSchema {
 		return []string{fmt.Sprintf("DROP SCHEMA %s", curTableDef.Schema)}, nil
 	}
-	if curTableDef.Type == timodel.ActionCreateSchema {
+	if curTableDef.Type == model.ActionCreateSchema {
 		return nil, errors.New("Received create schema ddl, which should not happen") // FIXME: drop schema and create schema
 	}
 
