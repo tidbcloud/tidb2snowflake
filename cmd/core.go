@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -15,7 +14,6 @@ import (
 	"github.com/pingcap/tidb/br/pkg/storage"
 	putil "github.com/pingcap/tiflow/pkg/util"
 	"github.com/thediveo/enumflag"
-	"github.com/tidbcloud/tidb2snowflake/pkg/coreinterfaces"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
@@ -23,6 +21,7 @@ import (
 	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
 	"github.com/tidbcloud/tidb2snowflake/replicate"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 // RunMode selects which phases of replication to run.
@@ -148,6 +147,7 @@ func Replicate(ctx context.Context, cfg *Config) error {
 	if err != nil {
 		return errors.Annotate(err, "open storage")
 	}
+
 	state, err := loadState(ctx, store)
 	if err != nil {
 		return errors.Trace(err)
@@ -322,31 +322,23 @@ func loadIntoSnowflake(
 		zap.String("snapshotStorage", safeURLForLog(snapshotURI)),
 		zap.String("incrementStorage", safeURLForLog(incrementURI)))
 
-	var (
-		wg      sync.WaitGroup
-		mu      sync.Mutex
-		errList []error
-	)
+	g, ctx := errgroup.WithContext(ctx)
 	for _, table := range cfg.Tables {
-		wg.Add(1)
-		go func(tableFQN string) {
-			defer wg.Done()
+		tableFQN := table
+		g.Go(func() error {
 			log.Info("starting table replication", zap.String("table", tableFQN))
 			if err := replicateTable(ctx, cfg, cred, tableFQN, snapshotURI, incrementURI); err != nil {
 				metrics.AddCounter(metrics.ErrorCounter, 1, tableFQN)
 				log.Error("table replication failed", zap.String("table", tableFQN), zap.Error(err))
-				mu.Lock()
-				errList = append(errList, errors.Annotatef(err, "table %s", tableFQN))
-				mu.Unlock()
-			} else {
-				log.Info("table replication finished", zap.String("table", tableFQN))
+				return err
 			}
-		}(table)
+			log.Info("table replication finished", zap.String("table", tableFQN))
+			return nil
+		})
 	}
-	wg.Wait()
-
-	if len(errList) > 0 {
-		return errList[0]
+	err := g.Wait()
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -364,7 +356,7 @@ func replicateTable(
 		log.Info("starting snapshot load for table",
 			zap.String("table", tableFQN),
 			zap.String("stage", fmt.Sprintf("snapshot_external_%s_%s", sourceDatabase, sourceTable)))
-		conn, err := snowflake.NewSnowflakeConnector(
+		conn, err := snowflake.NewConnector(
 			cfg.Snowflake,
 			fmt.Sprintf("snapshot_external_%s_%s", sourceDatabase, sourceTable),
 			snapshotURI,
@@ -374,7 +366,7 @@ func replicateTable(
 		if err != nil {
 			return errors.Trace(err)
 		}
-		err = replicate.StartReplicateSnapshot(ctx, conn, tableFQN, cfg.TiDB, snapshotURI, snapshotLoadMode(cfg) == SnapshotLoadModePerFile)
+		err = replicate.Snapshot(ctx, conn, tableFQN, cfg.TiDB, snapshotURI, snapshotLoadMode(cfg) == SnapshotLoadModePerFile)
 		conn.Close()
 		if err != nil {
 			return errors.Trace(err)
@@ -386,7 +378,7 @@ func replicateTable(
 			zap.String("table", tableFQN),
 			zap.String("stage", fmt.Sprintf("increment_external_%s_%s", sourceDatabase, sourceTable)),
 			zap.Duration("scanInterval", cfg.ChangefeedFlushInterval/5))
-		conn, err := snowflake.NewSnowflakeConnector(
+		conn, err := snowflake.NewConnector(
 			cfg.Snowflake,
 			fmt.Sprintf("increment_external_%s_%s", sourceDatabase, sourceTable),
 			incrementURI,
@@ -395,8 +387,7 @@ func replicateTable(
 		if err != nil {
 			return errors.Trace(err)
 		}
-		var connIface coreinterfaces.Connector = conn
-		err = replicate.StartReplicateIncrement(ctx, connIface, tableFQN, incrementURI, cfg.ChangefeedFlushInterval/5)
+		err = replicate.StartReplicateIncrement(ctx, conn, tableFQN, incrementURI, cfg.ChangefeedFlushInterval/5)
 		conn.Close()
 		if err != nil {
 			return errors.Trace(err)
