@@ -637,9 +637,9 @@ func countFilesInRanges(ranges map[cloudstorage.DmlPathKey]fileIndexRange) uint6
 	return count
 }
 
-func (sess *IncrementReplicateSession) Run(flushInterval time.Duration) error {
-	sess.logger.Info("increment replicate session started", zap.Duration("scanInterval", flushInterval))
-	ticker := time.NewTicker(flushInterval)
+func (sess *IncrementReplicateSession) Run(scanInterval time.Duration) error {
+	sess.logger.Info("increment replicate session started", zap.Duration("scanInterval", scanInterval))
+	ticker := time.NewTicker(scanInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -663,7 +663,7 @@ func StartReplicateIncrement(
 	dwConnector *snowflake.Connector,
 	tableFQN string,
 	storageURI *url.URL,
-	flushInterval time.Duration,
+	scanInterval time.Duration,
 ) error {
 	fileExtension := CSVFileExtension
 
@@ -678,7 +678,7 @@ func StartReplicateIncrement(
 		logger.Error("error occurred while creating increment replicate session", zap.Error(err))
 		return errors.Trace(err)
 	}
-	if err = session.Run(flushInterval); err != nil {
+	if err = session.Run(scanInterval); err != nil {
 		logger.Error("error occurred while running increment replicate session", zap.Error(err))
 		return errors.Trace(err)
 	}

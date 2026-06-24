@@ -128,7 +128,9 @@ read gzip input.
 
 Incremental replay writes a per-table `_consumer/progress.json` under the
 incremental storage prefix after each successfully applied CDC file. On restart,
-the loader restores that applied-file cursor before scanning object storage.
+the loader restores that applied-file cursor before scanning object storage. Use
+`--increment.scan-interval` to tune how often the loader scans the incremental
+storage prefix; the default is `1m`.
 
 ## Type mapping
 
