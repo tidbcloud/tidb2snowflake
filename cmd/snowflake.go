@@ -14,9 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// NewSnowflakeCmd builds the `snowflake` subcommand: replicate a TiDB Cloud
-// Serverless cluster into Snowflake by driving an export and a changefeed
-// through the TiDB Cloud OpenAPI.
+// NewSnowflakeCmd builds the `snowflake` subcommand.
 func NewSnowflakeCmd() *cobra.Command {
 	cfg := &Config{
 		TiDB:      &tidb.Config{},
@@ -29,7 +27,7 @@ func NewSnowflakeCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "snowflake",
-		Short: "Replicate snapshot and incremental data from TiDB Cloud to Snowflake",
+		Short: "Replicate snapshot and incremental data from TiDB to Snowflake",
 		RunE: func(c *cobra.Command, _ []string) error {
 			if err := logutil.InitLogger(&logutil.Config{Level: logLevel, File: logFile}); err != nil {
 				return errors.Trace(err)
@@ -51,6 +49,8 @@ func NewSnowflakeCmd() *cobra.Command {
 	// run mode
 	f.Var(enumflag.New(&cfg.Mode, "mode", RunModeIds, enumflag.EnumCaseInsensitive), "mode",
 		"replication mode: full, snapshot-only, incremental-only")
+	f.Var(enumflag.New(&cfg.SourceMode, "source.mode", SourceModeIds, enumflag.EnumCaseInsensitive), "source.mode",
+		"source deployment mode: tidbcloud or op")
 
 	// TiDB connection (used to read source table schema)
 	f.StringVar(&cfg.TiDB.Host, "tidb.host", "127.0.0.1", "TiDB host")
@@ -65,6 +65,10 @@ func NewSnowflakeCmd() *cobra.Command {
 	f.StringVar(&cfg.TiDBCloud.PublicKey, "tidbcloud.public-key", "", "TiDB Cloud API key public part")
 	f.StringVar(&cfg.TiDBCloud.PrivateKey, "tidbcloud.private-key", "", "TiDB Cloud API key private part")
 	f.StringVar(&cfg.TiDBCloud.Host, "tidbcloud.host", "", "TiDB Cloud OpenAPI host (default serverless.tidbapi.com)")
+
+	// OP deployment services
+	f.StringVar(&cfg.OP.TiCDCAddress, "ticdc.address", "", "TiCDC OpenAPI base address for --source.mode=op, e.g. http://127.0.0.1:8300")
+	f.IntVar(&cfg.OP.SnapshotConcurrency, "snapshot.concurrency", 8, "Dumpling snapshot dump concurrency for --source.mode=op")
 
 	// Snowflake
 	f.StringVar(&cfg.Snowflake.AccountId, "snowflake.account-id", "", "Snowflake account id: <organization>-<account>")
@@ -101,6 +105,14 @@ func NewSnowflakeCmd() *cobra.Command {
 func validateConfig(cfg *Config) error {
 	if cfg.AWSAccessKey == "" || cfg.AWSSecretKey == "" {
 		return errors.New("--aws.access-key and --aws.secret-key are required")
+	}
+	switch sourceMode(cfg) {
+	case SourceModeTiDBCloud, SourceModeOP:
+	default:
+		return errors.Errorf("--source.mode must be %q or %q", sourceModeString(SourceModeTiDBCloud), sourceModeString(SourceModeOP))
+	}
+	if sourceMode(cfg) == SourceModeOP && cfg.Mode != RunModeSnapshotOnly && cfg.OP.TiCDCAddress == "" {
+		return errors.New("--ticdc.address is required when --source.mode=op")
 	}
 	switch snapshotLoadMode(cfg) {
 	case SnapshotLoadModeBulk, SnapshotLoadModePerFile:

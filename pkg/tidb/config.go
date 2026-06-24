@@ -23,12 +23,11 @@ type Config struct {
 }
 
 func newMySQLConfig(cfg *Config) (*mysql.Config, error) {
-	config := &mysql.Config{
-		User:   cfg.User,
-		Passwd: cfg.Pass,
-		Net:    "tcp",
-		Addr:   fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
-	}
+	config := mysql.NewConfig()
+	config.User = cfg.User
+	config.Passwd = cfg.Pass
+	config.Net = "tcp"
+	config.Addr = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	if cfg.SSLCA != "" {
 		rootCertPool := x509.NewCertPool()
 		pem, err := os.ReadFile(cfg.SSLCA)
