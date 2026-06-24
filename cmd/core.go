@@ -78,6 +78,8 @@ const (
 	SnapshotCompressionGzip = "gzip"
 )
 
+const defaultIncrementScanInterval = time.Minute
+
 // Config is the full configuration for one replication run.
 type Config struct {
 	TiDB      *tidb.Config
@@ -97,6 +99,7 @@ type Config struct {
 
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int
+	IncrementScanInterval   time.Duration
 	SnapshotLoadMode        string
 	SnapshotCompression     string
 
@@ -438,6 +441,7 @@ func Replicate(ctx context.Context, cfg *Config) error {
 		zap.String("snapshotCompression", snapshotCompression(cfg)),
 		zap.Duration("changefeedFlushInterval", cfg.ChangefeedFlushInterval),
 		zap.Int("changefeedFileSizeMiB", cfg.ChangefeedFileSizeMiB),
+		zap.Duration("incrementScanInterval", incrementScanInterval(cfg)),
 		zap.Duration("pollInterval", cfg.PollInterval),
 		zap.Bool("tidbCloudConfigured", cfg.TiDBCloud.ClusterID != ""),
 		zap.String("ticdcAddress", cfg.OP.TiCDCAddress),
@@ -735,7 +739,7 @@ func replicateTable(
 		log.Info("starting incremental load for table",
 			zap.String("table", tableFQN),
 			zap.String("stage", fmt.Sprintf("increment_external_%s_%s", sourceDatabase, sourceTable)),
-			zap.Duration("scanInterval", cfg.ChangefeedFlushInterval/5))
+			zap.Duration("scanInterval", incrementScanInterval(cfg)))
 		conn, err := snowflake.NewConnector(
 			cfg.Snowflake,
 			fmt.Sprintf("increment_external_%s_%s", sourceDatabase, sourceTable),
@@ -745,7 +749,7 @@ func replicateTable(
 		if err != nil {
 			return errors.Trace(err)
 		}
-		err = replicate.StartReplicateIncrement(ctx, conn, tableFQN, incrementURI, cfg.ChangefeedFlushInterval/5)
+		err = replicate.StartReplicateIncrement(ctx, conn, tableFQN, incrementURI, incrementScanInterval(cfg))
 		conn.Close()
 		if err != nil {
 			return errors.Trace(err)
@@ -766,6 +770,13 @@ func snapshotCompression(cfg *Config) string {
 		return SnapshotCompressionNone
 	}
 	return cfg.SnapshotCompression
+}
+
+func incrementScanInterval(cfg *Config) time.Duration {
+	if cfg.IncrementScanInterval <= 0 {
+		return defaultIncrementScanInterval
+	}
+	return cfg.IncrementScanInterval
 }
 
 func sourceMode(cfg *Config) SourceMode {

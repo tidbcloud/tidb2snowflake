@@ -82,6 +82,11 @@ func TestSourceModeDefault(t *testing.T) {
 	require.Equal(t, "op", sourceModeString(SourceModeOP))
 }
 
+func TestIncrementScanIntervalDefault(t *testing.T) {
+	require.Equal(t, time.Minute, incrementScanInterval(&Config{}))
+	require.Equal(t, 3*time.Second, incrementScanInterval(&Config{IncrementScanInterval: 3 * time.Second}))
+}
+
 func TestNewSourceRunnerSelectsImplementation(t *testing.T) {
 	runner, err := newSourceRunner(&Config{})
 	require.NoError(t, err)

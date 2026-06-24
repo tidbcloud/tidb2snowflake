@@ -20,4 +20,8 @@ func TestSnowflakeCmdExposesSourceModeAndOPFlags(t *testing.T) {
 	snapshotConcurrencyFlag := cmd.Flags().Lookup("snapshot.concurrency")
 	require.NotNil(t, snapshotConcurrencyFlag)
 	require.Equal(t, "8", snapshotConcurrencyFlag.DefValue)
+
+	incrementScanIntervalFlag := cmd.Flags().Lookup("increment.scan-interval")
+	require.NotNil(t, incrementScanIntervalFlag)
+	require.Equal(t, "1m0s", incrementScanIntervalFlag.DefValue)
 }
