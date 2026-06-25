@@ -4,31 +4,20 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	storage "github.com/pingcap/tidb/pkg/objstore/storeapi"
-	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
 	"go.uber.org/zap"
 )
 
-const (
-	DataWarehouseLoadConcurrency = 16
-)
-
 func snapshotLoadInfoPath(sourceDatabase, sourceTable string) string {
 	return fmt.Sprintf("%s.%s.loadinfo", sourceDatabase, sourceTable)
-}
-
-func isSnapshotDataFile(path string) bool {
-	return strings.HasSuffix(path, CSVFileExtension) || strings.HasSuffix(path, CSVFileExtension+".gz")
 }
 
 type session struct {
@@ -39,7 +28,6 @@ type session struct {
 
 	StorageWorkspaceUri url.URL
 	storage             storage.Storage
-	ParrallelLoad       bool
 
 	ctx    context.Context
 	logger *zap.Logger
@@ -50,7 +38,6 @@ func newSession(
 	connector *snowflake.Connector,
 	sourceDatabase, sourceTable string,
 	storageUri *url.URL,
-	parrallelLoad bool,
 	logger *zap.Logger,
 ) (*session, error) {
 	sess := &session{
@@ -58,14 +45,12 @@ func newSession(
 		SourceDatabase:      sourceDatabase,
 		SourceTable:         sourceTable,
 		StorageWorkspaceUri: *storageUri,
-		ParrallelLoad:       parrallelLoad,
 		ctx:                 ctx,
 		logger:              logger,
 	}
 	sess.logger.Info("Creating replicate session",
 		zap.String("storageScheme", sess.StorageWorkspaceUri.Scheme),
-		zap.String("storagePath", sess.StorageWorkspaceUri.Path),
-		zap.Bool("parallelLoad", sess.ParrallelLoad))
+		zap.String("storagePath", sess.StorageWorkspaceUri.Path))
 
 	externalStorage, err := putil.GetExternalStorageWithDefaultTimeout(sess.ctx, storageUri.String())
 	if err != nil {
@@ -105,68 +90,11 @@ func (sess *session) Run() error {
 	}
 
 	startTime := time.Now()
-	if sess.ParrallelLoad {
-		var snapshotFileSize int64
-		var fileCount int64
-		tableFQN := fmt.Sprintf("%s.%s", sess.SourceDatabase, sess.SourceTable)
-		opt := &storage.WalkOption{ObjPrefix: fmt.Sprintf("%s.", tableFQN)}
-		if err := sess.storage.WalkDir(sess.ctx, opt, func(path string, size int64) error {
-			if isSnapshotDataFile(path) {
-				snapshotFileSize += size
-				fileCount++
-			}
-			return nil
-		}); err != nil {
-			return errors.Trace(err)
-		}
-		sess.logger.Info("snapshot files discovered",
-			zap.Int64("fileCount", fileCount),
-			zap.Int64("totalBytes", snapshotFileSize),
-			zap.Int("loadConcurrency", DataWarehouseLoadConcurrency))
-		metrics.AddCounter(metrics.SnapshotTotalSizeCounter, float64(snapshotFileSize), tableFQN)
-		errFileCh := make(chan string, fileCount)
-		blockCh := make(chan struct{}, DataWarehouseLoadConcurrency)
-		var wg sync.WaitGroup
-		if err := sess.storage.WalkDir(sess.ctx, opt, func(path string, size int64) error {
-			if isSnapshotDataFile(path) {
-				blockCh <- struct{}{}
-				wg.Add(1)
-				go func(path string, size int64) {
-					defer func() {
-						<-blockCh
-						wg.Done()
-					}()
-					sess.logger.Info("Loading snapshot data into data warehouse", zap.String("path", path))
-					if err := sess.connector.LoadSnapshot(sess.SourceTable, path); err != nil {
-						sess.logger.Error("Failed to load snapshot data into data warehouse", zap.Error(err), zap.String("path", path))
-						errFileCh <- path
-					} else {
-						sess.logger.Info("Successfully load snapshot data into data warehouse", zap.String("path", path))
-						metrics.AddCounter(metrics.SnapshotLoadedSizeCounter, float64(size), tableFQN)
-					}
-				}(path, size)
-			}
-			return nil
-		}); err != nil {
-			return errors.Trace(err)
-		}
-		wg.Wait()
-		close(errFileCh)
-		close(blockCh)
-		errFileList := make([]string, 0, len(errFileCh))
-		for len(errFileCh) > 0 {
-			errFileList = append(errFileList, <-errFileCh)
-		}
-		if len(errFileList) > 0 {
-			return errors.Errorf("Failed to load snapshot data into data warehouse, error files: %v", errFileList)
-		}
-	} else {
-		pattern := fmt.Sprintf("%s.%s.*%s*", sess.SourceDatabase, sess.SourceTable, CSVFileExtension)
-		sess.logger.Info("loading snapshot data into data warehouse", zap.String("pattern", pattern))
-		if err := sess.connector.LoadSnapshot(sess.SourceTable, pattern); err != nil {
-			sess.logger.Error("Failed to load snapshot data into data warehouse", zap.Error(err))
-			return errors.Trace(err)
-		}
+	pattern := fmt.Sprintf("%s.%s.*%s*", sess.SourceDatabase, sess.SourceTable, CSVFileExtension)
+	sess.logger.Info("loading snapshot data into data warehouse", zap.String("pattern", pattern))
+	if err := sess.connector.LoadSnapshot(sess.SourceTable, pattern); err != nil {
+		sess.logger.Error("Failed to load snapshot data into data warehouse", zap.Error(err))
+		return errors.Trace(err)
 	}
 	endTime := time.Now()
 	sess.logger.Info("Successfully load all snapshot data into data warehouse", zap.Duration("cost", endTime.Sub(startTime)))
@@ -190,11 +118,10 @@ func Snapshot(
 	connector *snowflake.Connector,
 	tableFQN string,
 	storageUri *url.URL,
-	parrallelLoad bool,
 ) error {
 	logger := log.L().With(zap.String("table", tableFQN))
 	sourceDatabase, sourceTable := utils.SplitTableFQN(tableFQN)
-	session, err := newSession(ctx, connector, sourceDatabase, sourceTable, storageUri, parrallelLoad, logger)
+	session, err := newSession(ctx, connector, sourceDatabase, sourceTable, storageUri, logger)
 	if err != nil {
 		logger.Error("Failed to create snapshot replicate session", zap.Error(err))
 		return errors.Trace(err)
