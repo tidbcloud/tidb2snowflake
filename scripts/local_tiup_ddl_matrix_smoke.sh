@@ -61,7 +61,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 )
@@ -177,7 +177,7 @@ func expectDDL(db *sql.DB, aliases map[string]string, newAliases map[string]stri
 		aliases[name] = id
 	}
 	curr := columns(db, aliases)
-	got, err := snowsql.GenDDLViaColumnsDiff(prev, cloudstorage.TableDefinition{
+	got, err := snowsql.GenDDLViaColumnsDiff(prev, cloudstorage.SchemaFile{
 		Schema:  dbName,
 		Table:   ddlTable,
 		Columns: curr,
@@ -202,22 +202,22 @@ func columns(db *sql.DB, aliases map[string]string) []cloudstorage.TableCol {
 func checkSyntheticTableDDL() {
 	for _, tc := range []struct {
 		name string
-		def  cloudstorage.TableDefinition
+		def  cloudstorage.SchemaFile
 		want []string
 	}{
 		{
 			name: "truncate",
-			def:  cloudstorage.TableDefinition{Table: "t_truncate", Type: model.ActionTruncateTable},
+			def:  cloudstorage.SchemaFile{Table: "t_truncate", Type: model.ActionTruncateTable},
 			want: []string{"TRUNCATE TABLE t_truncate"},
 		},
 		{
 			name: "drop table",
-			def:  cloudstorage.TableDefinition{Table: "t_drop", Type: model.ActionDropTable},
+			def:  cloudstorage.SchemaFile{Table: "t_drop", Type: model.ActionDropTable},
 			want: []string{"DROP TABLE t_drop"},
 		},
 		{
 			name: "drop schema",
-			def:  cloudstorage.TableDefinition{Schema: "s_drop", Type: model.ActionDropSchema},
+			def:  cloudstorage.SchemaFile{Schema: "s_drop", Type: model.ActionDropSchema},
 			want: []string{"DROP SCHEMA s_drop"},
 		},
 	} {

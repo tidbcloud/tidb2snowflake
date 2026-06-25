@@ -13,8 +13,8 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	storage "github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
@@ -25,9 +25,8 @@ import (
 )
 
 const (
-	CSVFileExtension              = ".csv"
-	checkpointFileExtension       = ".checkpoint"
-	fakePartitionNumForSchemaFile = -1
+	CSVFileExtension        = ".csv"
+	checkpointFileExtension = ".checkpoint"
 )
 
 // fileIndexRange defines a range of files. eg. CDC000002.csv ~ CDC000005.csv
@@ -68,12 +67,12 @@ type IncrementReplicateSession struct {
 	dwConnector *snowflake.Connector
 	storage     storage.Storage
 	ctx         context.Context
-	// tableDMLIdxMap maintains a map of <dmlPathKey, max file index>
-	tableDMLIdxMap map[cloudstorage.DmlPathKey]uint64
-	// progressDMLIdxMap maintains a map of <dmlPathKey, max applied file index>
-	progressDMLIdxMap map[cloudstorage.DmlPathKey]uint64
+	// tableDMLIdxMap maintains a map of <DMLPathKey, max file index>
+	tableDMLIdxMap map[cloudstorage.DMLPathKey]uint64
+	// progressDMLIdxMap maintains a map of <DMLPathKey, max applied file index>
+	progressDMLIdxMap map[cloudstorage.DMLPathKey]uint64
 	// tableDefMap maintains a map of <tableVersion, tableDef>
-	tableDefMap map[uint64]*cloudstorage.TableDefinition
+	tableDefMap map[uint64]*cloudstorage.SchemaFile
 	// dataFileMap maintains a map of <dataFilePath, fileSize>
 	dataFileMap    map[string]int64
 	fileExtension  string
@@ -91,7 +90,7 @@ func NewIncrementReplicateSession(
 	tableFQN string,
 	logger *zap.Logger,
 ) (*IncrementReplicateSession, error) {
-	externalStorage, err := putil.GetExternalStorageFromURI(ctx, storageURI.String())
+	externalStorage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, storageURI.String())
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -100,9 +99,9 @@ func NewIncrementReplicateSession(
 		dwConnector:       dwConnector,
 		storage:           externalStorage,
 		ctx:               ctx,
-		tableDMLIdxMap:    make(map[cloudstorage.DmlPathKey]uint64),
-		progressDMLIdxMap: make(map[cloudstorage.DmlPathKey]uint64),
-		tableDefMap:       make(map[uint64]*cloudstorage.TableDefinition),
+		tableDMLIdxMap:    make(map[cloudstorage.DMLPathKey]uint64),
+		progressDMLIdxMap: make(map[cloudstorage.DMLPathKey]uint64),
+		tableDefMap:       make(map[uint64]*cloudstorage.SchemaFile),
 		fileExtension:     fileExtension,
 		sourceDatabase:    sourceDatabase,
 		sourceTable:       sourceTable,
@@ -119,27 +118,31 @@ func NewIncrementReplicateSession(
 	return sess, nil
 }
 
-func (sess *IncrementReplicateSession) parseDMLFilePath(path string) error {
-	var dmlkey cloudstorage.DmlPathKey
-	fileIdx, err := dmlkey.ParseDMLFilePath(
-		config.DateSeparatorDay.String(),
-		path,
-	)
-	if err != nil {
-		return errors.Trace(err)
-	}
+func (sess *IncrementReplicateSession) parseDMLFilePath(path string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.Errorf("parse dml file path %s: %v", path, r)
+		}
+	}()
+
+	var dmlkey cloudstorage.DMLPathKey
+	fileIndex := dmlkey.ParseDMLFilePath(config.DateSeparatorDay.String(), path, sess.fileExtension)
+	fileIdx := fileIndex.Idx
 	if _, ok := sess.tableDMLIdxMap[dmlkey]; !ok || fileIdx >= sess.tableDMLIdxMap[dmlkey] {
 		sess.tableDMLIdxMap[dmlkey] = fileIdx
 	}
 	return nil
 }
 
-func (sess *IncrementReplicateSession) parseSchemaFilePath(path string) error {
+func (sess *IncrementReplicateSession) parseSchemaFilePath(path string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.Errorf("parse schema file path %s: %v", path, r)
+		}
+	}()
+
 	var schemaKey cloudstorage.SchemaPathKey
-	checksumInFile, err := schemaKey.ParseSchemaFilePath(path)
-	if err != nil {
-		return errors.Trace(err)
-	}
+	schemaKey.Parse(path)
 	if _, ok := sess.tableDefMap[schemaKey.TableVersion]; ok {
 		// Skip if tableDef already exists.
 		return nil
@@ -152,7 +155,7 @@ func (sess *IncrementReplicateSession) parseSchemaFilePath(path string) error {
 	}
 
 	// Read tableDef from schema file and check checksum.
-	var tableDef cloudstorage.TableDefinition
+	var tableDef cloudstorage.SchemaFile
 	schemaContent, err := sess.storage.ReadFile(sess.ctx, path)
 	if err != nil {
 		return errors.Trace(err)
@@ -160,14 +163,10 @@ func (sess *IncrementReplicateSession) parseSchemaFilePath(path string) error {
 	if err = json.Unmarshal(schemaContent, &tableDef); err != nil {
 		return errors.Trace(err)
 	}
-	checksumInMem, err := tableDef.Sum32(nil)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if checksumInMem != checksumInFile || schemaKey.TableVersion != tableDef.TableVersion {
+	expectedPath := tableDef.Path(false, 0)
+	if expectedPath != path || schemaKey.TableVersion != tableDef.TableVersion {
 		sess.logger.Error("checksum mismatch",
-			zap.Uint32("checksumInMem", checksumInMem),
-			zap.Uint32("checksumInFile", checksumInFile),
+			zap.String("expectedPath", expectedPath),
 			zap.Uint64("tableversionInMem", schemaKey.TableVersion),
 			zap.Uint64("tableversionInFile", tableDef.TableVersion),
 			zap.String("path", path))
@@ -192,11 +191,7 @@ func (sess *IncrementReplicateSession) parseSchemaFilePath(path string) error {
 	//
 	// the DDL event recorded in schema.json should be executed first, then the DML events
 	// in csv files can be executed.
-	dmlkey := cloudstorage.DmlPathKey{
-		SchemaPathKey: schemaKey,
-		PartitionNum:  fakePartitionNumForSchemaFile,
-		Date:          "",
-	}
+	dmlkey := cloudstorage.NewSchemaFileDMLPathKey(schemaKey)
 	if _, ok := sess.tableDMLIdxMap[dmlkey]; !ok {
 		sess.tableDMLIdxMap[dmlkey] = 0
 	} else {
@@ -210,9 +205,9 @@ func (sess *IncrementReplicateSession) parseSchemaFilePath(path string) error {
 
 // map1 - map2
 func diffDMLMaps(
-	map1, map2 map[cloudstorage.DmlPathKey]uint64,
-) map[cloudstorage.DmlPathKey]fileIndexRange {
-	resMap := make(map[cloudstorage.DmlPathKey]fileIndexRange)
+	map1, map2 map[cloudstorage.DMLPathKey]uint64,
+) map[cloudstorage.DMLPathKey]fileIndexRange {
+	resMap := make(map[cloudstorage.DMLPathKey]fileIndexRange)
 	for k, v := range map1 {
 		if _, ok := map2[k]; !ok {
 			resMap[k] = fileIndexRange{
@@ -233,8 +228,8 @@ func (sess *IncrementReplicateSession) progressPath() string {
 	return fmt.Sprintf("%s/%s/_consumer/progress.json", sess.sourceDatabase, sess.sourceTable)
 }
 
-func progressEntryToDMLKey(entry progressEntry) cloudstorage.DmlPathKey {
-	return cloudstorage.DmlPathKey{
+func progressEntryToDMLKey(entry progressEntry) cloudstorage.DMLPathKey {
+	return cloudstorage.DMLPathKey{
 		SchemaPathKey: cloudstorage.SchemaPathKey{
 			Schema:       entry.Schema,
 			Table:        entry.Table,
@@ -245,7 +240,7 @@ func progressEntryToDMLKey(entry progressEntry) cloudstorage.DmlPathKey {
 	}
 }
 
-func progressEntryFromDMLKey(key cloudstorage.DmlPathKey, fileIdx uint64) progressEntry {
+func progressEntryFromDMLKey(key cloudstorage.DMLPathKey, fileIdx uint64) progressEntry {
 	return progressEntry{
 		Schema:       key.Schema,
 		Table:        key.Table,
@@ -324,8 +319,8 @@ func (sess *IncrementReplicateSession) saveProgress() error {
 	return nil
 }
 
-func (sess *IncrementReplicateSession) markDMLApplied(key cloudstorage.DmlPathKey, fileIdx uint64) error {
-	if key.PartitionNum == fakePartitionNumForSchemaFile && key.Date == "" {
+func (sess *IncrementReplicateSession) markDMLApplied(key cloudstorage.DMLPathKey, fileIdx uint64) error {
+	if key.IsSchemaFileDMLPathKey() {
 		return nil
 	}
 	if cur, ok := sess.progressDMLIdxMap[key]; ok && cur >= fileIdx {
@@ -344,9 +339,9 @@ func (sess *IncrementReplicateSession) markDMLApplied(key cloudstorage.DmlPathKe
 }
 
 // getNewFiles returns newly created dml files in specific ranges
-func (sess *IncrementReplicateSession) getNewFiles() (map[cloudstorage.DmlPathKey]fileIndexRange, error) {
-	tableDMLMap := make(map[cloudstorage.DmlPathKey]fileIndexRange)
-	origDMLIdxMap := make(map[cloudstorage.DmlPathKey]uint64, len(sess.tableDMLIdxMap))
+func (sess *IncrementReplicateSession) getNewFiles() (map[cloudstorage.DMLPathKey]fileIndexRange, error) {
+	tableDMLMap := make(map[cloudstorage.DMLPathKey]fileIndexRange)
+	origDMLIdxMap := make(map[cloudstorage.DMLPathKey]uint64, len(sess.tableDMLIdxMap))
 	for k, v := range sess.tableDMLIdxMap {
 		origDMLIdxMap[k] = v
 	}
@@ -416,12 +411,12 @@ func (sess *IncrementReplicateSession) getNewFiles() (map[cloudstorage.DmlPathKe
 	return tableDMLMap, err
 }
 
-func (sess *IncrementReplicateSession) getTableDef(tableVersion uint64) cloudstorage.TableDefinition {
+func (sess *IncrementReplicateSession) getTableDef(tableVersion uint64) cloudstorage.SchemaFile {
 	if td, ok := sess.tableDefMap[tableVersion]; ok {
 		return *td
 	} else {
 		sess.logger.Panic("tableDef not found", zap.Any("table version", tableVersion), zap.Any("tableDefMap", sess.tableDefMap))
-		return cloudstorage.TableDefinition{}
+		return cloudstorage.SchemaFile{}
 	}
 }
 
@@ -444,11 +439,11 @@ func checkpointExistsInSet(filePath, fileExtension string, checkpointSet map[str
 }
 
 func (sess *IncrementReplicateSession) syncExecDMLEvents(
-	tableDef cloudstorage.TableDefinition,
-	key cloudstorage.DmlPathKey,
+	tableDef cloudstorage.SchemaFile,
+	key cloudstorage.DMLPathKey,
 	fileIdx uint64,
 ) error {
-	filePath := key.GenerateDMLFilePath(fileIdx, sess.fileExtension, config.DefaultFileIndexWidth)
+	filePath := key.GenerateDMLFilePath(&cloudstorage.FileIndex{Idx: fileIdx}, sess.fileExtension, config.DefaultFileIndexWidth)
 	checkpointFileName := checkpointPath(filePath, sess.fileExtension)
 
 	// check if the file has been loaded into data warehouse
@@ -513,7 +508,7 @@ func (sess *IncrementReplicateSession) syncExecDMLEvents(
 	return nil
 }
 
-func (sess *IncrementReplicateSession) syncExecDDLEvents(tableDef cloudstorage.TableDefinition) error {
+func (sess *IncrementReplicateSession) syncExecDDLEvents(tableDef cloudstorage.SchemaFile) error {
 	if len(tableDef.Query) == 0 {
 		// schema.json file without query is used to initialize the schema.
 		sess.logger.Info("initializing table schema from schema file",
@@ -544,11 +539,8 @@ func (sess *IncrementReplicateSession) syncExecDDLEvents(tableDef cloudstorage.T
 	// Delete all the outdated table definition files.
 	for _, item := range sess.tableDefMap {
 		if item.TableVersion < tableDef.TableVersion {
-			filePath, err := item.GenerateSchemaFilePath()
-			if err != nil {
-				return errors.Trace(err)
-			}
-			if err = sess.storage.DeleteFile(sess.ctx, filePath); err != nil {
+			filePath := item.Path(false, 0)
+			if err := sess.storage.DeleteFile(sess.ctx, filePath); err != nil {
 				return errors.Trace(err)
 			}
 			delete(sess.tableDefMap, item.TableVersion)
@@ -556,14 +548,8 @@ func (sess *IncrementReplicateSession) syncExecDDLEvents(tableDef cloudstorage.T
 	}
 	// clear the query in the current table definition file.
 	tableDef.Query = ""
-	data, err := tableDef.MarshalWithQuery()
-	if err != nil {
-		return errors.Trace(err)
-	}
-	filePath, err := tableDef.GenerateSchemaFilePath()
-	if err != nil {
-		return errors.Trace(err)
-	}
+	data := tableDef.Marshal()
+	filePath := tableDef.Path(false, 0)
 	// update the current table definition file.
 	if err := sess.storage.WriteFile(sess.ctx, filePath, data); err != nil {
 		return errors.Annotate(err, "update current schema file")
@@ -574,8 +560,8 @@ func (sess *IncrementReplicateSession) syncExecDDLEvents(tableDef cloudstorage.T
 	return nil
 }
 
-func (sess *IncrementReplicateSession) handleNewFiles(dmlFileMap map[cloudstorage.DmlPathKey]fileIndexRange) error {
-	keys := make([]cloudstorage.DmlPathKey, 0, len(dmlFileMap))
+func (sess *IncrementReplicateSession) handleNewFiles(dmlFileMap map[cloudstorage.DMLPathKey]fileIndexRange) error {
+	keys := make([]cloudstorage.DMLPathKey, 0, len(dmlFileMap))
 	for k := range dmlFileMap {
 		keys = append(keys, k)
 	}
@@ -583,14 +569,8 @@ func (sess *IncrementReplicateSession) handleNewFiles(dmlFileMap map[cloudstorag
 		sess.logger.Debug("no new files found since last round")
 		return nil
 	}
-	slices.SortStableFunc(keys, func(x, y cloudstorage.DmlPathKey) int {
-		if r := cmp.Compare(x.TableVersion, y.TableVersion); r != 0 {
-			return r
-		}
-		if r := cmp.Compare(x.PartitionNum, y.PartitionNum); r != 0 {
-			return r
-		}
-		return cmp.Compare(x.Date, y.Date)
+	slices.SortStableFunc(keys, func(x, y cloudstorage.DMLPathKey) int {
+		return cloudstorage.CompareDMLPathKey(x, y)
 	})
 	sess.logger.Info("new increment ranges found",
 		zap.Int("rangeCount", len(keys)),
@@ -600,7 +580,7 @@ func (sess *IncrementReplicateSession) handleNewFiles(dmlFileMap map[cloudstorag
 		tableDef := sess.getTableDef(key.SchemaPathKey.TableVersion)
 		// if the key is a fake dml path key which is mainly used for
 		// sorting schema.json file before the dml files, which means it is a schema.json file.
-		if key.PartitionNum == fakePartitionNumForSchemaFile && len(key.Date) == 0 {
+		if key.IsSchemaFileDMLPathKey() {
 			if err := sess.syncExecDDLEvents(tableDef); err != nil {
 				return errors.Trace(err)
 			}
@@ -624,10 +604,10 @@ func (sess *IncrementReplicateSession) handleNewFiles(dmlFileMap map[cloudstorag
 	return nil
 }
 
-func countFilesInRanges(ranges map[cloudstorage.DmlPathKey]fileIndexRange) uint64 {
+func countFilesInRanges(ranges map[cloudstorage.DMLPathKey]fileIndexRange) uint64 {
 	var count uint64
 	for key, fileRange := range ranges {
-		if key.PartitionNum == fakePartitionNumForSchemaFile && key.Date == "" {
+		if key.IsSchemaFileDMLPathKey() {
 			continue
 		}
 		if fileRange.end >= fileRange.start {
