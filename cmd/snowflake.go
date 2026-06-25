@@ -86,7 +86,6 @@ func NewSnowflakeCmd() *cobra.Command {
 
 	// consistency / changefeed tuning
 	f.StringVar(&cfg.SnapshotTSO, "snapshot-tso", "", "pin the snapshot to a specific TiDB TSO (optional; default: chosen at export time)")
-	f.StringVar(&cfg.SnapshotLoadMode, "snapshot.load-mode", SnapshotLoadModeBulk, "snapshot load mode: bulk or per-file")
 	f.StringVar(&cfg.SnapshotCompression, "snapshot.compression", SnapshotCompressionNone, "snapshot export compression: none or gzip")
 	f.DurationVar(&cfg.ChangefeedFlushInterval, "changefeed.flush-interval", 60*time.Second, "changefeed flush interval")
 	f.IntVar(&cfg.ChangefeedFileSizeMiB, "changefeed.file-size", 64, "changefeed file size in MiB")
@@ -113,11 +112,6 @@ func validateConfig(cfg *Config) error {
 	}
 	if sourceMode(cfg) == SourceModeOP && cfg.Mode != RunModeSnapshotOnly && cfg.OP.TiCDCAddress == "" {
 		return errors.New("--ticdc.address is required when --source.mode=op")
-	}
-	switch snapshotLoadMode(cfg) {
-	case SnapshotLoadModeBulk, SnapshotLoadModePerFile:
-	default:
-		return errors.Errorf("--snapshot.load-mode must be %q or %q", SnapshotLoadModeBulk, SnapshotLoadModePerFile)
 	}
 	switch snapshotCompression(cfg) {
 	case SnapshotCompressionNone, SnapshotCompressionGzip:

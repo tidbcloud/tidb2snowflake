@@ -69,11 +69,6 @@ const (
 )
 
 const (
-	SnapshotLoadModeBulk    = "bulk"
-	SnapshotLoadModePerFile = "per-file"
-)
-
-const (
 	SnapshotCompressionNone = "none"
 	SnapshotCompressionGzip = "gzip"
 )
@@ -97,7 +92,6 @@ type Config struct {
 
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int
-	SnapshotLoadMode        string
 	SnapshotCompression     string
 
 	PollInterval time.Duration
@@ -434,7 +428,6 @@ func Replicate(ctx context.Context, cfg *Config) error {
 		zap.String("mode", runModeString(cfg.Mode)),
 		zap.String("sourceMode", sourceModeString(sourceMode(cfg))),
 		zap.String("storage", redactURLRawQuery(cfg.StoragePath)),
-		zap.String("snapshotLoadMode", snapshotLoadMode(cfg)),
 		zap.String("snapshotCompression", snapshotCompression(cfg)),
 		zap.Duration("changefeedFlushInterval", cfg.ChangefeedFlushInterval),
 		zap.Int("changefeedFileSizeMiB", cfg.ChangefeedFileSizeMiB),
@@ -724,7 +717,7 @@ func replicateTable(
 		if err != nil {
 			return errors.Trace(err)
 		}
-		err = replicate.Snapshot(ctx, conn, tableFQN, snapshotURI, snapshotLoadMode(cfg) == SnapshotLoadModePerFile)
+		err = replicate.Snapshot(ctx, conn, tableFQN, snapshotURI)
 		conn.Close()
 		if err != nil {
 			return errors.Trace(err)
@@ -752,13 +745,6 @@ func replicateTable(
 		}
 	}
 	return nil
-}
-
-func snapshotLoadMode(cfg *Config) string {
-	if cfg.SnapshotLoadMode == "" {
-		return SnapshotLoadModeBulk
-	}
-	return cfg.SnapshotLoadMode
 }
 
 func snapshotCompression(cfg *Config) string {
