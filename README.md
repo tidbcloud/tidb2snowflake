@@ -117,17 +117,16 @@ previous run created it, or because you created the export/changefeed yourself
 is. If both already exist, the run loads without contacting the TiDB Cloud API
 in TiDB Cloud mode or the TiCDC API in OP mode.
 
-Snapshot loading writes a per-table `loadinfo` marker after Snowflake `COPY`
-finishes. A later run skips snapshot loading for tables with that marker, then
-continues incremental replay. Snapshot files are loaded with one bulk `COPY`
-statement using a Snowflake `PATTERN`.
+Snapshot files are loaded with one bulk `COPY` statement using a Snowflake
+`PATTERN`. The legacy per-table `loadinfo` marker is no longer read or written
+for recovery.
 Snapshot export compression defaults to `none`; use `--snapshot.compression=gzip`
 to ask TiDB Cloud export for gzip CSV files and configure Snowflake `COPY` to
 read gzip input.
 
-Incremental replay writes a per-table `_consumer/progress.json` under the
-incremental storage prefix after each successfully applied CDC file. On restart,
-the loader restores that applied-file cursor before scanning object storage.
+Incremental replay no longer reads or writes legacy per-file `.checkpoint`
+markers or per-table `_consumer/progress.json`. Persistent resume is expected to
+be handled by the new state manager.
 
 ## Type mapping
 
