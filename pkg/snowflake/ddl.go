@@ -6,7 +6,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"go.uber.org/zap"
@@ -35,25 +35,25 @@ func GetColumnModifyString(diff *tidb.ColumnDiff) string {
 	return strings.Join(strs, ", ")
 }
 
-func GenDDLViaColumnsDiff(prevColumns []cloudstorage.TableCol, curTableDef cloudstorage.TableDefinition) ([]string, error) {
-	switch model.ActionType(curTableDef.Type) {
+func GenDDLViaColumnsDiff(prevColumns []cloudstorage.TableCol, schemaFile cloudstorage.SchemaFile) ([]string, error) {
+	switch model.ActionType(schemaFile.Type) {
 	case model.ActionTruncateTable:
-		return []string{fmt.Sprintf("TRUNCATE TABLE %s", curTableDef.Table)}, nil
+		return []string{fmt.Sprintf("TRUNCATE TABLE %s", schemaFile.Table)}, nil
 	case model.ActionDropTable:
-		return []string{fmt.Sprintf("DROP TABLE %s", curTableDef.Table)}, nil
+		return []string{fmt.Sprintf("DROP TABLE %s", schemaFile.Table)}, nil
 	case model.ActionCreateTable:
 		return nil, errors.New("Received create table ddl, which should not happen") // FIXME: drop table and create table
 	case model.ActionRenameTable:
 		return nil, errors.New("Received rename table ddl, which should not happen") // FIXME: rename table to new table and rename back
 	case model.ActionDropSchema:
-		return []string{fmt.Sprintf("DROP SCHEMA %s", curTableDef.Schema)}, nil
+		return []string{fmt.Sprintf("DROP SCHEMA %s", schemaFile.Schema)}, nil
 	case model.ActionCreateSchema:
 		return nil, errors.New("Received create schema ddl, which should not happen") // FIXME: drop schema and create schema
 	default:
 		// continue
 	}
 
-	columnDiff, err := tidb.GetColumnDiff(prevColumns, curTableDef.Columns)
+	columnDiff, err := tidb.GetColumnDiff(prevColumns, schemaFile.Columns)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -62,17 +62,17 @@ func GenDDLViaColumnsDiff(prevColumns []cloudstorage.TableCol, curTableDef cloud
 		ddl := ""
 		switch item.Action {
 		case tidb.ADD_COLUMN:
-			ddl += fmt.Sprintf("ALTER TABLE %s ADD COLUMN ", curTableDef.Table)
+			ddl += fmt.Sprintf("ALTER TABLE %s ADD COLUMN ", schemaFile.Table)
 			colStr := buildColumn(*item.After)
 			ddl += colStr
 		case tidb.DROP_COLUMN:
-			ddl += fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", curTableDef.Table, item.Before.Name)
+			ddl += fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", schemaFile.Table, item.Before.Name)
 		case tidb.MODIFY_COLUMN:
-			ddl += fmt.Sprintf("ALTER TABLE %s MODIFY ", curTableDef.Table)
+			ddl += fmt.Sprintf("ALTER TABLE %s MODIFY ", schemaFile.Table)
 			modifyStr := GetColumnModifyString(&item)
 			ddl += modifyStr
 		case tidb.RENAME_COLUMN:
-			ddl += fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", curTableDef.Table, item.Before.Name, item.After.Name)
+			ddl += fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", schemaFile.Table, item.Before.Name, item.After.Name)
 		default:
 			// UNCHANGE
 		}

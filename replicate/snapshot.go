@@ -67,7 +67,7 @@ func newSession(
 		zap.String("storagePath", sess.StorageWorkspaceUri.Path),
 		zap.Bool("parallelLoad", sess.ParrallelLoad))
 
-	externalStorage, err := putil.GetExternalStorageFromURI(sess.ctx, storageUri.String())
+	externalStorage, err := putil.GetExternalStorageWithDefaultTimeout(sess.ctx, storageUri.String())
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
