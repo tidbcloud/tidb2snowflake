@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -14,14 +15,15 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/thediveo/enumflag"
+	"github.com/tidbcloud/tidb2snowflake/incremental"
 	"github.com/tidbcloud/tidb2snowflake/pkg/dumpling"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
+	"github.com/tidbcloud/tidb2snowflake/pkg/state"
 	"github.com/tidbcloud/tidb2snowflake/pkg/ticdc"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
-	"github.com/tidbcloud/tidb2snowflake/replicate/incremental"
-	"github.com/tidbcloud/tidb2snowflake/replicate/snapshot"
+	"github.com/tidbcloud/tidb2snowflake/snapshot"
 	"go.uber.org/zap"
 )
 
@@ -106,10 +108,6 @@ type OPConfig struct {
 	SnapshotConcurrency int
 }
 
-type sourceJobState struct {
-	SnapshotTSO string
-}
-
 type managedSourceJobResult struct {
 	ID          string
 	SnapshotTSO string
@@ -124,7 +122,7 @@ const (
 
 type sourcePrepareContext struct {
 	store             storeapi.Storage
-	state             *sourceJobState
+	state             *state.Manager
 	cred              *credentials.Value
 	snapshotURI       *url.URL
 	incrementURI      *url.URL
@@ -137,7 +135,7 @@ type sourceRunner interface {
 	sourceJobName(sourceJobType) string
 	sourceJobStorageDir(sourceJobType) string
 	createSourceJob(context.Context, sourcePrepareContext, sourceJobType) (*managedSourceJobResult, error)
-	waitSourceJob(context.Context, sourcePrepareContext, sourceJobType, string) error
+	waitSourceJob(context.Context, sourcePrepareContext, sourceJobType, string) (*managedSourceJobResult, error)
 }
 
 type tidbCloudSourceRunner struct {
@@ -188,13 +186,16 @@ func (r *tidbCloudSourceRunner) createSourceJob(
 	switch jobType {
 	case sourceJobExport:
 		req := buildExportRequest(r.cfg, prepareCtx.cleanSnapshotURI, prepareCtx.cred)
+		if tso := prepareCtx.state.Snapshot().Snapshot.TSO; tso != "" {
+			req.ExportOptions.SnapshotTSO = tso
+		}
 		export, err := c.CreateExport(ctx, r.cfg.TiDBCloud.ClusterID, req)
 		if err != nil {
 			return nil, err
 		}
 		return &managedSourceJobResult{ID: export.ExportID, SnapshotTSO: export.SnapshotTSO}, nil
 	case sourceJobChangefeed:
-		req := buildChangefeedRequest(r.cfg, prepareCtx.cleanIncrementURI, prepareCtx.cred, prepareCtx.state.SnapshotTSO)
+		req := buildChangefeedRequest(r.cfg, prepareCtx.cleanIncrementURI, prepareCtx.cred, prepareCtx.state.Snapshot().Snapshot.TSO)
 		cf, err := c.CreateChangefeed(ctx, r.cfg.TiDBCloud.ClusterID, req)
 		if err != nil {
 			return nil, err
@@ -210,20 +211,26 @@ func (r *tidbCloudSourceRunner) waitSourceJob(
 	_ sourcePrepareContext,
 	jobType sourceJobType,
 	id string,
-) error {
+) (*managedSourceJobResult, error) {
 	c, err := r.tidbCloudClient()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	switch jobType {
 	case sourceJobExport:
-		_, err = c.WaitExport(ctx, r.cfg.TiDBCloud.ClusterID, id, r.cfg.PollInterval)
-		return err
+		export, err := c.WaitExport(ctx, r.cfg.TiDBCloud.ClusterID, id, r.cfg.PollInterval)
+		if err != nil {
+			return nil, err
+		}
+		return &managedSourceJobResult{ID: export.ExportID, SnapshotTSO: export.SnapshotTSO}, nil
 	case sourceJobChangefeed:
-		_, err = c.WaitChangefeed(ctx, r.cfg.TiDBCloud.ClusterID, id, r.cfg.PollInterval)
-		return err
+		changefeed, err := c.WaitChangefeed(ctx, r.cfg.TiDBCloud.ClusterID, id, r.cfg.PollInterval)
+		if err != nil {
+			return nil, err
+		}
+		return &managedSourceJobResult{ID: changefeed.ChangefeedID}, nil
 	default:
-		return errors.Errorf("unsupported source job %s", jobType)
+		return nil, errors.Errorf("unsupported source job %s", jobType)
 	}
 }
 
@@ -271,7 +278,7 @@ func (r *opSourceRunner) createSourceJob(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	startTSO, err := parseOptionalTSO(prepareCtx.state.SnapshotTSO)
+	startTSO, err := parseOptionalTSO(prepareCtx.state.Snapshot().Snapshot.TSO)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -297,16 +304,19 @@ func (r *opSourceRunner) waitSourceJob(
 	_ sourcePrepareContext,
 	jobType sourceJobType,
 	id string,
-) error {
+) (*managedSourceJobResult, error) {
 	if jobType != sourceJobChangefeed {
-		return errors.Errorf("unsupported source job %s", jobType)
+		return nil, errors.Errorf("unsupported source job %s", jobType)
 	}
 	client, err := r.ticdcClient()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = client.WaitChangefeed(ctx, id, r.cfg.PollInterval)
-	return err
+	cf, err := client.WaitChangefeed(ctx, id, r.cfg.PollInterval)
+	if err != nil {
+		return nil, err
+	}
+	return &managedSourceJobResult{ID: ticdc.ChangefeedID(cf)}, nil
 }
 
 func (r *opSourceRunner) ticdcClient() (*ticdc.Client, error) {
@@ -378,8 +388,15 @@ func Replicate(ctx context.Context, cfg *Config) error {
 	if err != nil {
 		return errors.Annotate(err, "open storage")
 	}
+	defer store.Close()
 
-	state := &sourceJobState{SnapshotTSO: cfg.SnapshotTSO}
+	stateManager, err := state.Open(ctx, store, cfg.Tables)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if err := setSnapshotTSO(ctx, stateManager, cfg.SnapshotTSO); err != nil {
+		return errors.Trace(err)
+	}
 
 	source, err := newSourceRunner(cfg)
 	if err != nil {
@@ -387,7 +404,7 @@ func Replicate(ctx context.Context, cfg *Config) error {
 	}
 	if err := source.prepare(ctx, sourcePrepareContext{
 		store:             store,
-		state:             state,
+		state:             stateManager,
 		cred:              cred,
 		snapshotURI:       snapshotURI,
 		incrementURI:      incrementURI,
@@ -398,7 +415,7 @@ func Replicate(ctx context.Context, cfg *Config) error {
 	}
 
 	// ---- Load object-storage files into Snowflake ----
-	return loadIntoSnowflake(ctx, cfg, cred, snapshotURI, incrementURI)
+	return loadIntoSnowflake(ctx, cfg, cred, storageURI, store, stateManager)
 }
 
 func (r *tidbCloudSourceRunner) prepare(
@@ -407,11 +424,29 @@ func (r *tidbCloudSourceRunner) prepare(
 ) error {
 	cfg := r.cfg
 
+	if cfg.Mode != RunModeIncrementalOnly && sourceJobID(prepareCtx.state.Snapshot(), sourceJobExport) == "" {
+		if err := loadExistingSnapshotTSO(ctx, prepareCtx.store, prepareCtx.state); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
 	// ---- Export: snapshot via OpenAPI (anchors the consistency TSO) ----
-	if cfg.Mode != RunModeIncrementalOnly {
+	if cfg.Mode != RunModeIncrementalOnly && !prepareCtx.state.Snapshot().Snapshot.Finished {
 		if err := ensureManagedSourceJob(ctx, prepareCtx, r, sourceJobExport); err != nil {
 			return errors.Trace(err)
 		}
+	}
+	if cfg.Mode != RunModeIncrementalOnly {
+		if prepareCtx.state.Snapshot().Snapshot.Finished {
+			if err := loadExistingSnapshotTSO(ctx, prepareCtx.store, prepareCtx.state); err != nil {
+				return errors.Trace(err)
+			}
+		} else if err := loadSnapshotTSOFromMetadata(ctx, prepareCtx.store, prepareCtx.state); err != nil {
+			return errors.Trace(err)
+		}
+	}
+	if cfg.Mode == RunModeFull && prepareCtx.state.Snapshot().Snapshot.TSO == "" {
+		return errors.New("snapshot.tso is required before creating a changefeed for full replication")
 	}
 
 	// ---- Changefeed: incremental via OpenAPI, started at the snapshot TSO ----
@@ -430,12 +465,21 @@ func ensureManagedSourceJob(
 	jobType sourceJobType,
 ) error {
 	store := prepareCtx.store
-	state := prepareCtx.state
 	jobName := source.sourceJobName(jobType)
 
 	storageDir := source.sourceJobStorageDir(jobType)
 	if storageDir == "" {
 		return errors.Errorf("unsupported source job %s", jobType)
+	}
+	if id := sourceJobID(prepareCtx.state.Snapshot(), jobType); id != "" {
+		log.Info("waiting for existing source job from state",
+			zap.String("job", jobName),
+			zap.String("jobID", id))
+		res, err := source.waitSourceJob(ctx, prepareCtx, jobType, id)
+		if err != nil {
+			return errors.Annotatef(err, "wait %s", jobName)
+		}
+		return errors.Trace(updateManagedSourceJobState(ctx, prepareCtx.state, jobType, res))
 	}
 	exists, err := dirHasObjects(ctx, store, storageDir)
 	if err != nil {
@@ -455,17 +499,24 @@ func ensureManagedSourceJob(
 	if res == nil || res.ID == "" {
 		return errors.Errorf("create %s returned empty id", jobName)
 	}
-	applyManagedSourceJobResult(state, res, true)
+	if err := updateManagedSourceJobState(ctx, prepareCtx.state, jobType, res); err != nil {
+		return errors.Trace(err)
+	}
+	snapshotTSO := prepareCtx.state.Snapshot().Snapshot.TSO
 	log.Info("source job created",
 		zap.String("job", jobName),
 		zap.String("jobID", res.ID),
-		zap.String("snapshotTSO", state.SnapshotTSO))
+		zap.String("snapshotTSO", snapshotTSO))
 
 	log.Info("waiting for source job",
 		zap.String("job", jobName),
 		zap.String("jobID", res.ID))
-	if err := source.waitSourceJob(ctx, prepareCtx, jobType, res.ID); err != nil {
+	waitResult, err := source.waitSourceJob(ctx, prepareCtx, jobType, res.ID)
+	if err != nil {
 		return errors.Annotatef(err, "wait %s", jobName)
+	}
+	if err := updateManagedSourceJobState(ctx, prepareCtx.state, jobType, waitResult); err != nil {
+		return errors.Trace(err)
 	}
 	log.Info("source job ready",
 		zap.String("job", jobName),
@@ -473,13 +524,126 @@ func ensureManagedSourceJob(
 	return nil
 }
 
-func applyManagedSourceJobResult(state *sourceJobState, res *managedSourceJobResult, overwriteSnapshotTSO bool) {
+func sourceJobID(st state.State, jobType sourceJobType) string {
+	switch jobType {
+	case sourceJobExport:
+		return st.TaskInfo.ExportID
+	case sourceJobChangefeed:
+		return st.TaskInfo.ChangefeedID
+	default:
+		return ""
+	}
+}
+
+func updateManagedSourceJobState(ctx context.Context, manager *state.Manager, jobType sourceJobType, res *managedSourceJobResult) error {
 	if res == nil {
-		return
+		return nil
 	}
-	if res.SnapshotTSO != "" && (overwriteSnapshotTSO || state.SnapshotTSO == "") {
-		state.SnapshotTSO = res.SnapshotTSO
+	return manager.Update(ctx, func(st *state.State) error {
+		switch jobType {
+		case sourceJobExport:
+			if res.ID != "" {
+				st.TaskInfo.ExportID = res.ID
+			}
+		case sourceJobChangefeed:
+			if res.ID != "" {
+				st.TaskInfo.ChangefeedID = res.ID
+			}
+		default:
+			return errors.Errorf("unsupported source job %s", jobType)
+		}
+		if res.SnapshotTSO != "" {
+			if st.Snapshot.TSO != "" && st.Snapshot.TSO != res.SnapshotTSO {
+				return errors.Errorf("snapshot.tso mismatch: state %s, source job %s", st.Snapshot.TSO, res.SnapshotTSO)
+			}
+			st.Snapshot.TSO = res.SnapshotTSO
+		}
+		return nil
+	})
+}
+
+func loadExistingSnapshotTSO(ctx context.Context, store storeapi.Storage, manager *state.Manager) error {
+	exists, err := dirHasObjects(ctx, store, snapshotDirName)
+	if err != nil {
+		return errors.Annotate(err, "check snapshot directory")
 	}
+	if !exists {
+		return nil
+	}
+	return loadSnapshotTSOFromMetadata(ctx, store, manager)
+}
+
+func loadSnapshotTSOFromMetadata(ctx context.Context, store storeapi.Storage, manager *state.Manager) error {
+	metadataPath := path.Join(snapshotDirName, "metadata")
+	exists, err := store.FileExists(ctx, metadataPath)
+	if err != nil {
+		return errors.Annotatef(err, "check snapshot metadata %s", metadataPath)
+	}
+	if !exists {
+		return errors.Errorf("snapshot data exists but %s is missing", metadataPath)
+	}
+	data, err := store.ReadFile(ctx, metadataPath)
+	if err != nil {
+		return errors.Annotatef(err, "read snapshot metadata %s", metadataPath)
+	}
+	tso, err := snapshotTSOFromMetadata(data)
+	if err != nil {
+		return errors.Annotatef(err, "parse snapshot metadata %s", metadataPath)
+	}
+	return setSnapshotTSO(ctx, manager, tso)
+}
+
+func snapshotTSOFromMetadata(data []byte) (string, error) {
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "Pos:") {
+			continue
+		}
+		tso := strings.TrimSpace(strings.TrimPrefix(line, "Pos:"))
+		if tso == "" {
+			return "", errors.New("metadata Pos is empty")
+		}
+		if _, err := strconv.ParseUint(tso, 10, 64); err != nil {
+			return "", errors.Annotatef(err, "parse metadata Pos %q", tso)
+		}
+		return tso, nil
+	}
+	return "", errors.New("metadata Pos is missing")
+}
+
+func setSnapshotTSO(ctx context.Context, manager *state.Manager, tso string) error {
+	if tso == "" {
+		return nil
+	}
+	if _, err := strconv.ParseUint(tso, 10, 64); err != nil {
+		return errors.Annotatef(err, "parse snapshot.tso %q", tso)
+	}
+	return manager.Update(ctx, func(st *state.State) error {
+		if st.Snapshot.TSO != "" && st.Snapshot.TSO != tso {
+			return errors.Errorf("snapshot.tso mismatch: state %s, new %s", st.Snapshot.TSO, tso)
+		}
+		st.Snapshot.TSO = tso
+		return nil
+	})
+}
+
+func markSnapshotFinished(ctx context.Context, manager *state.Manager) error {
+	return manager.Update(ctx, func(st *state.State) error {
+		if st.Snapshot.TSO == "" {
+			log.Panic("snapshot.tso is empty after snapshot load")
+		}
+		tso, err := strconv.ParseUint(st.Snapshot.TSO, 10, 64)
+		if err != nil {
+			log.Panic("invalid snapshot.tso after snapshot load",
+				zap.String("snapshotTSO", st.Snapshot.TSO),
+				zap.Error(err))
+		}
+		st.Snapshot.Finished = true
+		if st.Incremental.CheckpointTS == 0 {
+			st.Incremental.CheckpointTS = tso
+		}
+		return nil
+	})
 }
 
 func (r *opSourceRunner) prepare(
@@ -488,17 +652,28 @@ func (r *opSourceRunner) prepare(
 ) error {
 	cfg := r.cfg
 	store := prepareCtx.store
-	state := prepareCtx.state
 
-	if state.SnapshotTSO == "" && cfg.SnapshotTSO != "" {
-		state.SnapshotTSO = cfg.SnapshotTSO
+	var snapshotExists bool
+	if cfg.Mode != RunModeIncrementalOnly {
+		exists, err := dirHasObjects(ctx, store, snapshotDirName)
+		if err != nil {
+			return errors.Annotate(err, "check snapshot directory")
+		}
+		snapshotExists = exists
+		if snapshotExists {
+			if err := loadSnapshotTSOFromMetadata(ctx, store, prepareCtx.state); err != nil {
+				return errors.Trace(err)
+			}
+		}
 	}
-	if cfg.Mode == RunModeFull && state.SnapshotTSO == "" {
+	if cfg.Mode == RunModeFull && !snapshotExists && prepareCtx.state.Snapshot().Snapshot.TSO == "" {
 		tso, err := tidb.GetCurrentTSO(cfg.TiDB)
 		if err != nil {
 			return errors.Annotate(err, "get current TiDB TSO")
 		}
-		state.SnapshotTSO = strconv.FormatUint(tso, 10)
+		if err := setSnapshotTSO(ctx, prepareCtx.state, strconv.FormatUint(tso, 10)); err != nil {
+			return errors.Trace(err)
+		}
 	}
 
 	if cfg.Mode != RunModeSnapshotOnly {
@@ -508,23 +683,23 @@ func (r *opSourceRunner) prepare(
 	}
 
 	if cfg.Mode != RunModeIncrementalOnly {
-		exists, err := dirHasObjects(ctx, store, snapshotDirName)
-		if err != nil {
-			return errors.Annotate(err, "check snapshot directory")
+		if prepareCtx.state.Snapshot().Snapshot.Finished {
+			log.Info("snapshot already marked finished in state, skipping OP Dumpling snapshot dump")
+			return nil
 		}
-		if exists {
+		if snapshotExists {
 			log.Info("snapshot data already exists in storage, skipping OP Dumpling snapshot dump",
 				zap.String("dir", snapshotDirName))
 			return nil
 		}
 		log.Info("dumping OP TiDB snapshot with Dumpling",
-			zap.String("snapshotTSO", state.SnapshotTSO),
+			zap.String("snapshotTSO", prepareCtx.state.Snapshot().Snapshot.TSO),
 			zap.String("target", safeURLForLog(prepareCtx.snapshotURI)),
 			zap.Int("concurrency", opSnapshotConcurrency(cfg)))
 		if err := dumpling.Run(ctx, cfg.TiDB, dumpling.Config{
 			Concurrency:  opSnapshotConcurrency(cfg),
 			StorageURI:   prepareCtx.snapshotURI,
-			SnapshotTSO:  state.SnapshotTSO,
+			SnapshotTSO:  prepareCtx.state.Snapshot().Snapshot.TSO,
 			Tables:       cfg.Tables,
 			Compression:  snapshotCompression(cfg),
 			CSVNullValue: "\\N",
@@ -536,6 +711,9 @@ func (r *opSourceRunner) prepare(
 		}); err != nil {
 			return errors.Trace(err)
 		}
+		if err := loadSnapshotTSOFromMetadata(ctx, store, prepareCtx.state); err != nil {
+			return errors.Trace(err)
+		}
 	}
 	return nil
 }
@@ -544,23 +722,32 @@ func loadIntoSnowflake(
 	ctx context.Context,
 	cfg *Config,
 	cred *credentials.Value,
-	snapshotURI, incrementURI *url.URL,
+	storageURI *url.URL,
+	store storeapi.Storage,
+	stateManager *state.Manager,
 ) error {
 	metrics.TableNumGauge.Add(float64(len(cfg.Tables)))
 	log.Info("starting Snowflake load phase",
 		zap.Int("tableCount", len(cfg.Tables)),
-		zap.String("snapshotStorage", safeURLForLog(snapshotURI)),
-		zap.String("incrementStorage", safeURLForLog(incrementURI)))
+		zap.String("storage", safeURLForLog(storageURI)))
 
 	if cfg.Mode != RunModeIncrementalOnly {
-		if err := snapshot.Load(ctx, snapshot.Config{
-			Snowflake:   cfg.Snowflake,
-			Credential:  cred,
-			Tables:      cfg.Tables,
-			StorageURI:  snapshotURI,
-			Compression: snapshotCompression(cfg),
-		}); err != nil {
-			return errors.Trace(err)
+		if stateManager.Snapshot().Snapshot.Finished {
+			log.Info("snapshot already marked finished in state, skipping Snowflake snapshot load")
+		} else {
+			if err := snapshot.Load(ctx, snapshot.Config{
+				Snowflake:   cfg.Snowflake,
+				Credential:  cred,
+				Tables:      cfg.Tables,
+				StorageURI:  storageURI,
+				StorageDir:  snapshotDirName,
+				Compression: snapshotCompression(cfg),
+			}, store); err != nil {
+				return errors.Trace(err)
+			}
+			if err := markSnapshotFinished(ctx, stateManager); err != nil {
+				return errors.Trace(err)
+			}
 		}
 	}
 	if cfg.Mode != RunModeSnapshotOnly {
@@ -568,9 +755,11 @@ func loadIntoSnowflake(
 			Snowflake:    cfg.Snowflake,
 			Credential:   cred,
 			Tables:       cfg.Tables,
-			StorageURI:   incrementURI,
+			StorageURI:   storageURI,
+			StorageDir:   incrementDirName,
 			ScanInterval: cfg.ChangefeedFlushInterval / 5,
-		}); err != nil {
+			State:        stateManager,
+		}, store); err != nil {
 			return errors.Trace(err)
 		}
 	}

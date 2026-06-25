@@ -10,7 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
@@ -28,6 +27,7 @@ type Config struct {
 	Credential  *credentials.Value
 	Tables      []string
 	StorageURI  *url.URL
+	StorageDir  string
 	Compression string
 }
 
@@ -36,30 +36,23 @@ type snapshotConnector interface {
 	LoadSnapshot(targetTable, filePath string) error
 }
 
-type snapshotTable struct {
+type snapshotFile struct {
 	tableFQN    string
 	targetTable string
+	path        string
 }
 
-type snapshotFile struct {
-	table snapshotTable
-	path  string
-}
-
-func Load(ctx context.Context, cfg Config) error {
+func Load(ctx context.Context, cfg Config, store storeapi.Storage) error {
 	if cfg.StorageURI == nil {
 		return errors.New("snapshot storage URI is empty")
+	}
+	if store == nil {
+		return errors.New("snapshot storage is empty")
 	}
 
 	log.Info("starting Snowflake snapshot load phase",
 		zap.Int("tableCount", len(cfg.Tables)),
 		zap.Int("concurrency", concurrency))
-
-	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, cfg.StorageURI.String())
-	if err != nil {
-		return errors.Trace(err)
-	}
-	defer store.Close()
 
 	conn, err := snowflake.NewConnector(
 		cfg.Snowflake,
@@ -78,7 +71,7 @@ func Load(ctx context.Context, cfg Config) error {
 		return errors.Trace(err)
 	}
 
-	if err := loadSnapshotFiles(ctx, store, tables, conn); err != nil {
+	if err := loadSnapshotFiles(ctx, cfg, store, tables, conn); err != nil {
 		return errors.Trace(err)
 	}
 
@@ -91,23 +84,26 @@ func prepareSnapshotTables(
 	cfg Config,
 	store storeapi.Storage,
 	conn snapshotConnector,
-) (map[string]snapshotTable, error) {
-	tables := make(map[string]snapshotTable, len(cfg.Tables))
+) (map[string]snapshotFile, error) {
+	tables := make(map[string]snapshotFile, len(cfg.Tables))
 
 	for _, tableFQN := range cfg.Tables {
 		sourceDatabase, sourceTable := utils.SplitTableFQN(tableFQN)
-		schemaFilePath := table.SchemaFilePath(sourceDatabase, sourceTable)
+		schemaFilePath := path.Join(cfg.StorageDir, table.SchemaFilePath(sourceDatabase, sourceTable))
 		schemaSQL, err := store.ReadFile(ctx, schemaFilePath)
 		if err != nil {
 			return nil, errors.Annotatef(err, "read snapshot schema file %s", schemaFilePath)
 		}
 		tableSchema := table.BuildSchema(sourceDatabase, sourceTable, string(schemaSQL))
+		if len(tableSchema.PrimaryKeys) == 0 {
+			return nil, errors.Errorf("table %s has no primary key", tableFQN)
+		}
 		if err := conn.CopyTableSchema(tableSchema); err != nil {
 			return nil, errors.Trace(err)
 		}
 
 		prefix := fmt.Sprintf("%s.%s.", sourceDatabase, sourceTable)
-		tables[prefix] = snapshotTable{
+		tables[prefix] = snapshotFile{
 			tableFQN:    tableFQN,
 			targetTable: sourceTable,
 		}
@@ -115,22 +111,23 @@ func prepareSnapshotTables(
 	return tables, nil
 }
 
-func loadSnapshotFiles(ctx context.Context, store storeapi.Storage, tables map[string]snapshotTable, conn snapshotConnector) error {
+func loadSnapshotFiles(ctx context.Context, cfg Config, store storeapi.Storage, tables map[string]snapshotFile, conn snapshotConnector) error {
 	tasks := make(chan snapshotFile, concurrency)
 	g, ctx := errgroup.WithContext(ctx)
 
-	for i := 0; i < concurrency; i++ {
+	for range concurrency {
 		g.Go(func() error {
 			return runSnapshotWorker(ctx, tasks, conn)
 		})
 	}
 
-	g.Go(func() error {
-		defer close(tasks)
-		return scanSnapshotFiles(ctx, store, tables, tasks)
-	})
-
-	return errors.Trace(g.Wait())
+	scanErr := scanSnapshotFiles(ctx, cfg, store, tables, tasks)
+	close(tasks)
+	waitErr := g.Wait()
+	if waitErr != nil {
+		return errors.Trace(waitErr)
+	}
+	return errors.Trace(scanErr)
 }
 
 func runSnapshotWorker(ctx context.Context, tasks <-chan snapshotFile, conn snapshotConnector) error {
@@ -142,10 +139,10 @@ func runSnapshotWorker(ctx context.Context, tasks <-chan snapshotFile, conn snap
 			if !ok {
 				return nil
 			}
-			if err := conn.LoadSnapshot(task.table.targetTable, task.path); err != nil {
-				metrics.AddCounter(metrics.ErrorCounter, 1, task.table.tableFQN)
+			if err := conn.LoadSnapshot(task.targetTable, task.path); err != nil {
+				metrics.AddCounter(metrics.ErrorCounter, 1, task.tableFQN)
 				log.Error("snapshot load failed",
-					zap.String("table", task.table.tableFQN),
+					zap.String("table", task.tableFQN),
 					zap.String("file", task.path),
 					zap.Error(err))
 				return errors.Trace(err)
@@ -156,11 +153,12 @@ func runSnapshotWorker(ctx context.Context, tasks <-chan snapshotFile, conn snap
 
 func scanSnapshotFiles(
 	ctx context.Context,
+	cfg Config,
 	store storeapi.Storage,
-	tables map[string]snapshotTable,
+	tables map[string]snapshotFile,
 	tasks chan<- snapshotFile,
 ) error {
-	return store.WalkDir(ctx, &storeapi.WalkOption{}, func(filePath string, _ int64) error {
+	return store.WalkDir(ctx, &storeapi.WalkOption{SubDir: cfg.StorageDir}, func(filePath string, _ int64) error {
 		task, ok := snapshotTaskForFile(tables, filePath)
 		if !ok {
 			return nil
@@ -174,14 +172,15 @@ func scanSnapshotFiles(
 	})
 }
 
-func snapshotTaskForFile(tables map[string]snapshotTable, filePath string) (snapshotFile, bool) {
+func snapshotTaskForFile(tables map[string]snapshotFile, filePath string) (snapshotFile, bool) {
 	name := path.Base(filePath)
 	if !strings.Contains(name, csvFileExtension) {
 		return snapshotFile{}, false
 	}
 	for prefix, table := range tables {
 		if strings.HasPrefix(name, prefix) {
-			return snapshotFile{table: table, path: filePath}, true
+			table.path = filePath
+			return table, true
 		}
 	}
 	return snapshotFile{}, false

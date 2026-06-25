@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/pingcap/errors"
@@ -34,7 +36,13 @@ type SnapshotState struct {
 }
 
 type IncrementalState struct {
-	Tables map[string]TableState `json:"tables"`
+	CheckpointTS uint64                `json:"checkpoint_ts"`
+	Scan         *ScanState            `json:"scan,omitempty"`
+	Tables       map[string]TableState `json:"tables"`
+}
+
+type ScanState struct {
+	HighWatermark uint64 `json:"high_watermark"`
 }
 
 type TableState struct {
@@ -171,12 +179,35 @@ func validateState(st State, tables []string) error {
 		if tableState.DMLFileWatermarks == nil {
 			return errors.Errorf("state missing required field incremental.tables.%s.dml_file_watermarks", table)
 		}
+		for scope := range tableState.DMLFileWatermarks {
+			if err := validateDMLFileWatermarkScope(scope); err != nil {
+				return errors.Annotatef(err, "invalid dml_file_watermarks scope for table %s", table)
+			}
+		}
+	}
+	return nil
+}
+
+func validateDMLFileWatermarkScope(scope string) error {
+	parts := strings.Split(scope, "/")
+	if len(parts) != 4 {
+		return errors.Errorf("invalid scope %q", scope)
+	}
+	if _, err := strconv.ParseUint(parts[0], 10, 64); err != nil {
+		return errors.Trace(err)
+	}
+	if _, err := strconv.ParseInt(parts[1], 10, 64); err != nil {
+		return errors.Trace(err)
 	}
 	return nil
 }
 
 func cloneState(st State) State {
 	out := st
+	if st.Incremental.Scan != nil {
+		scan := *st.Incremental.Scan
+		out.Incremental.Scan = &scan
+	}
 	out.Incremental.Tables = make(map[string]TableState, len(st.Incremental.Tables))
 	for table, tableState := range st.Incremental.Tables {
 		copiedTable := tableState
@@ -207,7 +238,13 @@ type rawSnapshot struct {
 }
 
 type rawIncremental struct {
-	Tables *map[string]rawTableState `json:"tables"`
+	CheckpointTS *uint64                   `json:"checkpoint_ts"`
+	Scan         *rawScan                  `json:"scan"`
+	Tables       *map[string]rawTableState `json:"tables"`
+}
+
+type rawScan struct {
+	HighWatermark *uint64 `json:"high_watermark"`
 }
 
 type rawTableState struct {
@@ -251,6 +288,12 @@ func decodeState(data []byte) (State, error) {
 	if raw.Incremental == nil {
 		return State{}, errors.New("state missing required field incremental")
 	}
+	if raw.Incremental.CheckpointTS == nil {
+		return State{}, errors.New("state missing required field incremental.checkpoint_ts")
+	}
+	if raw.Incremental.Scan != nil && raw.Incremental.Scan.HighWatermark == nil {
+		return State{}, errors.New("state missing required field incremental.scan.high_watermark")
+	}
 	if raw.Incremental.Tables == nil {
 		return State{}, errors.New("state missing required field incremental.tables")
 	}
@@ -266,8 +309,12 @@ func decodeState(data []byte) (State, error) {
 			Finished: *raw.Snapshot.Finished,
 		},
 		Incremental: IncrementalState{
-			Tables: make(map[string]TableState, len(*raw.Incremental.Tables)),
+			CheckpointTS: *raw.Incremental.CheckpointTS,
+			Tables:       make(map[string]TableState, len(*raw.Incremental.Tables)),
 		},
+	}
+	if raw.Incremental.Scan != nil {
+		st.Incremental.Scan = &ScanState{HighWatermark: *raw.Incremental.Scan.HighWatermark}
 	}
 	for table, tableState := range *raw.Incremental.Tables {
 		if tableState.DMLFileWatermarks == nil {

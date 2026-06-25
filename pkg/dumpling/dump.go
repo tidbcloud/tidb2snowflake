@@ -127,6 +127,8 @@ func Run(ctx context.Context, tidbCfg *tidb.Config, cfg Config) error {
 			defer ticker.Stop()
 			for {
 				select {
+				case <-ctx.Done():
+					return
 				case <-done:
 					return
 				case <-ticker.C:

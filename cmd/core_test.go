@@ -8,8 +8,10 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
+	"github.com/tidbcloud/tidb2snowflake/pkg/state"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 )
@@ -184,29 +186,32 @@ func TestEnsureManagedSourceJobCreatesAndWaits(t *testing.T) {
 	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
 	require.NoError(t, err)
 
-	state := &sourceJobState{}
+	manager := newCmdTestStateManager(t, ctx, store)
 
 	var created bool
 	var waitedID string
 	err = ensureManagedSourceJob(ctx, sourcePrepareContext{
 		store: store,
-		state: state,
+		state: manager,
 	}, fakeSourceRunner{
 		jobName: "test changefeed",
 		dir:     incrementDirName,
-		createFn: func(context.Context, *sourceJobState) (*managedSourceJobResult, error) {
+		createFn: func(context.Context, sourcePrepareContext) (*managedSourceJobResult, error) {
 			created = true
 			return &managedSourceJobResult{ID: "cf-1", SnapshotTSO: "449"}, nil
 		},
-		waitFn: func(_ context.Context, id string) error {
+		waitFn: func(_ context.Context, _ sourcePrepareContext, _ sourceJobType, id string) (*managedSourceJobResult, error) {
 			waitedID = id
-			return nil
+			return &managedSourceJobResult{ID: id}, nil
 		},
 	}, sourceJobChangefeed)
 	require.NoError(t, err)
 	require.True(t, created)
-	require.Equal(t, "449", state.SnapshotTSO)
 	require.Equal(t, "cf-1", waitedID)
+
+	st := manager.Snapshot()
+	require.Equal(t, "449", st.Snapshot.TSO)
+	require.Equal(t, "cf-1", st.TaskInfo.ChangefeedID)
 }
 
 func TestEnsureManagedSourceJobSkipsWhenStorageDataExists(t *testing.T) {
@@ -216,31 +221,141 @@ func TestEnsureManagedSourceJobSkipsWhenStorageDataExists(t *testing.T) {
 
 	require.NoError(t, store.WriteFile(ctx, incrementDirName+"/metadata", []byte("ready")))
 
-	state := &sourceJobState{}
+	manager := newCmdTestStateManager(t, ctx, store)
 	err = ensureManagedSourceJob(ctx, sourcePrepareContext{
 		store: store,
-		state: state,
+		state: manager,
 	}, fakeSourceRunner{
 		jobName: "test changefeed",
 		dir:     incrementDirName,
-		createFn: func(context.Context, *sourceJobState) (*managedSourceJobResult, error) {
+		createFn: func(context.Context, sourcePrepareContext) (*managedSourceJobResult, error) {
 			t.Fatal("create should not be called when storage data exists")
 			return nil, nil
 		},
-		waitFn: func(context.Context, string) error {
+		waitFn: func(context.Context, sourcePrepareContext, sourceJobType, string) (*managedSourceJobResult, error) {
 			t.Fatal("wait should not be called when storage data exists")
-			return nil
+			return nil, nil
 		},
 	}, sourceJobChangefeed)
 	require.NoError(t, err)
-	require.Empty(t, state.SnapshotTSO)
+	require.Empty(t, manager.Snapshot().Snapshot.TSO)
+}
+
+func TestEnsureManagedSourceJobWaitsExistingJobFromState(t *testing.T) {
+	ctx := context.Background()
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
+	manager := newCmdTestStateManager(t, ctx, store)
+	require.NoError(t, manager.Update(ctx, func(st *state.State) error {
+		st.TaskInfo.ExportID = "exp-1"
+		return nil
+	}))
+	require.NoError(t, store.WriteFile(ctx, snapshotDirName+"/db1.t1.000000.csv", []byte("partial")))
+
+	var waitedID string
+	err = ensureManagedSourceJob(ctx, sourcePrepareContext{
+		store: store,
+		state: manager,
+	}, fakeSourceRunner{
+		jobName: "test export",
+		dir:     snapshotDirName,
+		createFn: func(context.Context, sourcePrepareContext) (*managedSourceJobResult, error) {
+			t.Fatal("create should not be called when state has the source job id")
+			return nil, nil
+		},
+		waitFn: func(_ context.Context, _ sourcePrepareContext, _ sourceJobType, id string) (*managedSourceJobResult, error) {
+			waitedID = id
+			return &managedSourceJobResult{ID: id, SnapshotTSO: "466924115091783691"}, nil
+		},
+	}, sourceJobExport)
+	require.NoError(t, err)
+	require.Equal(t, "exp-1", waitedID)
+	require.Equal(t, "466924115091783691", manager.Snapshot().Snapshot.TSO)
+}
+
+func TestLoadExistingSnapshotTSOFromMetadata(t *testing.T) {
+	ctx := context.Background()
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
+	manager := newCmdTestStateManager(t, ctx, store)
+	require.NoError(t, store.WriteFile(ctx, snapshotDirName+"/metadata", []byte(`Started dump at: 2026-06-11 10:35:45
+SHOW MASTER STATUS:
+	Log: tidb-binlog
+	Pos: 466924115091783691
+	GTID:
+
+Finished dump at: 2026-06-11 10:35:48
+`)))
+
+	require.NoError(t, loadExistingSnapshotTSO(ctx, store, manager))
+	require.Equal(t, "466924115091783691", manager.Snapshot().Snapshot.TSO)
+}
+
+func TestLoadSnapshotTSOFromMetadataRequiresMetadata(t *testing.T) {
+	ctx := context.Background()
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
+	manager := newCmdTestStateManager(t, ctx, store)
+	require.NoError(t, store.WriteFile(ctx, snapshotDirName+"/db1.t1.000001.csv", []byte("1\n")))
+
+	err = loadSnapshotTSOFromMetadata(ctx, store, manager)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "snapshot/metadata is missing")
+}
+
+func TestLoadExistingSnapshotTSORejectsMismatch(t *testing.T) {
+	ctx := context.Background()
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
+	manager := newCmdTestStateManager(t, ctx, store)
+	require.NoError(t, setSnapshotTSO(ctx, manager, "466924115091783691"))
+	require.NoError(t, store.WriteFile(ctx, snapshotDirName+"/metadata", []byte("Pos: 466924115091783692\n")))
+
+	err = loadExistingSnapshotTSO(ctx, store, manager)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "snapshot.tso mismatch")
+}
+
+func TestSnapshotTSOFromMetadata(t *testing.T) {
+	tso, err := snapshotTSOFromMetadata([]byte("Started dump at: x\n\tPos: 466924115091783691\n"))
+	require.NoError(t, err)
+	require.Equal(t, "466924115091783691", tso)
+
+	_, err = snapshotTSOFromMetadata([]byte("Started dump at: x\n"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Pos is missing")
+}
+
+func TestMarkSnapshotFinishedInitializesIncrementalCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
+	manager := newCmdTestStateManager(t, ctx, store)
+	require.NoError(t, setSnapshotTSO(ctx, manager, "466924115091783691"))
+
+	require.NoError(t, markSnapshotFinished(ctx, manager))
+	st := manager.Snapshot()
+	require.True(t, st.Snapshot.Finished)
+	require.Equal(t, uint64(466924115091783691), st.Incremental.CheckpointTS)
+}
+
+func TestSetSnapshotTSORejectsMismatch(t *testing.T) {
+	ctx := context.Background()
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
+	manager := newCmdTestStateManager(t, ctx, store)
+	require.NoError(t, setSnapshotTSO(ctx, manager, "466924115091783691"))
+
+	err = setSnapshotTSO(ctx, manager, "466924115091783692")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "snapshot.tso mismatch")
 }
 
 type fakeSourceRunner struct {
 	jobName  string
 	dir      string
-	createFn func(context.Context, *sourceJobState) (*managedSourceJobResult, error)
-	waitFn   func(context.Context, string) error
+	createFn func(context.Context, sourcePrepareContext) (*managedSourceJobResult, error)
+	waitFn   func(context.Context, sourcePrepareContext, sourceJobType, string) (*managedSourceJobResult, error)
 }
 
 func (r fakeSourceRunner) prepare(context.Context, sourcePrepareContext) error { return nil }
@@ -252,21 +367,28 @@ func (r fakeSourceRunner) sourceJobStorageDir(sourceJobType) string { return r.d
 func (r fakeSourceRunner) createSourceJob(
 	ctx context.Context,
 	prepareCtx sourcePrepareContext,
-	_ sourceJobType,
+	jobType sourceJobType,
 ) (*managedSourceJobResult, error) {
-	return r.createFn(ctx, prepareCtx.state)
+	return r.createFn(ctx, prepareCtx)
 }
 
 func (r fakeSourceRunner) waitSourceJob(
 	ctx context.Context,
-	_ sourcePrepareContext,
-	_ sourceJobType,
+	prepareCtx sourcePrepareContext,
+	jobType sourceJobType,
 	id string,
-) error {
+) (*managedSourceJobResult, error) {
 	if r.waitFn == nil {
-		return nil
+		return &managedSourceJobResult{ID: id}, nil
 	}
-	return r.waitFn(ctx, id)
+	return r.waitFn(ctx, prepareCtx, jobType, id)
+}
+
+func newCmdTestStateManager(t *testing.T, ctx context.Context, store storeapi.Storage) *state.Manager {
+	t.Helper()
+	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"})
+	require.NoError(t, err)
+	return manager
 }
 
 func validationConfig() *Config {

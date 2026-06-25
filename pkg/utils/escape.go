@@ -10,10 +10,6 @@ func EscapeString(s string) string {
 	var sb strings.Builder
 	for i := 0; i < len(s); i++ {
 		r := s[i]
-		if strconv.IsPrint(rune(r)) {
-			sb.WriteByte(r)
-			continue
-		}
 		switch r {
 		case '\'':
 			sb.Write([]byte{'\\', '\''})
@@ -34,6 +30,10 @@ func EscapeString(s string) string {
 		case 0:
 			sb.Write([]byte{'\\', '0'})
 		default:
+			if strconv.IsPrint(rune(r)) {
+				sb.WriteByte(r)
+				continue
+			}
 			sb.WriteString("\\u")
 			sb.WriteString(strconv.FormatInt(int64(r), 16))
 		}

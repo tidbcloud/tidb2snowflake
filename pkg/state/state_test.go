@@ -25,6 +25,8 @@ func TestOpenCreatesStateFile(t *testing.T) {
 	require.Empty(t, st.TaskInfo.ChangefeedID)
 	require.Empty(t, st.Snapshot.TSO)
 	require.False(t, st.Snapshot.Finished)
+	require.Zero(t, st.Incremental.CheckpointTS)
+	require.Nil(t, st.Incremental.Scan)
 	require.Equal(t, TableState{DMLFileWatermarks: map[string]uint64{}}, st.Incremental.Tables["db1.t1"])
 	require.Equal(t, TableState{DMLFileWatermarks: map[string]uint64{}}, st.Incremental.Tables["db2.t2"])
 
@@ -46,6 +48,7 @@ func TestOpenRejectsMissingRequiredField(t *testing.T) {
     "finished": false
   },
   "incremental": {
+    "checkpoint_ts": 0,
     "tables": {}
   }
 }`)))
@@ -70,6 +73,7 @@ func TestOpenRejectsUnknownField(t *testing.T) {
     "extra": true
   },
   "incremental": {
+    "checkpoint_ts": 0,
     "tables": {}
   }
 }`)))
@@ -93,6 +97,7 @@ func TestOpenAddsConfiguredTableEntries(t *testing.T) {
     "finished": true
   },
   "incremental": {
+    "checkpoint_ts": 0,
     "tables": {
       "db1.t1": {
         "dml_file_watermarks": {
@@ -123,6 +128,8 @@ func TestUpdatePersistsState(t *testing.T) {
 		st.TaskInfo.ExportID = "exp-1"
 		st.Snapshot.TSO = "449"
 		st.Snapshot.Finished = true
+		st.Incremental.CheckpointTS = 450
+		st.Incremental.Scan = &ScanState{HighWatermark: 500}
 		tableState := st.Incremental.Tables["db.t"]
 		tableState.DMLFileWatermarks["42/0/2026-06-25/"] = 9
 		tableState.DDLTableVersionWatermark = 42
@@ -137,6 +144,8 @@ func TestUpdatePersistsState(t *testing.T) {
 	require.Equal(t, "exp-1", st.TaskInfo.ExportID)
 	require.Equal(t, "449", st.Snapshot.TSO)
 	require.True(t, st.Snapshot.Finished)
+	require.Equal(t, uint64(450), st.Incremental.CheckpointTS)
+	require.Equal(t, &ScanState{HighWatermark: 500}, st.Incremental.Scan)
 	require.Equal(t, uint64(9), st.Incremental.Tables["db.t"].DMLFileWatermarks["42/0/2026-06-25/"])
 	require.Equal(t, uint64(42), st.Incremental.Tables["db.t"].DDLTableVersionWatermark)
 }
@@ -164,12 +173,14 @@ func TestSnapshotReturnsDeepCopy(t *testing.T) {
 
 	snapshot := manager.Snapshot()
 	snapshot.Snapshot.Finished = true
+	snapshot.Incremental.Scan = &ScanState{HighWatermark: 500}
 	tableState := snapshot.Incremental.Tables["db.t"]
 	tableState.DMLFileWatermarks["42/0/2026-06-25/"] = 9
 	snapshot.Incremental.Tables["db.t"] = tableState
 
 	st := manager.Snapshot()
 	require.False(t, st.Snapshot.Finished)
+	require.Nil(t, st.Incremental.Scan)
 	require.Empty(t, st.Incremental.Tables["db.t"].DMLFileWatermarks)
 }
 
@@ -203,7 +214,7 @@ func TestWrittenStateContainsOnlyV1Fields(t *testing.T) {
 	require.ElementsMatch(t, []string{"export_id", "changefeed_id"}, mapKeys(doc["task_info"].(map[string]any)))
 	require.ElementsMatch(t, []string{"tso", "finished"}, mapKeys(doc["snapshot"].(map[string]any)))
 	incremental := doc["incremental"].(map[string]any)
-	require.ElementsMatch(t, []string{"tables"}, mapKeys(incremental))
+	require.ElementsMatch(t, []string{"checkpoint_ts", "tables"}, mapKeys(incremental))
 	tables := incremental["tables"].(map[string]any)
 	tableState := tables["db.t"].(map[string]any)
 	require.ElementsMatch(t, []string{"dml_file_watermarks", "ddl_table_version_watermark"}, mapKeys(tableState))

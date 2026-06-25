@@ -4,28 +4,20 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
-	"strings"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 	"go.uber.org/zap"
 )
 
-// A Wrapper of snowflake connection.
-// It implements the coreinterfaces.Connector interface.
 type Connector struct {
 	// db is the connection to snowflake.
 	db *sql.DB
 
 	stageName            string
 	stageFileCompression string
-
-	s3Credentials *credentials.Value
-
-	columns []cloudstorage.TableCol
 }
 
 type Option func(*Connector)
@@ -51,10 +43,8 @@ func NewConnector(sfConfig *Config, stageName string, storageURI *url.URL, crede
 	}
 
 	sc := &Connector{
-		db:            db,
-		stageName:     stageName,
-		s3Credentials: credentials,
-		columns:       nil,
+		db:        db,
+		stageName: stageName,
 	}
 	for _, opt := range opts {
 		opt(sc)
@@ -65,52 +55,9 @@ func NewConnector(sfConfig *Config, stageName string, storageURI *url.URL, crede
 	return sc, nil
 }
 
-func (sc *Connector) InitSchema(columns []cloudstorage.TableCol) error {
-	if len(sc.columns) != 0 {
-		return nil
-	}
-	if len(columns) == 0 {
-		return errors.New("Columns in schema is empty")
-	}
-	sc.columns = columns
-	log.Info("table columns initialized",
-		zap.Int("columnCount", len(columns)),
-		zap.Strings("columns", tableColumnNames(columns)))
-	return nil
-}
-
-func (sc *Connector) ExecDDL(schemaFile cloudstorage.SchemaFile) error {
-	if len(sc.columns) == 0 {
-		return errors.New("Columns not initialized. Maybe you execute a DDL before all DMLs, which is not supported now.")
-	}
-	ddls, err := GenDDLViaColumnsDiff(sc.columns, schemaFile)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if len(ddls) == 0 {
-		log.Info("No need to execute this DDL in Snowflake",
-			zap.String("ddl", schemaFile.Query),
-			zap.Uint64("tableVersion", schemaFile.TableVersion))
-		return nil
-	}
-	// One DDL may be rewritten to multiple DDLs
-	for _, ddl := range ddls {
-		_, err := sc.db.Exec(ddl)
-		if err != nil {
-			log.Error("Failed to executed DDL",
-				zap.String("received", schemaFile.Query),
-				zap.String("rewritten", strings.Join(ddls, "\n")),
-				zap.Uint64("tableVersion", schemaFile.TableVersion))
-			return errors.Annotate(err, fmt.Sprint("failed to execute", ddl))
-		}
-	}
-	// update columns
-	sc.columns = schemaFile.Columns
-	log.Info("Successfully executed DDL",
-		zap.String("received", schemaFile.Query),
-		zap.String("rewritten", strings.Join(ddls, "\n")),
-		zap.Uint64("tableVersion", schemaFile.TableVersion))
-	return nil
+func (sc *Connector) ExecDDL(ddl string) error {
+	_, err := sc.db.Exec(ddl)
+	return errors.Trace(err)
 }
 
 func (sc *Connector) CopyTableSchema(tableSchema *table.Meta) error {
@@ -138,9 +85,12 @@ func (sc *Connector) LoadSnapshot(targetTable, filePath string) error {
 	return nil
 }
 
-func (sc *Connector) LoadIncrement(schemaFile cloudstorage.SchemaFile, filePath string) error {
+func (sc *Connector) LoadIncrement(tableMeta *table.Meta, filePath string) error {
+	if len(tableMeta.PrimaryKeys) == 0 {
+		return errors.Errorf("table %s has no primary key", tableMeta.Table)
+	}
 	// merge staged file into table
-	mergeQuery := GenMergeInto(schemaFile, filePath, sc.stageName)
+	mergeQuery := GenMergeInto(tableMeta, filePath, sc.stageName)
 	_, err := sc.db.Exec(mergeQuery)
 	if err != nil {
 		return errors.Trace(err)
@@ -157,12 +107,4 @@ func (sc *Connector) Close() {
 		log.Info("Snowflake external stage dropped", zap.String("stage", sc.stageName))
 	}
 	sc.db.Close()
-}
-
-func tableColumnNames(columns []cloudstorage.TableCol) []string {
-	names := make([]string, 0, len(columns))
-	for _, col := range columns {
-		names = append(names, col.Name)
-	}
-	return names
 }

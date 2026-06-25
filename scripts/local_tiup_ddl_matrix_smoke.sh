@@ -63,6 +63,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
+	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 )
 
@@ -143,25 +144,25 @@ func checkLiveDDL(db *sql.DB) {
 
 	aliases := map[string]string{}
 	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" ADD COLUMN c_added_nullable VARCHAR(64) NULL",
-		"ALTER TABLE "+ddlTable+" ADD COLUMN c_added_nullable VARCHAR(64);")
+		"ALTER TABLE \""+ddlTable+"\" ADD COLUMN \"c_added_nullable\" VARCHAR(64);")
 	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" ADD COLUMN c_added_not_null_default INT NOT NULL DEFAULT 7",
-		"ALTER TABLE "+ddlTable+" ADD COLUMN c_added_not_null_default NUMBER NOT NULL DEFAULT 7;")
+		"ALTER TABLE \""+ddlTable+"\" ADD COLUMN \"c_added_not_null_default\" NUMBER NOT NULL DEFAULT 7;")
 	expectDDL(db, aliases, map[string]string{"c_renamed": "c_rename_me"}, "ALTER TABLE "+dbName+"."+ddlTable+" RENAME COLUMN c_rename_me TO c_renamed",
-		"ALTER TABLE "+ddlTable+" RENAME COLUMN c_rename_me TO c_renamed;")
+		"ALTER TABLE \""+ddlTable+"\" RENAME COLUMN \"c_rename_me\" TO \"c_renamed\";")
 	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_widen_int BIGINT NULL",
-		"ALTER TABLE "+ddlTable+" MODIFY COLUMN c_widen_int NUMBER;")
+		"ALTER TABLE \""+ddlTable+"\" MODIFY COLUMN \"c_widen_int\" NUMBER;")
 	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_widen_varchar VARCHAR(128) NULL",
-		"ALTER TABLE "+ddlTable+" MODIFY COLUMN c_widen_varchar VARCHAR(128);")
+		"ALTER TABLE \""+ddlTable+"\" MODIFY COLUMN \"c_widen_varchar\" VARCHAR(128);")
 	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_widen_decimal DECIMAL(20, 6) NULL",
-		"ALTER TABLE "+ddlTable+" MODIFY COLUMN c_widen_decimal NUMBER(20, 6);")
+		"ALTER TABLE \""+ddlTable+"\" MODIFY COLUMN \"c_widen_decimal\" NUMBER(20, 6);")
 	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_nullable VARCHAR(64) NOT NULL",
-		"ALTER TABLE "+ddlTable+" MODIFY COLUMN c_nullable SET NOT NULL;")
+		"ALTER TABLE \""+ddlTable+"\" MODIFY COLUMN \"c_nullable\" SET NOT NULL;")
 	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_nullable VARCHAR(64) NULL",
-		"ALTER TABLE "+ddlTable+" MODIFY COLUMN c_nullable DROP NOT NULL;")
+		"ALTER TABLE \""+ddlTable+"\" MODIFY COLUMN \"c_nullable\" DROP NOT NULL;")
 	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" ALTER COLUMN c_default DROP DEFAULT",
-		"ALTER TABLE "+ddlTable+" MODIFY COLUMN c_default DROP DEFAULT;")
+		"ALTER TABLE \""+ddlTable+"\" MODIFY COLUMN \"c_default\" DROP DEFAULT;")
 	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" DROP COLUMN c_drop_me",
-		"ALTER TABLE "+ddlTable+" DROP COLUMN c_drop_me;")
+		"ALTER TABLE \""+ddlTable+"\" DROP COLUMN \"c_drop_me\";")
 }
 
 func exec(db *sql.DB, query string) {
@@ -171,17 +172,21 @@ func exec(db *sql.DB, query string) {
 }
 
 func expectDDL(db *sql.DB, aliases map[string]string, newAliases map[string]string, query string, expected ...string) {
-	prev := columns(db, aliases)
+	prev := &table.Meta{
+		Schema:  dbName,
+		Table:   ddlTable,
+		Columns: columns(db, aliases),
+	}
 	exec(db, query)
 	for name, id := range newAliases {
 		aliases[name] = id
 	}
-	curr := columns(db, aliases)
-	got, err := snowsql.GenDDLViaColumnsDiff(prev, cloudstorage.SchemaFile{
+	next := table.FromSchemaFile(cloudstorage.SchemaFile{
 		Schema:  dbName,
 		Table:   ddlTable,
-		Columns: curr,
+		Columns: columns(db, aliases),
 	})
+	got, err := snowflake.GenDDLViaMetaDiff(prev, next, model.ActionNone)
 	must(err)
 	assertElements(got, expected)
 }
@@ -208,20 +213,20 @@ func checkSyntheticTableDDL() {
 		{
 			name: "truncate",
 			def:  cloudstorage.SchemaFile{Table: "t_truncate", Type: model.ActionTruncateTable},
-			want: []string{"TRUNCATE TABLE t_truncate"},
+			want: []string{"TRUNCATE TABLE \"t_truncate\""},
 		},
 		{
 			name: "drop table",
 			def:  cloudstorage.SchemaFile{Table: "t_drop", Type: model.ActionDropTable},
-			want: []string{"DROP TABLE t_drop"},
+			want: []string{"DROP TABLE \"t_drop\""},
 		},
 		{
 			name: "drop schema",
 			def:  cloudstorage.SchemaFile{Schema: "s_drop", Type: model.ActionDropSchema},
-			want: []string{"DROP SCHEMA s_drop"},
+			want: []string{"DROP SCHEMA \"s_drop\""},
 		},
 	} {
-		got, err := snowsql.GenDDLViaColumnsDiff(nil, tc.def)
+		got, err := snowflake.GenDDLViaMetaDiff(nil, table.FromSchemaFile(tc.def), model.ActionType(tc.def.Type))
 		must(err)
 		assertElements(got, tc.want)
 	}

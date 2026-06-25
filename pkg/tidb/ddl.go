@@ -113,11 +113,11 @@ func GetColumnDiff(prev []cloudstorage.TableCol, curr []cloudstorage.TableCol) (
 }
 
 func GetTiDBTableColumn(db *sql.DB, sourceDatabase, sourceTable string) ([]cloudstorage.TableCol, error) {
-	columnQuery := fmt.Sprintf(`SELECT COLUMN_NAME, COLUMN_DEFAULT, IS_NULLABLE, DATA_TYPE,
+	columnQuery := `SELECT COLUMN_NAME, COLUMN_DEFAULT, IS_NULLABLE, DATA_TYPE,
 CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION, COLUMN_TYPE, EXTRA
 FROM information_schema.columns
-WHERE table_schema = "%s" AND table_name = "%s"`, sourceDatabase, sourceTable) // FIXME: Escape
-	rows, err := db.Query(columnQuery)
+WHERE table_schema = ? AND table_name = ?`
+	rows, err := db.Query(columnQuery, sourceDatabase, sourceTable)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -196,7 +196,7 @@ WHERE table_schema = "%s" AND table_name = "%s"`, sourceDatabase, sourceTable) /
 }
 
 func GetTiDBTablePKColumns(db *sql.DB, sourceDatabase, sourceTable string) ([]string, error) {
-	indexQuery := fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", sourceDatabase, sourceTable) // FIXME: Escape
+	indexQuery := fmt.Sprintf("SHOW INDEX FROM %s.%s", quoteIdent(sourceDatabase), quoteIdent(sourceTable))
 	indexRows, err := db.Query(indexQuery)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -220,4 +220,8 @@ func GetTiDBTablePKColumns(db *sql.DB, sourceDatabase, sourceTable string) ([]st
 		}
 	}
 	return pkColumns, nil
+}
+
+func quoteIdent(ident string) string {
+	return "`" + strings.ReplaceAll(ident, "`", "``") + "`"
 }

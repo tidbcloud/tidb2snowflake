@@ -12,11 +12,10 @@ import (
 func newRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "tidb2snowflake",
-		Short: "Replicate data from TiDB Cloud to Snowflake via TiDB Cloud OpenAPI",
-		Long: "tidb2snowflake orchestrates a TiDB Cloud Serverless/Essential cluster to\n" +
-			"replicate snapshot and incremental data into Snowflake. Snapshot export and\n" +
-			"incremental changefeed are driven through TiDB Cloud OpenAPI; this tool loads\n" +
-			"the resulting object-storage files into Snowflake.",
+		Short: "Replicate TiDB snapshot and incremental data into Snowflake",
+		Long: "tidb2snowflake loads TiDB snapshot and incremental object-storage files into Snowflake.\n" +
+			"It can create TiDB Cloud export/changefeed jobs through OpenAPI, or use OP\n" +
+			"Dumpling/TiCDC output for self-managed TiDB deployments.",
 		SilenceUsage: true,
 	}
 

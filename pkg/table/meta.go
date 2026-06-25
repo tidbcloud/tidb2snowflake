@@ -29,6 +29,21 @@ type Meta struct {
 	PrimaryKeys []string
 }
 
+func FromSchemaFile(schemaFile cloudstorage.SchemaFile) *Meta {
+	primaryKeys := make([]string, 0)
+	for _, col := range schemaFile.Columns {
+		if col.IsPK == "true" {
+			primaryKeys = append(primaryKeys, col.Name)
+		}
+	}
+	return &Meta{
+		Schema:      schemaFile.Schema,
+		Table:       schemaFile.Table,
+		Columns:     append([]cloudstorage.TableCol(nil), schemaFile.Columns...),
+		PrimaryKeys: primaryKeys,
+	}
+}
+
 func BuildSchema(database, table, createTableDDL string) *Meta {
 	p := parser.New()
 	stmts, _, err := p.Parse(createTableDDL, "", "")

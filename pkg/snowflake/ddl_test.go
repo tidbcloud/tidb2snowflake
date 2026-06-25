@@ -4,34 +4,40 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
+	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 )
 
-func TestGenDDLViaColumnsDiff(t *testing.T) {
-	prevColumns := []cloudstorage.TableCol{
-		{
-			ID:        "1",
-			Name:      "id",
-			Tp:        "int",
-			Precision: "11",
-		},
-		{
-			ID:   "2",
-			Name: "name",
-			Tp:   "varchar",
-		},
-		{
-			ID:   "3",
-			Name: "age",
-			Tp:   "int",
-		},
-		{
-			ID:   "4",
-			Name: "birth",
-			Tp:   "date",
+func TestGenDDLViaMetaDiff(t *testing.T) {
+	prevMeta := &table.Meta{
+		Table:  "test_table",
+		Schema: "test_schema",
+		Columns: []cloudstorage.TableCol{
+			{
+				ID:        "1",
+				Name:      "id",
+				Tp:        "int",
+				Precision: "11",
+			},
+			{
+				ID:   "2",
+				Name: "name",
+				Tp:   "varchar",
+			},
+			{
+				ID:   "3",
+				Name: "age",
+				Tp:   "int",
+			},
+			{
+				ID:   "4",
+				Name: "birth",
+				Tp:   "date",
+			},
 		},
 	}
-	curTableDef := cloudstorage.SchemaFile{
+	nextMeta := table.FromSchemaFile(cloudstorage.SchemaFile{
 		Table:  "test_table",
 		Schema: "test_schema",
 		Columns: []cloudstorage.TableCol{
@@ -58,16 +64,16 @@ func TestGenDDLViaColumnsDiff(t *testing.T) {
 				Precision: "10",
 			},
 		},
-	}
+	})
 
 	expectedDDLs := []string{
-		"ALTER TABLE test_table MODIFY COLUMN id CHAR(10);",
-		"ALTER TABLE test_table RENAME COLUMN name TO color;",
-		"ALTER TABLE test_table DROP COLUMN age;",
-		"ALTER TABLE test_table ADD COLUMN gender VARCHAR(10);",
+		`ALTER TABLE "test_table" MODIFY COLUMN "id" CHAR(10);`,
+		`ALTER TABLE "test_table" RENAME COLUMN "name" TO "color";`,
+		`ALTER TABLE "test_table" DROP COLUMN "age";`,
+		`ALTER TABLE "test_table" ADD COLUMN "gender" VARCHAR(10);`,
 	}
 
-	ddl, err := GenDDLViaColumnsDiff(prevColumns, curTableDef)
+	ddl, err := GenDDLViaMetaDiff(prevMeta, nextMeta, model.ActionNone)
 	require.NoError(t, err)
 	require.ElementsMatch(t, expectedDDLs, ddl)
 }
@@ -81,17 +87,17 @@ func TestGetSnowflakeTypeString_NewScalarMappings(t *testing.T) {
 		{
 			name: "year",
 			col:  cloudstorage.TableCol{Name: "c_year", Tp: "year"},
-			want: "c_year NUMBER",
+			want: `"c_year" NUMBER`,
 		},
 		{
 			name: "enum",
 			col:  cloudstorage.TableCol{Name: "c_enum", Tp: "enum"},
-			want: "c_enum VARCHAR",
+			want: `"c_enum" VARCHAR`,
 		},
 		{
 			name: "vector",
 			col:  cloudstorage.TableCol{Name: "c_vector", Tp: "vector"},
-			want: "c_vector VARCHAR",
+			want: `"c_vector" VARCHAR`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
