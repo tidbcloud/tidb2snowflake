@@ -16,10 +16,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func snapshotLoadInfoPath(sourceDatabase, sourceTable string) string {
-	return fmt.Sprintf("%s.%s.loadinfo", sourceDatabase, sourceTable)
-}
-
 type session struct {
 	connector *snowflake.Connector
 
@@ -61,18 +57,6 @@ func newSession(
 }
 
 func (sess *session) Run() error {
-	loadInfoPath := snapshotLoadInfoPath(sess.SourceDatabase, sess.SourceTable)
-	sess.logger.Info("checking snapshot load marker", zap.String("loadinfo", loadInfoPath))
-	loaded, err := sess.storage.FileExists(sess.ctx, loadInfoPath)
-	if err != nil {
-		return errors.Annotate(err, "check snapshot loadinfo")
-	}
-	if loaded {
-		sess.logger.Info("snapshot has already been loaded, skipping snapshot load",
-			zap.String("loadinfo", loadInfoPath))
-		return nil
-	}
-
 	switch sess.StorageWorkspaceUri.Scheme {
 	case "s3", "gcs", "gs":
 		sess.logger.Info("copying source table schema to data warehouse")
@@ -98,18 +82,6 @@ func (sess *session) Run() error {
 	}
 	endTime := time.Now()
 	sess.logger.Info("Successfully load all snapshot data into data warehouse", zap.Duration("cost", endTime.Sub(startTime)))
-
-	// Write load info to workspace to record the status of load,
-	// loadinfo exists means the data has been all loaded into data warehouse.
-	loadinfo := fmt.Sprintf("Copy to data warehouse start time: %s\nCopy to data warehouse end time: %s\n", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
-	if err := sess.storage.WriteFile(sess.ctx, loadInfoPath, []byte(loadinfo)); err != nil {
-		sess.logger.Error("Failed to upload loadinfo", zap.Error(err))
-		return errors.Annotate(err, "upload snapshot loadinfo")
-	}
-	sess.logger.Info("Successfully upload loadinfo",
-		zap.String("path", loadInfoPath),
-		zap.Time("startTime", startTime),
-		zap.Time("endTime", endTime))
 	return nil
 }
 
