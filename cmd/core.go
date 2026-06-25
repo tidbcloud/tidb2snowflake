@@ -12,8 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/tidb/br/pkg/storage"
-	putil "github.com/pingcap/tiflow/pkg/util"
+	putil "github.com/pingcap/ticdc/pkg/util"
+	storage "github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/thediveo/enumflag"
 	"github.com/tidbcloud/tidb2snowflake/pkg/dumpling"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
@@ -138,7 +138,7 @@ const (
 )
 
 type sourcePrepareContext struct {
-	store             storage.ExternalStorage
+	store             storage.Storage
 	state             *runState
 	cred              *credentials.Value
 	snapshotURI       *url.URL
@@ -462,7 +462,7 @@ func Replicate(ctx context.Context, cfg *Config) error {
 		return errors.Trace(err)
 	}
 
-	store, err := putil.GetExternalStorageFromURI(ctx, storageURI.String())
+	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, storageURI.String())
 	if err != nil {
 		return errors.Annotate(err, "open storage")
 	}
@@ -979,7 +979,7 @@ var errWalkStop = errors.New("stop walk")
 // contains at least one object. It is used to detect a snapshot/increment
 // produced by a previous run or created directly by the user, so it is not
 // re-created.
-func dirHasObjects(ctx context.Context, store storage.ExternalStorage, subDir string) (bool, error) {
+func dirHasObjects(ctx context.Context, store storage.Storage, subDir string) (bool, error) {
 	found := false
 	err := store.WalkDir(ctx, &storage.WalkOption{SubDir: subDir, ListCount: 1}, func(string, int64) error {
 		found = true
@@ -994,7 +994,7 @@ func dirHasObjects(ctx context.Context, store storage.ExternalStorage, subDir st
 	return false, nil
 }
 
-func loadState(ctx context.Context, store storage.ExternalStorage) (*runState, error) {
+func loadState(ctx context.Context, store storage.Storage) (*runState, error) {
 	exists, err := store.FileExists(ctx, stateFileName)
 	if err != nil {
 		return nil, errors.Annotate(err, "check state file")
@@ -1013,7 +1013,7 @@ func loadState(ctx context.Context, store storage.ExternalStorage) (*runState, e
 	return &s, nil
 }
 
-func saveState(ctx context.Context, store storage.ExternalStorage, state *runState) error {
+func saveState(ctx context.Context, store storage.Storage, state *runState) error {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return errors.Trace(err)

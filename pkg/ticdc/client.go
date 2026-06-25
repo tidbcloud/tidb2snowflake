@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-	apiv2 "github.com/pingcap/tiflow/cdc/api/v2"
-	"github.com/pingcap/tiflow/cdc/model"
-	tiflowconfig "github.com/pingcap/tiflow/pkg/config"
-	putil "github.com/pingcap/tiflow/pkg/util"
+	apiv2 "github.com/pingcap/ticdc/api/v2"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
+	putil "github.com/pingcap/ticdc/pkg/util"
 )
 
 type ChangefeedConfig = apiv2.ChangefeedConfig
@@ -90,12 +90,12 @@ func BuildChangefeedConfig(opts ChangefeedConfigOptions) (*ChangefeedConfig, err
 	sinkURI.RawQuery = values.Encode()
 
 	protocol := "csv"
-	dateSeparator := tiflowconfig.DateSeparatorDay.String()
+	dateSeparator := config.DateSeparatorDay.String()
 	replicaCfg := apiv2.GetDefaultReplicaConfig()
 	replicaCfg.Filter = &apiv2.FilterConfig{Rules: opts.Tables}
 	replicaCfg.Sink.Protocol = &protocol
 	replicaCfg.Sink.CSVConfig.IncludeCommitTs = true
-	replicaCfg.Sink.CSVConfig.BinaryEncodingMethod = tiflowconfig.BinaryEncodingHex
+	replicaCfg.Sink.CSVConfig.BinaryEncodingMethod = config.BinaryEncodingHex
 	replicaCfg.Sink.DateSeparator = &dateSeparator
 	replicaCfg.Sink.CloudStorageConfig = &apiv2.CloudStorageConfig{
 		FlushInterval:  putil.AddressOf(flushInterval.String()),
@@ -127,7 +127,7 @@ func (c *Client) CreateChangefeed(ctx context.Context, cfg *ChangefeedConfig) (*
 
 func (c *Client) GetChangefeed(ctx context.Context, changefeedID string) (*Changefeed, error) {
 	values := url.Values{}
-	values.Set("namespace", model.DefaultNamespace)
+	values.Set("namespace", common.DefaultKeyspaceName)
 	var out Changefeed
 	if err := c.doJSON(ctx, http.MethodGet, []string{"changefeeds", changefeedID}, nil, &out, withQuery(values)); err != nil {
 		return nil, err
@@ -148,9 +148,9 @@ func (c *Client) WaitChangefeed(ctx context.Context, changefeedID string, interv
 			return nil, err
 		}
 		switch cf.State {
-		case model.StateNormal, model.StateWarning:
+		case config.StateNormal, config.StateWarning:
 			return cf, nil
-		case model.StateFailed, model.StateStopped, model.StateRemoved, model.StateFinished:
+		case config.StateFailed, config.StateStopped, config.StateRemoved, config.StateFinished:
 			return cf, fmt.Errorf("ticdc: changefeed %s ended in state %s", changefeedID, cf.State)
 		}
 		select {

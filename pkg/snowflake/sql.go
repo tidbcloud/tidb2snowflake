@@ -12,7 +12,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
-	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"gitlab.com/tymonx/go-formatter/formatter"
 )
 
@@ -161,7 +161,7 @@ func buildCreateSchemaSQL(tableSchema *table.Meta) string {
 	return strings.Join(sql, "\n")
 }
 
-func GenMergeInto(tableDef cloudstorage.TableDefinition, filePath string, stageName string) string {
+func GenMergeInto(tableDef cloudstorage.SchemaFile, filePath string, stageName string) string {
 	selectStat := make([]string, 0, len(tableDef.Columns)+1)
 	selectStat = append(selectStat, `$1 AS "METADATA$FLAG"`)
 	for i, col := range tableDef.Columns {

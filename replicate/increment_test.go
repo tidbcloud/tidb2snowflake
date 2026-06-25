@@ -3,7 +3,7 @@ package replicate
 import (
 	"testing"
 
-	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,7 +21,7 @@ func TestCheckpointExistsInSet(t *testing.T) {
 }
 
 func TestProgressEntryRoundTrip(t *testing.T) {
-	key := cloudstorage.DmlPathKey{
+	key := cloudstorage.DMLPathKey{
 		SchemaPathKey: cloudstorage.SchemaPathKey{
 			Schema:       "db",
 			Table:        "tbl",

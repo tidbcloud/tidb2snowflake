@@ -6,13 +6,13 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	parsertypes "github.com/pingcap/tidb/pkg/parser/types"
 	_ "github.com/pingcap/tidb/pkg/types/parser_driver" // register parser value expressions
-	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
 	"go.uber.org/zap"
 )
 

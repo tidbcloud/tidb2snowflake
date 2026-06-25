@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/tiflow/cdc/model"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,7 +86,7 @@ func TestClientCreateAndWaitChangefeed(t *testing.T) {
 
 	cf, err = client.WaitChangefeed(context.Background(), "cf-1", time.Millisecond)
 	require.NoError(t, err)
-	require.Equal(t, model.StateNormal, cf.State)
+	require.Equal(t, config.StateNormal, cf.State)
 	require.Equal(t, 2, getCount)
 }
 
