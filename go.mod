@@ -8,7 +8,7 @@ require (
 	github.com/icholy/digest v1.1.0
 	github.com/pingcap/errors v0.11.5-0.20260508054701-306e305bcf41
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
-	github.com/pingcap/ticdc v0.0.0-20260622090919-3f949451d8c1
+	github.com/pingcap/ticdc v0.0.0-20260625042528-92cdc7c3a789
 	github.com/pingcap/tidb v1.1.0-beta.0.20260604031706-f9faeaf4828f
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20260604031706-f9faeaf4828f
 	github.com/snowflakedb/gosnowflake/v2 v2.1.0
