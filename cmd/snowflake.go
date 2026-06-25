@@ -6,7 +6,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/tiflow/pkg/logutil"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/spf13/cobra"
 	"github.com/thediveo/enumflag"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
@@ -29,7 +29,7 @@ func NewSnowflakeCmd() *cobra.Command {
 		Use:   "snowflake",
 		Short: "Replicate snapshot and incremental data from TiDB to Snowflake",
 		RunE: func(c *cobra.Command, _ []string) error {
-			if err := logutil.InitLogger(&logutil.Config{Level: logLevel, File: logFile}); err != nil {
+			if err := logger.InitLogger(&logger.Config{Level: logLevel, File: logFile}); err != nil {
 				return errors.Trace(err)
 			}
 			if err := validateConfig(cfg); err != nil {

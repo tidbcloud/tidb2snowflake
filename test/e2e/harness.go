@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/tidb/br/pkg/storage"
-	putil "github.com/pingcap/tiflow/pkg/util"
+	putil "github.com/pingcap/ticdc/pkg/util"
+	storage "github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
@@ -338,7 +338,7 @@ func waitForStorageFile(t *testing.T, cfg *e2eConfig, storagePath, file string, 
 	t.Fatalf("storage file %s did not appear under %s within %s", file, storagePath, timeout)
 }
 
-func openRunStorage(t *testing.T, cfg *e2eConfig, storagePath string) storage.ExternalStorage {
+func openRunStorage(t *testing.T, cfg *e2eConfig, storagePath string) storage.Storage {
 	t.Helper()
 	uri, err := url.Parse(storagePath)
 	if err != nil {
@@ -349,7 +349,7 @@ func openRunStorage(t *testing.T, cfg *e2eConfig, storagePath string) storage.Ex
 	q.Set("secret-access-key", cfg.AWSSecretKey)
 	uri.RawQuery = q.Encode()
 	ctx := context.Background()
-	store, err := putil.GetExternalStorageFromURI(ctx, uri.String())
+	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, uri.String())
 	if err != nil {
 		t.Fatalf("open storage: %v", err)
 	}
