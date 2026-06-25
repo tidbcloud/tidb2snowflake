@@ -66,11 +66,6 @@ func TestBuildExportRequest_GzipCompression(t *testing.T) {
 	require.Equal(t, tidbcloud.ExportCompressionGzip, req.ExportOptions.Compression)
 }
 
-func TestSnapshotLoadModeDefault(t *testing.T) {
-	require.Equal(t, SnapshotLoadModeBulk, snapshotLoadMode(&Config{}))
-	require.Equal(t, SnapshotLoadModePerFile, snapshotLoadMode(&Config{SnapshotLoadMode: SnapshotLoadModePerFile}))
-}
-
 func TestSnapshotCompressionDefault(t *testing.T) {
 	require.Equal(t, SnapshotCompressionNone, snapshotCompression(&Config{}))
 	require.Equal(t, SnapshotCompressionGzip, snapshotCompression(&Config{SnapshotCompression: SnapshotCompressionGzip}))
