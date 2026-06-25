@@ -151,29 +151,6 @@ func TestGenSnapshotAndIncrementURIs(t *testing.T) {
 	require.Contains(t, snap.RawQuery, "access-key=AKIA")
 }
 
-func TestStateRoundTrip(t *testing.T) {
-	ctx := context.Background()
-	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
-	require.NoError(t, err)
-
-	// no file yet -> empty state
-	s, err := loadState(ctx, store)
-	require.NoError(t, err)
-	require.Empty(t, s.ExportID)
-
-	// save then reload
-	require.NoError(t, saveState(ctx, store, &runState{
-		ExportID:     "exp-1",
-		ChangefeedID: "cf-1",
-		SnapshotTSO:  "449",
-	}))
-	got, err := loadState(ctx, store)
-	require.NoError(t, err)
-	require.Equal(t, "exp-1", got.ExportID)
-	require.Equal(t, "cf-1", got.ChangefeedID)
-	require.Equal(t, "449", got.SnapshotTSO)
-}
-
 func TestDirHasObjects(t *testing.T) {
 	ctx := context.Background()
 	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
@@ -195,19 +172,19 @@ func TestDirHasObjects(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, has)
 
-	// a state file at the root must not count as snapshot/increment content
-	require.NoError(t, store.WriteFile(ctx, stateFileName, []byte("{}")))
+	// a root-level metadata file must not count as snapshot/increment content
+	require.NoError(t, store.WriteFile(ctx, "metadata.json", []byte("{}")))
 	has, err = dirHasObjects(ctx, store, incrementDirName)
 	require.NoError(t, err)
 	require.False(t, has)
 }
 
-func TestEnsureManagedSourceJobCreatesSavesAndWaits(t *testing.T) {
+func TestEnsureManagedSourceJobCreatesAndWaits(t *testing.T) {
 	ctx := context.Background()
 	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
 	require.NoError(t, err)
 
-	state := &runState{}
+	state := &sourceJobState{}
 
 	var created bool
 	var waitedID string
@@ -217,13 +194,7 @@ func TestEnsureManagedSourceJobCreatesSavesAndWaits(t *testing.T) {
 	}, fakeSourceRunner{
 		jobName: "test changefeed",
 		dir:     incrementDirName,
-		id: func(state *runState) string {
-			return state.ChangefeedID
-		},
-		set: func(state *runState, id string) {
-			state.ChangefeedID = id
-		},
-		createFn: func(context.Context, *runState) (*managedSourceJobResult, error) {
+		createFn: func(context.Context, *sourceJobState) (*managedSourceJobResult, error) {
 			created = true
 			return &managedSourceJobResult{ID: "cf-1", SnapshotTSO: "449"}, nil
 		},
@@ -234,14 +205,8 @@ func TestEnsureManagedSourceJobCreatesSavesAndWaits(t *testing.T) {
 	}, sourceJobChangefeed)
 	require.NoError(t, err)
 	require.True(t, created)
-	require.Equal(t, "cf-1", state.ChangefeedID)
 	require.Equal(t, "449", state.SnapshotTSO)
 	require.Equal(t, "cf-1", waitedID)
-
-	got, err := loadState(ctx, store)
-	require.NoError(t, err)
-	require.Equal(t, "cf-1", got.ChangefeedID)
-	require.Equal(t, "449", got.SnapshotTSO)
 }
 
 func TestEnsureManagedSourceJobSkipsWhenStorageDataExists(t *testing.T) {
@@ -251,20 +216,14 @@ func TestEnsureManagedSourceJobSkipsWhenStorageDataExists(t *testing.T) {
 
 	require.NoError(t, store.WriteFile(ctx, incrementDirName+"/metadata", []byte("ready")))
 
-	state := &runState{}
+	state := &sourceJobState{}
 	err = ensureManagedSourceJob(ctx, sourcePrepareContext{
 		store: store,
 		state: state,
 	}, fakeSourceRunner{
 		jobName: "test changefeed",
 		dir:     incrementDirName,
-		id: func(state *runState) string {
-			return state.ChangefeedID
-		},
-		set: func(state *runState, id string) {
-			state.ChangefeedID = id
-		},
-		createFn: func(context.Context, *runState) (*managedSourceJobResult, error) {
+		createFn: func(context.Context, *sourceJobState) (*managedSourceJobResult, error) {
 			t.Fatal("create should not be called when storage data exists")
 			return nil, nil
 		},
@@ -274,17 +233,13 @@ func TestEnsureManagedSourceJobSkipsWhenStorageDataExists(t *testing.T) {
 		},
 	}, sourceJobChangefeed)
 	require.NoError(t, err)
-	require.Empty(t, state.ChangefeedID)
 	require.Empty(t, state.SnapshotTSO)
 }
 
 type fakeSourceRunner struct {
 	jobName  string
 	dir      string
-	id       func(*runState) string
-	set      func(*runState, string)
-	resumeFn func(context.Context, string) (*managedSourceJobResult, error)
-	createFn func(context.Context, *runState) (*managedSourceJobResult, error)
+	createFn func(context.Context, *sourceJobState) (*managedSourceJobResult, error)
 	waitFn   func(context.Context, string) error
 }
 
@@ -293,31 +248,6 @@ func (r fakeSourceRunner) prepare(context.Context, sourcePrepareContext) error {
 func (r fakeSourceRunner) sourceJobName(sourceJobType) string { return r.jobName }
 
 func (r fakeSourceRunner) sourceJobStorageDir(sourceJobType) string { return r.dir }
-
-func (r fakeSourceRunner) existingSourceJobID(_ sourceJobType, state *runState) string {
-	if r.id == nil {
-		return ""
-	}
-	return r.id(state)
-}
-
-func (r fakeSourceRunner) setSourceJobID(_ sourceJobType, state *runState, id string) {
-	if r.set != nil {
-		r.set(state, id)
-	}
-}
-
-func (r fakeSourceRunner) resumeSourceJob(
-	ctx context.Context,
-	_ sourcePrepareContext,
-	_ sourceJobType,
-	id string,
-) (*managedSourceJobResult, error) {
-	if r.resumeFn == nil {
-		return nil, nil
-	}
-	return r.resumeFn(ctx, id)
-}
 
 func (r fakeSourceRunner) createSourceJob(
 	ctx context.Context,

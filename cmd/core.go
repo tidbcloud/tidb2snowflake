@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -54,10 +53,6 @@ var SourceModeIds = map[SourceMode][]string{
 	SourceModeTiDBCloud: {"tidbcloud"},
 	SourceModeOP:        {"op"},
 }
-
-// stateFileName holds the export/changefeed identifiers so a re-run can resume
-// instead of creating duplicates.
-const stateFileName = "tidb2snowflake.state.json"
 
 // snapshotDirName / incrementDirName are the object-storage sub-directories the
 // export and changefeed write into (also where the loaders read from). When they
@@ -112,11 +107,8 @@ type OPConfig struct {
 	SnapshotConcurrency int
 }
 
-// runState is persisted to object storage between runs for idempotent resume.
-type runState struct {
-	ExportID     string `json:"exportId,omitempty"`
-	ChangefeedID string `json:"changefeedId,omitempty"`
-	SnapshotTSO  string `json:"snapshotTso,omitempty"`
+type sourceJobState struct {
+	SnapshotTSO string
 }
 
 type managedSourceJobResult struct {
@@ -133,7 +125,7 @@ const (
 
 type sourcePrepareContext struct {
 	store             storage.Storage
-	state             *runState
+	state             *sourceJobState
 	cred              *credentials.Value
 	snapshotURI       *url.URL
 	incrementURI      *url.URL
@@ -145,9 +137,6 @@ type sourceRunner interface {
 	prepare(context.Context, sourcePrepareContext) error
 	sourceJobName(sourceJobType) string
 	sourceJobStorageDir(sourceJobType) string
-	existingSourceJobID(sourceJobType, *runState) string
-	setSourceJobID(sourceJobType, *runState, string)
-	resumeSourceJob(context.Context, sourcePrepareContext, sourceJobType, string) (*managedSourceJobResult, error)
 	createSourceJob(context.Context, sourcePrepareContext, sourceJobType) (*managedSourceJobResult, error)
 	waitSourceJob(context.Context, sourcePrepareContext, sourceJobType, string) error
 }
@@ -186,38 +175,6 @@ func (r *tidbCloudSourceRunner) sourceJobName(jobType sourceJobType) string {
 
 func (r *tidbCloudSourceRunner) sourceJobStorageDir(jobType sourceJobType) string {
 	return managedSourceJobStorageDir(jobType)
-}
-
-func (r *tidbCloudSourceRunner) existingSourceJobID(jobType sourceJobType, state *runState) string {
-	return existingManagedSourceJobID(jobType, state)
-}
-
-func (r *tidbCloudSourceRunner) setSourceJobID(jobType sourceJobType, state *runState, id string) {
-	setManagedSourceJobID(jobType, state, id)
-}
-
-func (r *tidbCloudSourceRunner) resumeSourceJob(
-	ctx context.Context,
-	_ sourcePrepareContext,
-	jobType sourceJobType,
-	id string,
-) (*managedSourceJobResult, error) {
-	switch jobType {
-	case sourceJobExport:
-		c, err := r.tidbCloudClient()
-		if err != nil {
-			return nil, err
-		}
-		export, err := c.GetExport(ctx, r.cfg.TiDBCloud.ClusterID, id)
-		if err != nil {
-			return nil, err
-		}
-		return &managedSourceJobResult{ID: export.ExportID, SnapshotTSO: export.SnapshotTSO}, nil
-	case sourceJobChangefeed:
-		return nil, nil
-	default:
-		return nil, errors.Errorf("unsupported source job %s", jobType)
-	}
 }
 
 func (r *tidbCloudSourceRunner) createSourceJob(
@@ -303,23 +260,6 @@ func (r *opSourceRunner) sourceJobStorageDir(jobType sourceJobType) string {
 	return managedSourceJobStorageDir(jobType)
 }
 
-func (r *opSourceRunner) existingSourceJobID(jobType sourceJobType, state *runState) string {
-	return existingManagedSourceJobID(jobType, state)
-}
-
-func (r *opSourceRunner) setSourceJobID(jobType sourceJobType, state *runState, id string) {
-	setManagedSourceJobID(jobType, state, id)
-}
-
-func (r *opSourceRunner) resumeSourceJob(
-	context.Context,
-	sourcePrepareContext,
-	sourceJobType,
-	string,
-) (*managedSourceJobResult, error) {
-	return nil, nil
-}
-
 func (r *opSourceRunner) createSourceJob(
 	ctx context.Context,
 	prepareCtx sourcePrepareContext,
@@ -393,26 +333,6 @@ func managedSourceJobStorageDir(jobType sourceJobType) string {
 	}
 }
 
-func existingManagedSourceJobID(jobType sourceJobType, state *runState) string {
-	switch jobType {
-	case sourceJobExport:
-		return state.ExportID
-	case sourceJobChangefeed:
-		return state.ChangefeedID
-	default:
-		return ""
-	}
-}
-
-func setManagedSourceJobID(jobType sourceJobType, state *runState, id string) {
-	switch jobType {
-	case sourceJobExport:
-		state.ExportID = id
-	case sourceJobChangefeed:
-		state.ChangefeedID = id
-	}
-}
-
 // Replicate runs one full orchestration: prepare snapshot and incremental data
 // from the selected source deployment, then load the resulting object-storage
 // files into Snowflake.
@@ -460,15 +380,7 @@ func Replicate(ctx context.Context, cfg *Config) error {
 		return errors.Annotate(err, "open storage")
 	}
 
-	state, err := loadState(ctx, store)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	log.Info("replication state loaded",
-		zap.String("stateFile", stateFileName),
-		zap.Bool("hasExportID", state.ExportID != ""),
-		zap.Bool("hasChangefeedID", state.ChangefeedID != ""),
-		zap.String("snapshotTSO", state.SnapshotTSO))
+	state := &sourceJobState{SnapshotTSO: cfg.SnapshotTSO}
 
 	source, err := newSourceRunner(cfg)
 	if err != nil {
@@ -521,28 +433,6 @@ func ensureManagedSourceJob(
 	store := prepareCtx.store
 	state := prepareCtx.state
 	jobName := source.sourceJobName(jobType)
-	jobID := source.existingSourceJobID(jobType, state)
-	if jobID != "" {
-		log.Info("resuming existing source job",
-			zap.String("job", jobName),
-			zap.String("jobID", jobID),
-			zap.String("snapshotTSO", state.SnapshotTSO))
-		res, err := source.resumeSourceJob(ctx, prepareCtx, jobType, jobID)
-		if err != nil {
-			return errors.Annotatef(err, "resume %s", jobName)
-		}
-		applyManagedSourceJobResult(state, res, false)
-		log.Info("waiting for source job",
-			zap.String("job", jobName),
-			zap.String("jobID", jobID))
-		if err := source.waitSourceJob(ctx, prepareCtx, jobType, jobID); err != nil {
-			return errors.Annotatef(err, "wait %s", jobName)
-		}
-		log.Info("source job ready",
-			zap.String("job", jobName),
-			zap.String("jobID", jobID))
-		return nil
-	}
 
 	storageDir := source.sourceJobStorageDir(jobType)
 	if storageDir == "" {
@@ -566,11 +456,7 @@ func ensureManagedSourceJob(
 	if res == nil || res.ID == "" {
 		return errors.Errorf("create %s returned empty id", jobName)
 	}
-	source.setSourceJobID(jobType, state, res.ID)
 	applyManagedSourceJobResult(state, res, true)
-	if err := saveState(ctx, store, state); err != nil {
-		return errors.Trace(err)
-	}
 	log.Info("source job created",
 		zap.String("job", jobName),
 		zap.String("jobID", res.ID),
@@ -588,7 +474,7 @@ func ensureManagedSourceJob(
 	return nil
 }
 
-func applyManagedSourceJobResult(state *runState, res *managedSourceJobResult, overwriteSnapshotTSO bool) {
+func applyManagedSourceJobResult(state *sourceJobState, res *managedSourceJobResult, overwriteSnapshotTSO bool) {
 	if res == nil {
 		return
 	}
@@ -607,9 +493,6 @@ func (r *opSourceRunner) prepare(
 
 	if state.SnapshotTSO == "" && cfg.SnapshotTSO != "" {
 		state.SnapshotTSO = cfg.SnapshotTSO
-		if err := saveState(ctx, store, state); err != nil {
-			return errors.Trace(err)
-		}
 	}
 	if cfg.Mode == RunModeFull && state.SnapshotTSO == "" {
 		tso, err := tidb.GetCurrentTSO(cfg.TiDB)
@@ -617,9 +500,6 @@ func (r *opSourceRunner) prepare(
 			return errors.Annotate(err, "get current TiDB TSO")
 		}
 		state.SnapshotTSO = strconv.FormatUint(tso, 10)
-		if err := saveState(ctx, store, state); err != nil {
-			return errors.Trace(err)
-		}
 	}
 
 	if cfg.Mode != RunModeSnapshotOnly {
@@ -978,41 +858,6 @@ func dirHasObjects(ctx context.Context, store storage.Storage, subDir string) (b
 		return false, errors.Trace(err)
 	}
 	return false, nil
-}
-
-func loadState(ctx context.Context, store storage.Storage) (*runState, error) {
-	exists, err := store.FileExists(ctx, stateFileName)
-	if err != nil {
-		return nil, errors.Annotate(err, "check state file")
-	}
-	if !exists {
-		return &runState{}, nil
-	}
-	data, err := store.ReadFile(ctx, stateFileName)
-	if err != nil {
-		return nil, errors.Annotate(err, "read state file")
-	}
-	var s runState
-	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, errors.Annotate(err, "decode state file")
-	}
-	return &s, nil
-}
-
-func saveState(ctx context.Context, store storage.Storage, state *runState) error {
-	data, err := json.Marshal(state)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if err := store.WriteFile(ctx, stateFileName, data); err != nil {
-		return errors.Annotate(err, "write state file")
-	}
-	log.Info("replication state saved",
-		zap.String("stateFile", stateFileName),
-		zap.Bool("hasExportID", state.ExportID != ""),
-		zap.Bool("hasChangefeedID", state.ChangefeedID != ""),
-		zap.String("snapshotTSO", state.SnapshotTSO))
-	return nil
 }
 
 func strPtr(s string) *string { return &s }

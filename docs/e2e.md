@@ -13,9 +13,8 @@ make e2e
 
 Each test seeds a uniquely named source table (`tidb2snowflake_e2e.t_*`) with
 baseline rows, runs the tool, and verifies the data in a uniquely named
-Snowflake schema (`E2E_*`). Resources are cleaned up afterwards (Snowflake
-schema, TiDB table, and the export/changefeed recorded in the run's
-`tidb2snowflake.state.json`).
+Snowflake schema (`E2E_*`). Snowflake schemas and TiDB source tables are cleaned
+up afterwards.
 
 | Test | Mode | Flow |
 |------|------|------|
