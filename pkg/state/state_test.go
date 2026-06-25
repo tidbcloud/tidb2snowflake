@@ -3,12 +3,12 @@ package state
 import (
 	"context"
 	"encoding/json"
-	stderrors "errors"
+	"errors"
 	"net/url"
 	"testing"
 
-	putil "github.com/pingcap/ticdc/pkg/util"
-	storage "github.com/pingcap/tidb/pkg/objstore/storeapi"
+	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -149,7 +149,7 @@ func TestUpdateDoesNotMutateStateOnError(t *testing.T) {
 
 	err = manager.Update(ctx, func(st *State) error {
 		st.Snapshot.Finished = true
-		return stderrors.New("boom")
+		return errors.New("boom")
 	})
 	require.Error(t, err)
 
@@ -209,10 +209,10 @@ func TestWrittenStateContainsOnlyV1Fields(t *testing.T) {
 	require.ElementsMatch(t, []string{"dml_file_watermarks", "ddl_table_version_watermark"}, mapKeys(tableState))
 }
 
-func newTestStore(t *testing.T) storage.Storage {
+func newTestStore(t *testing.T) storeapi.Storage {
 	t.Helper()
 	uri := (&url.URL{Scheme: "file", Path: t.TempDir()}).String()
-	store, err := putil.GetExternalStorageWithDefaultTimeout(context.Background(), uri)
+	store, err := util.GetExternalStorageWithDefaultTimeout(context.Background(), uri)
 	require.NoError(t, err)
 	return store
 }

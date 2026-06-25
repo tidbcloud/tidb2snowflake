@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	putil "github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
@@ -153,7 +153,7 @@ func TestGenSnapshotAndIncrementURIs(t *testing.T) {
 
 func TestDirHasObjects(t *testing.T) {
 	ctx := context.Background()
-	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
 	require.NoError(t, err)
 
 	// empty dirs -> no objects
@@ -181,7 +181,7 @@ func TestDirHasObjects(t *testing.T) {
 
 func TestEnsureManagedSourceJobCreatesAndWaits(t *testing.T) {
 	ctx := context.Background()
-	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
 	require.NoError(t, err)
 
 	state := &sourceJobState{}
@@ -211,7 +211,7 @@ func TestEnsureManagedSourceJobCreatesAndWaits(t *testing.T) {
 
 func TestEnsureManagedSourceJobSkipsWhenStorageDataExists(t *testing.T) {
 	ctx := context.Background()
-	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
 	require.NoError(t, err)
 
 	require.NoError(t, store.WriteFile(ctx, incrementDirName+"/metadata", []byte("ready")))

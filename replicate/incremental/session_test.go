@@ -1,4 +1,4 @@
-package replicate
+package incremental
 
 import (
 	"testing"

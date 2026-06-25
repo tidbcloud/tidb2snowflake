@@ -11,8 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	putil "github.com/pingcap/ticdc/pkg/util"
-	storage "github.com/pingcap/tidb/pkg/objstore/storeapi"
+	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/thediveo/enumflag"
 	"github.com/tidbcloud/tidb2snowflake/pkg/dumpling"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
@@ -20,10 +20,9 @@ import (
 	"github.com/tidbcloud/tidb2snowflake/pkg/ticdc"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
-	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
-	"github.com/tidbcloud/tidb2snowflake/replicate"
+	"github.com/tidbcloud/tidb2snowflake/replicate/incremental"
+	"github.com/tidbcloud/tidb2snowflake/replicate/snapshot"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 // RunMode selects which phases of replication to run.
@@ -124,7 +123,7 @@ const (
 )
 
 type sourcePrepareContext struct {
-	store             storage.Storage
+	store             storeapi.Storage
 	state             *sourceJobState
 	cred              *credentials.Value
 	snapshotURI       *url.URL
@@ -375,7 +374,7 @@ func Replicate(ctx context.Context, cfg *Config) error {
 		return errors.Trace(err)
 	}
 
-	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, storageURI.String())
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, storageURI.String())
 	if err != nil {
 		return errors.Annotate(err, "open storage")
 	}
@@ -553,74 +552,25 @@ func loadIntoSnowflake(
 		zap.String("snapshotStorage", safeURLForLog(snapshotURI)),
 		zap.String("incrementStorage", safeURLForLog(incrementURI)))
 
-	g, ctx := errgroup.WithContext(ctx)
-	for _, table := range cfg.Tables {
-		tableFQN := table
-		g.Go(func() error {
-			log.Info("starting table replication", zap.String("table", tableFQN))
-			if err := replicateTable(ctx, cfg, cred, tableFQN, snapshotURI, incrementURI); err != nil {
-				metrics.AddCounter(metrics.ErrorCounter, 1, tableFQN)
-				log.Error("table replication failed", zap.String("table", tableFQN), zap.Error(err))
-				return err
-			}
-			log.Info("table replication finished", zap.String("table", tableFQN))
-			return nil
-		})
-	}
-	err := g.Wait()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func replicateTable(
-	ctx context.Context,
-	cfg *Config,
-	cred *credentials.Value,
-	tableFQN string,
-	snapshotURI, incrementURI *url.URL,
-) error {
-	sourceDatabase, sourceTable := utils.SplitTableFQN(tableFQN)
-
 	if cfg.Mode != RunModeIncrementalOnly {
-		log.Info("starting snapshot load for table",
-			zap.String("table", tableFQN),
-			zap.String("stage", fmt.Sprintf("snapshot_external_%s_%s", sourceDatabase, sourceTable)))
-		conn, err := snowflake.NewConnector(
-			cfg.Snowflake,
-			fmt.Sprintf("snapshot_external_%s_%s", sourceDatabase, sourceTable),
-			snapshotURI,
-			cred,
-			snowflake.WithStageFileCompression(snapshotCompression(cfg)),
-		)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		err = replicate.Snapshot(ctx, conn, tableFQN, snapshotURI)
-		conn.Close()
-		if err != nil {
+		if err := snapshot.Load(ctx, snapshot.Config{
+			Snowflake:   cfg.Snowflake,
+			Credential:  cred,
+			Tables:      cfg.Tables,
+			StorageURI:  snapshotURI,
+			Compression: snapshotCompression(cfg),
+		}); err != nil {
 			return errors.Trace(err)
 		}
 	}
-
 	if cfg.Mode != RunModeSnapshotOnly {
-		log.Info("starting incremental load for table",
-			zap.String("table", tableFQN),
-			zap.String("stage", fmt.Sprintf("increment_external_%s_%s", sourceDatabase, sourceTable)),
-			zap.Duration("scanInterval", cfg.ChangefeedFlushInterval/5))
-		conn, err := snowflake.NewConnector(
-			cfg.Snowflake,
-			fmt.Sprintf("increment_external_%s_%s", sourceDatabase, sourceTable),
-			incrementURI,
-			cred,
-		)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		err = replicate.StartReplicateIncrement(ctx, conn, tableFQN, incrementURI, cfg.ChangefeedFlushInterval/5)
-		conn.Close()
-		if err != nil {
+		if err := incremental.Load(ctx, incremental.Config{
+			Snowflake:    cfg.Snowflake,
+			Credential:   cred,
+			Tables:       cfg.Tables,
+			StorageURI:   incrementURI,
+			ScanInterval: cfg.ChangefeedFlushInterval / 5,
+		}); err != nil {
 			return errors.Trace(err)
 		}
 	}
@@ -696,14 +646,14 @@ func buildExportRequest(cfg *Config, cleanSnapshotURI string, cred *credentials.
 			Compression: exportCompression(snapshotCompression(cfg)),
 			// Disable backslash escaping to match the Snowflake-dialect CSV the
 			// loader's COPY expects.
-			EscapeBackslash: boolPtr(false),
+			EscapeBackslash: util.AddressOf(false),
 			Filter:          &tidbcloud.ExportFilter{Table: &tidbcloud.ExportFilterTable{Patterns: cfg.Tables}},
 			CSVFormat: &tidbcloud.ExportCSVFormat{
 				Separator: ",",
-				Delimiter: strPtr("\""),
+				Delimiter: util.AddressOf("\""),
 				// The Snowflake COPY loader treats `\N` as NULL
 				// (snowsql: NULL_IF=('\N')), so the export must emit `\N`.
-				NullValue:  strPtr("\\N"),
+				NullValue:  util.AddressOf("\\N"),
 				SkipHeader: true,
 				// Write Snowflake-dialect CSV so the COPY parses special
 				// characters and binary columns losslessly.
@@ -845,9 +795,9 @@ var errWalkStop = errors.New("stop walk")
 // contains at least one object. It is used to detect a snapshot/increment
 // produced by a previous run or created directly by the user, so it is not
 // re-created.
-func dirHasObjects(ctx context.Context, store storage.Storage, subDir string) (bool, error) {
+func dirHasObjects(ctx context.Context, store storeapi.Storage, subDir string) (bool, error) {
 	found := false
-	err := store.WalkDir(ctx, &storage.WalkOption{SubDir: subDir, ListCount: 1}, func(string, int64) error {
+	err := store.WalkDir(ctx, &storeapi.WalkOption{SubDir: subDir, ListCount: 1}, func(string, int64) error {
 		found = true
 		return errWalkStop
 	})
@@ -859,7 +809,3 @@ func dirHasObjects(ctx context.Context, store storage.Storage, subDir string) (b
 	}
 	return false, nil
 }
-
-func strPtr(s string) *string { return &s }
-
-func boolPtr(b bool) *bool { return &b }

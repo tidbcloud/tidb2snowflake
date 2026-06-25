@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/pingcap/errors"
-	storage "github.com/pingcap/tidb/pkg/objstore/storeapi"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 )
 
 const (
@@ -44,12 +44,12 @@ type TableState struct {
 
 type Manager struct {
 	mu     sync.Mutex
-	store  storage.Storage
+	store  storeapi.Storage
 	tables []string
 	state  State
 }
 
-func Open(ctx context.Context, store storage.Storage, tables []string) (*Manager, error) {
+func Open(ctx context.Context, store storeapi.Storage, tables []string) (*Manager, error) {
 	if store == nil {
 		return nil, errors.New("state storage is nil")
 	}

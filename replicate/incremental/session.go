@@ -1,21 +1,17 @@
-package replicate
+package incremental
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os/signal"
 	"strings"
-	"syscall"
-	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/config"
-	putil "github.com/pingcap/ticdc/pkg/util"
-	storage "github.com/pingcap/tidb/pkg/objstore/storeapi"
+	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
@@ -47,7 +43,7 @@ type incrementalScanStats struct {
 
 type IncrementReplicateSession struct {
 	dwConnector *snowflake.Connector
-	storage     storage.Storage
+	storage     storeapi.Storage
 	ctx         context.Context
 	// tableDMLIdxMap maintains a map of <DMLPathKey, max file index>
 	tableDMLIdxMap map[cloudstorage.DMLPathKey]uint64
@@ -70,7 +66,7 @@ func NewIncrementReplicateSession(
 	tableFQN string,
 	logger *zap.Logger,
 ) (*IncrementReplicateSession, error) {
-	externalStorage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, storageURI.String())
+	externalStorage, err := util.GetExternalStorageWithDefaultTimeout(ctx, storageURI.String())
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -211,7 +207,7 @@ func (sess *IncrementReplicateSession) getNewFiles() (map[cloudstorage.DMLPathKe
 	sess.dataFileMap = make(map[string]int64)
 	files := make([]objectFile, 0)
 	stats := incrementalScanStats{}
-	opt := &storage.WalkOption{SubDir: fmt.Sprintf("%s/%s", sess.sourceDatabase, sess.sourceTable)}
+	opt := &storeapi.WalkOption{SubDir: fmt.Sprintf("%s/%s", sess.sourceDatabase, sess.sourceTable)}
 	err := sess.storage.WalkDir(sess.ctx, opt, func(path string, size int64) error {
 		stats.objectFiles++
 		files = append(files, objectFile{path: path, size: size})
@@ -422,52 +418,4 @@ func countFilesInRanges(ranges map[cloudstorage.DMLPathKey]fileIndexRange) uint6
 		}
 	}
 	return count
-}
-
-func (sess *IncrementReplicateSession) Run(flushInterval time.Duration) error {
-	sess.logger.Info("increment replicate session started", zap.Duration("scanInterval", flushInterval))
-	ticker := time.NewTicker(flushInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-sess.ctx.Done():
-			return sess.ctx.Err()
-		case <-ticker.C:
-		}
-		dmlFileMap, err := sess.getNewFiles()
-		if err != nil {
-			return errors.Trace(err)
-		}
-
-		if err = sess.handleNewFiles(dmlFileMap); err != nil {
-			return errors.Trace(err)
-		}
-	}
-}
-
-func StartReplicateIncrement(
-	ctx context.Context,
-	dwConnector *snowflake.Connector,
-	tableFQN string,
-	storageURI *url.URL,
-	flushInterval time.Duration,
-) error {
-	fileExtension := CSVFileExtension
-
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	// init metric IncrementPendingSizeGauge
-	metrics.AddGauge(metrics.IncrementPendingSizeGauge, 0, tableFQN)
-	logger := log.L().With(zap.String("table", tableFQN))
-	session, err := NewIncrementReplicateSession(ctx, dwConnector, fileExtension, storageURI, tableFQN, logger)
-	if err != nil {
-		logger.Error("error occurred while creating increment replicate session", zap.Error(err))
-		return errors.Trace(err)
-	}
-	if err = session.Run(flushInterval); err != nil {
-		logger.Error("error occurred while running increment replicate session", zap.Error(err))
-		return errors.Trace(err)
-	}
-	return nil
 }
