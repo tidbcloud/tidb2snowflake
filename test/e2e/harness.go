@@ -338,7 +338,7 @@ func waitForStorageFile(t *testing.T, cfg *e2eConfig, storagePath, file string, 
 	t.Fatalf("storage file %s did not appear under %s within %s", file, storagePath, timeout)
 }
 
-func openRunStorage(t *testing.T, cfg *e2eConfig, storagePath string) storage.ExternalStorage {
+func openRunStorage(t *testing.T, cfg *e2eConfig, storagePath string) storage.Storage {
 	t.Helper()
 	uri, err := url.Parse(storagePath)
 	if err != nil {
