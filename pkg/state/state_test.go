@@ -199,6 +199,31 @@ func TestUpdateRejectsInvalidState(t *testing.T) {
 	require.Equal(t, Version, manager.Snapshot().Version)
 }
 
+func TestSetSnapshotTSORejectsMismatch(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	manager, err := Open(ctx, store, []string{"db.t"})
+	require.NoError(t, err)
+	require.NoError(t, manager.SetSnapshotTSO(ctx, "466924115091783691"))
+
+	err = manager.SetSnapshotTSO(ctx, "466924115091783692")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "snapshot.tso mismatch")
+}
+
+func TestUpdateExportStateRejectsSnapshotTSOMismatch(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	manager, err := Open(ctx, store, []string{"db.t"})
+	require.NoError(t, err)
+	require.NoError(t, manager.UpdateExportState(ctx, "exp-1", "466924115091783691"))
+
+	err = manager.UpdateExportState(ctx, "exp-2", "466924115091783692")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "snapshot.tso mismatch")
+	require.Equal(t, "exp-1", manager.Snapshot().TaskInfo.ExportID)
+}
+
 func TestWrittenStateContainsOnlyV1Fields(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)

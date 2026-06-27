@@ -136,14 +136,14 @@ func buildCreateSchemaSQL(tableSchema *table.Meta) string {
 	}
 
 	sql := []string{}
-	sql = append(sql, fmt.Sprintf(`CREATE OR REPLACE TABLE %s (`, quoteIdent(tableSchema.Table)))
+	sql = append(sql, fmt.Sprintf(`CREATE OR REPLACE TABLE %s (`, quoteIdent(tableSchema.SnowflakeTableName())))
 	sql = append(sql, strings.Join(sqlRows, ",\n"))
 	sql = append(sql, ")")
 
 	return strings.Join(sql, "\n")
 }
 
-func GenMergeInto(tableMeta *table.Meta, filePath string, stageName string) string {
+func GenMergeInto(tableMeta *table.Meta, filePath string, stageName string, highWatermark uint64) string {
 	selectStat := make([]string, 0, len(tableMeta.Columns)+1)
 	selectStat = append(selectStat, `$1 AS "METADATA$FLAG"`)
 	for i, col := range tableMeta.Columns {
@@ -187,6 +187,7 @@ func GenMergeInto(tableMeta *table.Meta, filePath string, stageName string) stri
 			SELECT
 				%s
 			FROM '%s'
+			WHERE TO_NUMBER($4) <= %d
 			QUALIFY row_number() over (partition by %s order by $4 desc) = 1
 		) AS S
 		ON
@@ -196,9 +197,10 @@ func GenMergeInto(tableMeta *table.Meta, filePath string, stageName string) stri
 		WHEN MATCHED AND S.METADATA$FLAG != 'D' THEN UPDATE SET %s
 		WHEN MATCHED AND S.METADATA$FLAG = 'D' THEN DELETE
 		WHEN NOT MATCHED AND S.METADATA$FLAG != 'D' THEN INSERT (%s) VALUES (%s);`,
-		quoteIdent(tableMeta.Table),
+		quoteIdent(tableMeta.SnowflakeTableName()),
 		strings.Join(selectStat, ",\n"),
 		stageFile,
+		highWatermark,
 		strings.Join(pkColumn, ", "),
 		strings.Join(onStat, " AND "),
 		strings.Join(updateStat, ", "),
@@ -206,4 +208,14 @@ func GenMergeInto(tableMeta *table.Meta, filePath string, stageName string) stri
 		strings.Join(valuesStat, ", "))
 
 	return mergeQuery
+}
+
+func GenCountCommitTSAfter(filePath string, stageName string, highWatermark uint64) string {
+	stageFile := fmt.Sprintf("@%s/%s", quoteIdent(stageName), utils.EscapeString(filePath))
+	return fmt.Sprintf(`SELECT COUNT(*) FROM (
+	SELECT 1
+	FROM '%s'
+	WHERE TO_NUMBER($4) > %d
+	LIMIT 1
+);`, stageFile, highWatermark)
 }

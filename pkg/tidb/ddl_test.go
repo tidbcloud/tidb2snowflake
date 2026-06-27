@@ -3,13 +3,13 @@ package tidb_test
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/stretchr/testify/require"
+	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 )
 
 func TestGetColumnDiff(t *testing.T) {
-	prev := []cloudstorage.TableCol{
+	prev := []table.Column{
 		{
 			ID:        "1",
 			Name:      "id",
@@ -32,7 +32,7 @@ func TestGetColumnDiff(t *testing.T) {
 			Tp:   "date",
 		},
 	}
-	curr := []cloudstorage.TableCol{
+	curr := []table.Column{
 		{
 			ID:        "5",
 			Name:      "id",

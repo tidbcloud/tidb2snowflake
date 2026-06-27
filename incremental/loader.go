@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os/signal"
 	"path"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -43,12 +41,10 @@ type Config struct {
 	StorageURI   *url.URL
 	StorageDir   string
 	ScanInterval time.Duration
-	State        *state.Manager
+	State        state.Manager
 }
 
 func Load(ctx context.Context, cfg Config, store storeapi.Storage) error {
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	if cfg.StorageURI == nil {
 		return errors.New("incremental storage URI is empty")
 	}
@@ -158,7 +154,7 @@ type loader struct {
 	ctx           context.Context
 	fileExtension string
 	scanInterval  time.Duration
-	state         *state.Manager
+	state         state.Manager
 	checkpointTs  uint64
 	highWatermark uint64
 	tables        []*tableState
@@ -592,7 +588,7 @@ func (loader *loader) syncExecDMLEvents(
 	key cloudstorage.DMLPathKey,
 	fileIndexKey cloudstorage.FileIndexKey,
 	fileIdx uint64,
-) error {
+) (bool, error) {
 	filePath := key.GenerateDMLFilePath(&cloudstorage.FileIndex{
 		FileIndexKey: fileIndexKey,
 		Idx:          fileIdx,
@@ -606,7 +602,8 @@ func (loader *loader) syncExecDMLEvents(
 		zap.String("date", key.Date),
 		zap.String("dispatcherID", fileIndexKey.DispatcherID),
 		zap.Uint64("fileIndex", fileIdx))
-	if err := loader.conn.LoadIncrement(table.FromSchemaFile(tableDef), objectPath); err != nil {
+	fileConsumed, err := loader.conn.LoadIncrement(table.FromSchemaFile(tableDef), objectPath, loader.highWatermark)
+	if err != nil {
 		log.Error("failed to load DML file into data warehouse",
 			zap.Error(err),
 			zap.String("table", tbl.tableFQN),
@@ -616,7 +613,15 @@ func (loader *loader) syncExecDMLEvents(
 			zap.String("date", key.Date),
 			zap.String("dispatcherID", fileIndexKey.DispatcherID),
 			zap.Uint64("fileIndex", fileIdx))
-		return errors.Trace(err)
+		return false, errors.Trace(err)
+	}
+	if !fileConsumed {
+		log.Info("DML file partially loaded",
+			zap.String("table", tbl.tableFQN),
+			zap.String("filePath", objectPath),
+			zap.Uint64("highWatermark", loader.highWatermark),
+			zap.Uint64("fileIndex", fileIdx))
+		return false, nil
 	}
 	scopeKey := dmlScopeKey(key, fileIndexKey)
 	if err := loader.state.Update(loader.ctx, func(st *state.State) error {
@@ -630,7 +635,7 @@ func (loader *loader) syncExecDMLEvents(
 		st.Incremental.Tables[tbl.tableFQN] = tableState
 		return nil
 	}); err != nil {
-		return errors.Trace(err)
+		return false, errors.Trace(err)
 	}
 
 	log.Info("DML file loaded",
@@ -642,7 +647,7 @@ func (loader *loader) syncExecDMLEvents(
 		zap.String("dispatcherID", fileIndexKey.DispatcherID),
 		zap.Uint64("fileIndex", fileIdx))
 
-	return nil
+	return true, nil
 }
 
 func (loader *loader) syncExecDDLEvents(tbl *tableState, tableDef cloudstorage.SchemaFile) error {
@@ -772,8 +777,12 @@ func (loader *loader) handleNewFiles(table *tableState, dmlFileMap map[cloudstor
 				zap.Uint64("startFileIndex", fileRange.start),
 				zap.Uint64("endFileIndex", fileRange.end))
 			for i := fileRange.start; i <= fileRange.end; i++ {
-				if err := loader.syncExecDMLEvents(table, tableDef, key, fileIndexKey, i); err != nil {
+				fileConsumed, err := loader.syncExecDMLEvents(table, tableDef, key, fileIndexKey, i)
+				if err != nil {
 					return errors.Trace(err)
+				}
+				if !fileConsumed {
+					return nil
 				}
 			}
 		}

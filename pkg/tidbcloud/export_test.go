@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestCreateExport_RequestAndResponse(t *testing.T) {
+func TestCreateExportRequestAndResponse(t *testing.T) {
 	var gotMethod, gotPath, gotCT string
 	var gotBody CreateExportRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -58,26 +56,21 @@ func TestCreateExport_RequestAndResponse(t *testing.T) {
 	require.Equal(t, "449023000000000000", exp.SnapshotTSO)
 }
 
-func TestWaitExport_SucceedsAfterRunning(t *testing.T) {
-	var calls int32
+func TestWaitExportReturnsSucceededExport(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if atomic.AddInt32(&calls, 1) < 2 {
-			_, _ = w.Write([]byte(`{"exportId":"exp-9","state":"RUNNING"}`))
-			return
-		}
 		_, _ = w.Write([]byte(`{"exportId":"exp-9","state":"SUCCEEDED","snapshotTso":"449"}`))
 	}))
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	exp, err := c.WaitExport(context.Background(), "10", "exp-9", 10*time.Millisecond)
+	exp, err := c.WaitExport(context.Background(), "10", "exp-9")
 	require.NoError(t, err)
 	require.Equal(t, ExportStateSucceeded, exp.State)
 	require.Equal(t, "449", exp.SnapshotTSO)
 }
 
-func TestWaitExport_FailsOnFailedState(t *testing.T) {
+func TestWaitExportFailsOnFailedState(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"exportId":"exp-9","state":"FAILED","reason":"gc safepoint exceeded"}`))
@@ -85,13 +78,13 @@ func TestWaitExport_FailsOnFailedState(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	exp, err := c.WaitExport(context.Background(), "10", "exp-9", 10*time.Millisecond)
+	exp, err := c.WaitExport(context.Background(), "10", "exp-9")
 	require.Error(t, err)
 	require.Equal(t, ExportStateFailed, exp.State)
 	require.Contains(t, err.Error(), "gc safepoint exceeded")
 }
 
-func TestDeleteAndCancelExport_Paths(t *testing.T) {
+func TestDeleteAndCancelExportPaths(t *testing.T) {
 	var gotMethod, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod, gotPath = r.Method, r.URL.Path

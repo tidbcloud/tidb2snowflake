@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildChangefeedConfig_CloudStorageCSV(t *testing.T) {
+func TestBuildChangefeedConfigCloudStorageCSV(t *testing.T) {
 	storageURI, err := url.Parse("s3://bucket/path/increment?access-key=AKIA&secret-access-key=secret")
 	require.NoError(t, err)
 
@@ -64,10 +64,6 @@ func TestClientCreateAndWaitChangefeed(t *testing.T) {
 		case http.MethodGet + " /api/v2/changefeeds/cf-1":
 			require.Equal(t, "default", r.URL.Query().Get("namespace"))
 			getCount++
-			if getCount == 1 {
-				_, _ = w.Write([]byte(`{"id":"cf-1","state":"pending"}`))
-				return
-			}
 			_, _ = w.Write([]byte(`{"id":"cf-1","state":"normal"}`))
 		default:
 			http.NotFound(w, r)
@@ -84,10 +80,10 @@ func TestClientCreateAndWaitChangefeed(t *testing.T) {
 	require.Equal(t, "/api/v2/changefeeds", createPath)
 	require.Equal(t, "s3://bucket/increment?protocol=csv", createBody["sink_uri"])
 
-	cf, err = client.WaitChangefeed(context.Background(), "cf-1", time.Millisecond)
+	cf, err = client.WaitChangefeed(context.Background(), "cf-1")
 	require.NoError(t, err)
 	require.Equal(t, config.StateNormal, cf.State)
-	require.Equal(t, 2, getCount)
+	require.Equal(t, 1, getCount)
 }
 
 func TestClientWaitChangefeedFailsOnTerminalState(t *testing.T) {
@@ -100,7 +96,7 @@ func TestClientWaitChangefeedFailsOnTerminalState(t *testing.T) {
 	client, err := NewClient(srv.URL)
 	require.NoError(t, err)
 
-	_, err = client.WaitChangefeed(context.Background(), "cf-1", time.Millisecond)
+	_, err = client.WaitChangefeed(context.Background(), "cf-1")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ended in state failed")
 }

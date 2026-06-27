@@ -67,10 +67,10 @@ func TestGenDDLViaMetaDiff(t *testing.T) {
 	})
 
 	expectedDDLs := []string{
-		`ALTER TABLE "test_table" MODIFY COLUMN "id" CHAR(10);`,
-		`ALTER TABLE "test_table" RENAME COLUMN "name" TO "color";`,
-		`ALTER TABLE "test_table" DROP COLUMN "age";`,
-		`ALTER TABLE "test_table" ADD COLUMN "gender" VARCHAR(10);`,
+		`ALTER TABLE "test_schema.test_table" MODIFY COLUMN "id" CHAR(10);`,
+		`ALTER TABLE "test_schema.test_table" RENAME COLUMN "name" TO "color";`,
+		`ALTER TABLE "test_schema.test_table" DROP COLUMN "age";`,
+		`ALTER TABLE "test_schema.test_table" ADD COLUMN "gender" VARCHAR(10);`,
 	}
 
 	ddl, err := GenDDLViaMetaDiff(prevMeta, nextMeta, model.ActionNone)

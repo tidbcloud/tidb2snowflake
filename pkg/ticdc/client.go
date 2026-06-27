@@ -135,12 +135,9 @@ func (c *Client) GetChangefeed(ctx context.Context, changefeedID string) (*Chang
 	return &out, nil
 }
 
-func (c *Client) WaitChangefeed(ctx context.Context, changefeedID string, interval time.Duration) (*Changefeed, error) {
+func (c *Client) WaitChangefeed(ctx context.Context, changefeedID string) (*Changefeed, error) {
 	if changefeedID == "" {
 		return nil, errors.New("changefeed id is required")
-	}
-	if interval <= 0 {
-		interval = 5 * time.Second
 	}
 	for {
 		cf, err := c.GetChangefeed(ctx, changefeedID)
@@ -156,7 +153,7 @@ func (c *Client) WaitChangefeed(ctx context.Context, changefeedID string, interv
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(interval):
+		case <-time.After(3 * time.Second):
 		}
 	}
 }

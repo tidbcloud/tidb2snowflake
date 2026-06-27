@@ -192,7 +192,6 @@ func toolArgs(cfg *e2eConfig, mode, storagePath, schema, table string) []string 
 		"--aws.access-key", cfg.AWSAccessKey,
 		"--aws.secret-key", cfg.AWSSecretKey,
 		"--table", table,
-		"--poll-interval", "10s",
 		"--log.level", "info",
 	}
 	if cfg.APIHost != "" {

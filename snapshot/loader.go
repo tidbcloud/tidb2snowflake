@@ -105,7 +105,7 @@ func prepareSnapshotTables(
 		prefix := fmt.Sprintf("%s.%s.", sourceDatabase, sourceTable)
 		tables[prefix] = snapshotFile{
 			tableFQN:    tableFQN,
-			targetTable: sourceTable,
+			targetTable: tableSchema.SnowflakeTableName(),
 		}
 	}
 	return tables, nil

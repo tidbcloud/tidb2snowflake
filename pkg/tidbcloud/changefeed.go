@@ -239,12 +239,8 @@ func (c *Client) StopChangefeed(ctx context.Context, clusterID, changefeedID str
 }
 
 // WaitChangefeed polls GetChangefeed until the changefeed is operational
-// (RUNNING or WARNING) or reaches a failure/terminal state. A non-positive
-// interval defaults to 5s.
-func (c *Client) WaitChangefeed(ctx context.Context, clusterID, changefeedID string, interval time.Duration) (*Changefeed, error) {
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
+// (RUNNING or WARNING) or reaches a failure/terminal state.
+func (c *Client) WaitChangefeed(ctx context.Context, clusterID, changefeedID string) (*Changefeed, error) {
 	for {
 		cf, err := c.GetChangefeed(ctx, clusterID, changefeedID)
 		if err != nil {
@@ -260,7 +256,7 @@ func (c *Client) WaitChangefeed(ctx context.Context, clusterID, changefeedID str
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(interval):
+		case <-time.After(3 * time.Second):
 		}
 	}
 }

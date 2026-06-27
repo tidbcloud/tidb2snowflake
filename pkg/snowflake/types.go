@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/cloudstorage"
+	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 	"go.uber.org/zap"
 )
 
@@ -51,7 +51,7 @@ var TiDB2SnowflakeTypeMap map[string]string = map[string]string{
 	"vector":             "VARCHAR",
 }
 
-func newType(column cloudstorage.TableCol) string {
+func newType(column table.Column) string {
 	tp := strings.ToLower(column.Tp)
 	columnName := quoteIdent(column.Name)
 	switch tp {

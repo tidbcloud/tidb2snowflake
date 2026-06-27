@@ -2,15 +2,12 @@ package state
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 )
 
 const (
@@ -48,91 +45,6 @@ type ScanState struct {
 type TableState struct {
 	DMLFileWatermarks        map[string]uint64 `json:"dml_file_watermarks"`
 	DDLTableVersionWatermark uint64            `json:"ddl_table_version_watermark"`
-}
-
-type Manager struct {
-	mu     sync.Mutex
-	store  storeapi.Storage
-	tables []string
-	state  State
-}
-
-func Open(ctx context.Context, store storeapi.Storage, tables []string) (*Manager, error) {
-	if store == nil {
-		return nil, errors.New("state storage is nil")
-	}
-	m := &Manager{
-		store:  store,
-		tables: append([]string(nil), tables...),
-	}
-
-	exists, err := store.FileExists(ctx, FileName)
-	if err != nil {
-		return nil, errors.Annotatef(err, "check state file %s", FileName)
-	}
-	if !exists {
-		m.state = newState(tables)
-		if err := m.save(ctx, m.state); err != nil {
-			return nil, err
-		}
-		return m, nil
-	}
-
-	data, err := store.ReadFile(ctx, FileName)
-	if err != nil {
-		return nil, errors.Annotatef(err, "read state file %s", FileName)
-	}
-	st, err := decodeState(data)
-	if err != nil {
-		return nil, errors.Annotatef(err, "decode state file %s", FileName)
-	}
-	changed := ensureConfiguredTables(&st, tables)
-	if err := validateState(st, tables); err != nil {
-		return nil, err
-	}
-	m.state = st
-	if changed {
-		if err := m.save(ctx, m.state); err != nil {
-			return nil, err
-		}
-	}
-	return m, nil
-}
-
-func (m *Manager) Snapshot() State {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return cloneState(m.state)
-}
-
-func (m *Manager) Update(ctx context.Context, fn func(*State) error) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	next := cloneState(m.state)
-	if err := fn(&next); err != nil {
-		return err
-	}
-	if err := validateState(next, m.tables); err != nil {
-		return err
-	}
-	if err := m.save(ctx, next); err != nil {
-		return err
-	}
-	m.state = next
-	return nil
-}
-
-func (m *Manager) save(ctx context.Context, st State) error {
-	data, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
-		return errors.Trace(err)
-	}
-	data = append(data, '\n')
-	if err := m.store.WriteFile(ctx, FileName, data); err != nil {
-		return errors.Annotatef(err, "write state file %s", FileName)
-	}
-	return nil
 }
 
 func newState(tables []string) State {

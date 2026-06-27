@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/tidb/dumpling/export"
+	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 )
 
 type columnAction int8
@@ -24,11 +24,11 @@ const (
 
 type ColumnDiff struct {
 	Action columnAction
-	Before *cloudstorage.TableCol
-	After  *cloudstorage.TableCol
+	Before *table.Column
+	After  *table.Column
 }
 
-func CompareColumn(lhs, rhs *cloudstorage.TableCol) (columnAction, error) {
+func CompareColumn(lhs, rhs *table.Column) (columnAction, error) {
 	if lhs.Name != rhs.Name {
 		// In TiDB, when using a single ALTER TABLE statement to alter multiple schema objects (such as columns or indexes) of a table,
 		// specifying the same object in multiple changes is not supported.
@@ -44,17 +44,17 @@ func CompareColumn(lhs, rhs *cloudstorage.TableCol) (columnAction, error) {
 	return UNCHANGE, nil
 }
 
-func GetColumnDiff(prev []cloudstorage.TableCol, curr []cloudstorage.TableCol) ([]ColumnDiff, error) {
+func GetColumnDiff(prev []table.Column, curr []table.Column) ([]ColumnDiff, error) {
 	// name -> column
-	prevNameMap := make(map[string]*cloudstorage.TableCol, len(prev))
+	prevNameMap := make(map[string]*table.Column, len(prev))
 	// id -> column
-	prevIDMap := make(map[string]*cloudstorage.TableCol, len(prev))
+	prevIDMap := make(map[string]*table.Column, len(prev))
 	for i, item := range prev {
 		prevNameMap[item.Name] = &prev[i]
 		prevIDMap[item.ID] = &prev[i]
 	}
-	currNameMap := make(map[string]*cloudstorage.TableCol, len(curr))
-	currIDMap := make(map[string]*cloudstorage.TableCol, len(curr))
+	currNameMap := make(map[string]*table.Column, len(curr))
+	currIDMap := make(map[string]*table.Column, len(curr))
 	for i, item := range curr {
 		currNameMap[item.Name] = &curr[i]
 		currIDMap[item.ID] = &curr[i]
@@ -112,7 +112,7 @@ func GetColumnDiff(prev []cloudstorage.TableCol, curr []cloudstorage.TableCol) (
 	return columnDiff, nil
 }
 
-func GetTiDBTableColumn(db *sql.DB, sourceDatabase, sourceTable string) ([]cloudstorage.TableCol, error) {
+func GetTiDBTableColumn(db *sql.DB, sourceDatabase, sourceTable string) ([]table.Column, error) {
 	columnQuery := `SELECT COLUMN_NAME, COLUMN_DEFAULT, IS_NULLABLE, DATA_TYPE,
 CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION, COLUMN_TYPE, EXTRA
 FROM information_schema.columns
@@ -123,7 +123,7 @@ WHERE table_schema = ? AND table_name = ?`
 	}
 	// TODO: Confirm with generated column, sequence.
 	defer rows.Close()
-	tableColumns := make([]cloudstorage.TableCol, 0)
+	tableColumns := make([]table.Column, 0)
 	for rows.Next() {
 		var column struct {
 			ColumnName    string
@@ -168,7 +168,7 @@ WHERE table_schema = ? AND table_name = ?`
 		} else {
 			nullable = "false"
 		}
-		var defaultVal interface{}
+		var defaultVal any
 		if column.ColumnDefault != nil {
 			defaultVal = *column.ColumnDefault
 		}
@@ -177,7 +177,7 @@ WHERE table_schema = ? AND table_name = ?`
 		if strings.Contains(strings.ToLower(column.ColumnType), "unsigned") {
 			column.DataType = column.DataType + " unsigned"
 		}
-		tableCol := cloudstorage.TableCol{
+		tableCol := table.Column{
 			Name:      column.ColumnName,
 			Tp:        column.DataType,
 			Default:   defaultVal,

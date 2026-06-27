@@ -11,7 +11,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	parsertypes "github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/parser/types"
 	_ "github.com/pingcap/tidb/pkg/types/parser_driver" // register parser value expressions
 	"go.uber.org/zap"
 )
@@ -22,11 +22,40 @@ func SchemaFilePath(database, table string) string {
 	return fmt.Sprintf("%s.%s%s", database, table, SchemaFileSuffix)
 }
 
+type Column struct {
+	// todo: ID should be removed.
+	ID        string
+	Name      string
+	Tp        string
+	Default   any
+	Precision string
+	Scale     string
+	Nullable  string
+	IsPK      string
+	Elems     []string
+}
+
+func newColumn(col cloudstorage.TableCol) Column {
+	return Column{
+		ID:        col.ID,
+		Name:      col.Name,
+		Tp:        col.Tp,
+		Default:   col.Default,
+		Precision: col.Precision,
+		Scale:     col.Precision,
+		Nullable:  col.Nullable,
+		IsPK:      col.IsPK,
+		Elems:     col.Elems,
+	}
+}
+
 type Meta struct {
 	Schema      string
 	Table       string
-	Columns     []cloudstorage.TableCol
+	Columns     []Column
 	PrimaryKeys []string
+
+	snowflakeTableName string
 }
 
 func FromSchemaFile(schemaFile cloudstorage.SchemaFile) *Meta {
@@ -36,11 +65,19 @@ func FromSchemaFile(schemaFile cloudstorage.SchemaFile) *Meta {
 			primaryKeys = append(primaryKeys, col.Name)
 		}
 	}
+
+	columns := make([]Column, 0, len(schemaFile.Columns))
+	for _, col := range schemaFile.Columns {
+		columns = append(columns, newColumn(col))
+	}
+
 	return &Meta{
 		Schema:      schemaFile.Schema,
 		Table:       schemaFile.Table,
-		Columns:     append([]cloudstorage.TableCol(nil), schemaFile.Columns...),
+		Columns:     columns,
 		PrimaryKeys: primaryKeys,
+
+		snowflakeTableName: fmt.Sprintf("%s.%s", schemaFile.Schema, schemaFile.Table),
 	}
 }
 
@@ -61,9 +98,9 @@ func BuildSchema(database, table, createTableDDL string) *Meta {
 		pkColumnSet[strings.ToLower(col)] = struct{}{}
 	}
 
-	columns := make([]cloudstorage.TableCol, 0, len(createTableStmt.Cols))
+	columns := make([]Column, 0, len(createTableStmt.Cols))
 	for _, colDef := range createTableStmt.Cols {
-		col, skip := tableColFromColumnDef(colDef)
+		col, skip := newColumnFromAstDef(colDef)
 		if skip {
 			continue
 		}
@@ -76,11 +113,16 @@ func BuildSchema(database, table, createTableDDL string) *Meta {
 		columns = append(columns, col)
 	}
 	return &Meta{
-		Schema:      database,
-		Table:       table,
-		Columns:     columns,
-		PrimaryKeys: primaryKeys,
+		Schema:             database,
+		Table:              table,
+		Columns:            columns,
+		PrimaryKeys:        primaryKeys,
+		snowflakeTableName: fmt.Sprintf("%s.%s", database, table),
 	}
+}
+
+func (m *Meta) SnowflakeTableName() string {
+	return m.snowflakeTableName
 }
 
 func findCreateTableStmt(stmts []ast.StmtNode, database, table string) *ast.CreateTableStmt {
@@ -124,8 +166,8 @@ func collectPrimaryKeys(stmt *ast.CreateTableStmt) []string {
 	return pkColumns
 }
 
-func tableColFromColumnDef(colDef *ast.ColumnDef) (cloudstorage.TableCol, bool) {
-	col := cloudstorage.TableCol{
+func newColumnFromAstDef(colDef *ast.ColumnDef) (Column, bool) {
+	col := Column{
 		Name:     colDef.Name.Name.O,
 		Nullable: "true",
 	}
@@ -159,8 +201,8 @@ func tableColFromColumnDef(colDef *ast.ColumnDef) (cloudstorage.TableCol, bool) 
 	return col, false
 }
 
-func columnType(ft *parsertypes.FieldType) (string, string, string) {
-	baseType := parsertypes.TypeToStr(ft.GetType(), ft.GetCharset())
+func columnType(ft *types.FieldType) (string, string, string) {
+	baseType := types.TypeToStr(ft.GetType(), ft.GetCharset())
 	if mysql.HasIsBooleanFlag(ft.GetFlag()) && ft.GetType() == mysql.TypeTiny {
 		baseType = "bool"
 	}
@@ -184,16 +226,16 @@ func columnType(ft *parsertypes.FieldType) (string, string, string) {
 	}
 }
 
-func defaultedFlen(ft *parsertypes.FieldType) int {
-	if ft.GetFlen() != parsertypes.UnspecifiedLength {
+func defaultedFlen(ft *types.FieldType) int {
+	if ft.GetFlen() != types.UnspecifiedLength {
 		return ft.GetFlen()
 	}
 	flen, _ := mysql.GetDefaultFieldLengthAndDecimal(ft.GetType())
 	return flen
 }
 
-func defaultedDecimal(ft *parsertypes.FieldType) int {
-	if ft.GetDecimal() != parsertypes.UnspecifiedLength {
+func defaultedDecimal(ft *types.FieldType) int {
+	if ft.GetDecimal() != types.UnspecifiedLength {
 		return ft.GetDecimal()
 	}
 	_, decimal := mysql.GetDefaultFieldLengthAndDecimal(ft.GetType())
@@ -201,7 +243,7 @@ func defaultedDecimal(ft *parsertypes.FieldType) int {
 }
 
 func intString(v int) string {
-	if v == parsertypes.UnspecifiedLength {
+	if v == types.UnspecifiedLength {
 		return ""
 	}
 	return fmt.Sprintf("%d", v)

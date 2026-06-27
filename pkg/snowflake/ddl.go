@@ -6,7 +6,6 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
@@ -39,9 +38,9 @@ func GetColumnModifyString(diff *tidb.ColumnDiff) string {
 func GenDDLViaMetaDiff(prevMeta, nextMeta *table.Meta, action model.ActionType) ([]string, error) {
 	switch action {
 	case model.ActionTruncateTable:
-		return []string{fmt.Sprintf("TRUNCATE TABLE %s", quoteIdent(nextMeta.Table))}, nil
+		return []string{fmt.Sprintf("TRUNCATE TABLE %s", quoteIdent(nextMeta.SnowflakeTableName()))}, nil
 	case model.ActionDropTable:
-		return []string{fmt.Sprintf("DROP TABLE %s", quoteIdent(nextMeta.Table))}, nil
+		return []string{fmt.Sprintf("DROP TABLE %s", quoteIdent(nextMeta.SnowflakeTableName()))}, nil
 	case model.ActionCreateTable:
 		return nil, errors.New("Received create table ddl, which should not happen") // FIXME: drop table and create table
 	case model.ActionRenameTable:
@@ -66,13 +65,13 @@ func GenDDLViaMetaDiff(prevMeta, nextMeta *table.Meta, action model.ActionType) 
 		ddl := ""
 		switch item.Action {
 		case tidb.ADD_COLUMN:
-			ddl = fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", quoteIdent(nextMeta.Table), buildColumn(*item.After))
+			ddl = fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", quoteIdent(nextMeta.SnowflakeTableName()), buildColumn(*item.After))
 		case tidb.DROP_COLUMN:
-			ddl = fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", quoteIdent(nextMeta.Table), quoteIdent(item.Before.Name))
+			ddl = fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", quoteIdent(nextMeta.SnowflakeTableName()), quoteIdent(item.Before.Name))
 		case tidb.MODIFY_COLUMN:
-			ddl = fmt.Sprintf("ALTER TABLE %s MODIFY %s", quoteIdent(nextMeta.Table), GetColumnModifyString(&item))
+			ddl = fmt.Sprintf("ALTER TABLE %s MODIFY %s", quoteIdent(nextMeta.SnowflakeTableName()), GetColumnModifyString(&item))
 		case tidb.RENAME_COLUMN:
-			ddl = fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", quoteIdent(nextMeta.Table), quoteIdent(item.Before.Name), quoteIdent(item.After.Name))
+			ddl = fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", quoteIdent(nextMeta.SnowflakeTableName()), quoteIdent(item.Before.Name), quoteIdent(item.After.Name))
 		default:
 			// UNCHANGE
 		}
@@ -91,7 +90,7 @@ func GenDDLViaMetaDiff(prevMeta, nextMeta *table.Meta, action model.ActionType) 
 // Refer to:
 // https://dev.mysql.com/doc/refman/8.0/en/data-types.html
 // https://docs.snowflake.com/en/sql-reference/intro-summary-data-types
-func buildColumn(column cloudstorage.TableCol) string {
+func buildColumn(column table.Column) string {
 	var sb strings.Builder
 
 	sb.WriteString(newType(column))

@@ -39,6 +39,7 @@ func NewConnector(sfConfig *Config, stageName string, storageURI *url.URL, crede
 		zap.String("stage", stageName),
 		zap.String("url", stageUrl))
 	if err := CreateExternalStage(db, stageName, stageUrl, credentials); err != nil {
+		db.Close()
 		return nil, errors.Annotate(err, "Failed to create stage")
 	}
 
@@ -85,18 +86,31 @@ func (sc *Connector) LoadSnapshot(targetTable, filePath string) error {
 	return nil
 }
 
-func (sc *Connector) LoadIncrement(tableMeta *table.Meta, filePath string) error {
+func (sc *Connector) LoadIncrement(tableMeta *table.Meta, filePath string, highWatermark uint64) (bool, error) {
 	if len(tableMeta.PrimaryKeys) == 0 {
-		return errors.Errorf("table %s has no primary key", tableMeta.Table)
+		return false, errors.Errorf("table %s has no primary key", tableMeta.Table)
 	}
 	// merge staged file into table
-	mergeQuery := GenMergeInto(tableMeta, filePath, sc.stageName)
+	mergeQuery := GenMergeInto(tableMeta, filePath, sc.stageName, highWatermark)
 	_, err := sc.db.Exec(mergeQuery)
 	if err != nil {
-		return errors.Trace(err)
+		return false, errors.Trace(err)
+	}
+	fullyConsumed, err := sc.incrementFileFullyConsumed(filePath, highWatermark)
+	if err != nil {
+		return false, errors.Trace(err)
 	}
 	log.Info("Successfully merge file", zap.String("file", filePath))
-	return nil
+	return fullyConsumed, nil
+}
+
+func (sc *Connector) incrementFileFullyConsumed(filePath string, highWatermark uint64) (bool, error) {
+	var count int
+	query := GenCountCommitTSAfter(filePath, sc.stageName, highWatermark)
+	if err := sc.db.QueryRow(query).Scan(&count); err != nil {
+		return false, errors.Trace(err)
+	}
+	return count == 0, nil
 }
 
 func (sc *Connector) Close() {

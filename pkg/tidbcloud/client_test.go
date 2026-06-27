@@ -21,7 +21,7 @@ func newTestClient(t *testing.T, serverURL string, opts ...Option) *Client {
 	return c
 }
 
-func TestNewClient_RequiresKeys(t *testing.T) {
+func TestNewClientRequiresKeys(t *testing.T) {
 	_, err := NewClient("", "priv")
 	require.Error(t, err)
 	_, err = NewClient("pub", "")
@@ -66,7 +66,7 @@ func TestDigestAuth(t *testing.T) {
 	require.GreaterOrEqual(t, atomic.LoadInt32(&calls), int32(2), "digest should require a challenge round-trip")
 }
 
-func TestDo_APIError(t *testing.T) {
+func TestDoAPIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -84,7 +84,7 @@ func TestDo_APIError(t *testing.T) {
 	require.Contains(t, apiErr.Message, "invalid snapshot_tso")
 }
 
-func TestDo_RetriesOn503ThenSucceeds(t *testing.T) {
+func TestDoRetriesOn503ThenSucceeds(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if atomic.AddInt32(&calls, 1) == 1 {
@@ -103,7 +103,7 @@ func TestDo_RetriesOn503ThenSucceeds(t *testing.T) {
 	require.Equal(t, int32(2), atomic.LoadInt32(&calls))
 }
 
-func TestDo_DoesNotRetryOn400(t *testing.T) {
+func TestDoDoesNotRetryOn400(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
@@ -118,7 +118,7 @@ func TestDo_DoesNotRetryOn400(t *testing.T) {
 	require.Equal(t, int32(1), atomic.LoadInt32(&calls), "4xx must not be retried")
 }
 
-func TestDo_ContextCancel(t *testing.T) {
+func TestDoContextCancel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))

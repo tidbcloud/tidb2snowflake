@@ -36,10 +36,11 @@ func TestLoadCopiesSchemasAndSnapshotFiles(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 2, conn.schemaCount())
+	require.ElementsMatch(t, []string{"t1", "t2"}, conn.schemaTables())
 	require.ElementsMatch(t, []string{
-		"t1:snapshot/db.t1.000001.csv",
-		"t1:snapshot/db.t1.000002.csv.gz",
-		"t2:snapshot/db.t2.000001.csv",
+		"db.t1:snapshot/db.t1.000001.csv",
+		"db.t1:snapshot/db.t1.000002.csv.gz",
+		"db.t2:snapshot/db.t2.000001.csv",
 	}, conn.loadedFiles())
 }
 
@@ -81,16 +82,18 @@ func TestPrepareSnapshotTablesRejectsTableWithoutPrimaryKey(t *testing.T) {
 }
 
 type fakeSnapshotConnector struct {
-	mu      sync.Mutex
-	schemas int
-	loaded  []string
-	loadErr error
+	mu           sync.Mutex
+	schemas      int
+	copiedTables []string
+	loaded       []string
+	loadErr      error
 }
 
-func (c *fakeSnapshotConnector) CopyTableSchema(*table.Meta) error {
+func (c *fakeSnapshotConnector) CopyTableSchema(schema *table.Meta) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.schemas++
+	c.copiedTables = append(c.copiedTables, schema.Table)
 	return nil
 }
 
@@ -111,6 +114,14 @@ func (c *fakeSnapshotConnector) schemaCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.schemas
+}
+
+func (c *fakeSnapshotConnector) schemaTables() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tables := make([]string, len(c.copiedTables))
+	copy(tables, c.copiedTables)
+	return tables
 }
 
 func (c *fakeSnapshotConnector) loadedFiles() []string {
