@@ -30,7 +30,7 @@ type Config struct {
 	OnProgress   func(dumpedRows, totalRows int64)
 }
 
-func buildConfig(ctx context.Context, store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) (*export.Config, error) {
+func buildConfig(store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) (*export.Config, error) {
 	concurrency := cfg.Concurrency
 	if concurrency <= 0 {
 		concurrency = 8
@@ -100,7 +100,7 @@ func buildConfig(ctx context.Context, store storeapi.Storage, tidbCfg *tidb.Conf
 }
 
 func Run(ctx context.Context, store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) error {
-	dumpConfig, err := buildConfig(ctx, store, tidbCfg, cfg)
+	dumpConfig, err := buildConfig(store, tidbCfg, cfg)
 	if err != nil {
 		return errors.Trace(err)
 	}

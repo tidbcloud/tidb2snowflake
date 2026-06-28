@@ -7,63 +7,38 @@ import (
 	"strings"
 
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
-	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/pingcap/errors"
-	"gitlab.com/tymonx/go-formatter/formatter"
 )
 
 func CreateExternalStage(db *sql.DB, stageName, s3WorkspaceURL string, cred *credentials.Value) error {
-	sql, err := formatter.Format(`
-CREATE OR REPLACE STAGE {stageName}
-URL = '{url}'
-CREDENTIALS = (AWS_KEY_ID = '{awsKeyId}' AWS_SECRET_KEY = '{awsSecretKey}' AWS_TOKEN = '{awsToken}')
+	sql := fmt.Sprintf(`
+CREATE OR REPLACE STAGE %s
+URL = '%s'
+CREDENTIALS = (AWS_KEY_ID = '%s' AWS_SECRET_KEY = '%s' AWS_TOKEN = '%s')
 FILE_FORMAT = (type = 'CSV' EMPTY_FIELD_AS_NULL = FALSE NULL_IF=('\\N') FIELD_OPTIONALLY_ENCLOSED_BY='"' ESCAPE='\\' BINARY_FORMAT = 'HEX');
-	`, formatter.Named{
-		"stageName":    quoteIdent(stageName),
-		"url":          utils.EscapeString(s3WorkspaceURL),
-		"awsKeyId":     utils.EscapeString(cred.AccessKeyID),
-		"awsSecretKey": utils.EscapeString(cred.SecretAccessKey),
-		"awsToken":     utils.EscapeString(cred.SessionToken),
-	})
-	if err != nil {
-		return err
-	}
-	_, err = db.Exec(sql)
+	`, quoteIdent(stageName), escapeString(s3WorkspaceURL), escapeString(cred.AccessKeyID), escapeString(cred.SecretAccessKey), escapeString(cred.SessionToken))
+	_, err := db.Exec(sql)
 	return err
 }
 
 func DropStage(db *sql.DB, stageName string) error {
-	sql, err := formatter.Format(`
-DROP STAGE IF EXISTS {stageName};
-`, formatter.Named{
-		"stageName": quoteIdent(stageName),
-	})
-	if err != nil {
-		return errors.Trace(err)
-	}
-	_, err = db.Exec(sql)
+	sql := fmt.Sprintf(`
+DROP STAGE IF EXISTS %s;
+`, quoteIdent(stageName))
+	_, err := db.Exec(sql)
 	return err
 }
 
 func LoadSnapshotFromStage(db *sql.DB, targetTable, stageName, filePath string, compression ...string) error {
 	fileFormat := snapshotFileFormat(compressionValue(compression))
-	sql, err := formatter.Format(`
-COPY INTO {targetTable}
-FROM @{stageName}
-FILES = ('{filePath}')
-FILE_FORMAT = ({fileFormat});
-`, formatter.Named{
-		"targetTable": quoteIdent(targetTable),
-		"stageName":   quoteIdent(stageName),
-		"filePath":    utils.EscapeString(filePath),
-		"fileFormat":  fileFormat,
-	})
-	if err != nil {
-		return errors.Trace(err)
-	}
-	_, err = db.Exec(sql)
+	sql := fmt.Sprintf(`
+COPY INTO %s
+FROM @%s
+FILES = ('%s')
+FILE_FORMAT = (%s);
+`, quoteIdent(targetTable), quoteIdent(stageName), escapeString(filePath), fileFormat)
+	_, err := db.Exec(sql)
 	return err
 }
 
@@ -108,13 +83,49 @@ func quoteIdents(idents []string) []string {
 	return out
 }
 
+func escapeString(s string) string {
+	// See https://docs.snowflake.com/en/sql-reference/data-types-text#escape-sequences-in-single-quoted-string-constants
+	var sb strings.Builder
+	for i := 0; i < len(s); i++ {
+		r := s[i]
+		switch r {
+		case '\'':
+			sb.Write([]byte{'\\', '\''})
+		case '"':
+			sb.Write([]byte{'\\', '"'})
+		case '\\':
+			sb.Write([]byte{'\\', '\\'})
+		case '\b':
+			sb.Write([]byte{'\\', 'b'})
+		case '\f':
+			sb.Write([]byte{'\\', 'f'})
+		case '\n':
+			sb.Write([]byte{'\\', 'n'})
+		case '\r':
+			sb.Write([]byte{'\\', 'r'})
+		case '\t':
+			sb.Write([]byte{'\\', 't'})
+		case 0:
+			sb.Write([]byte{'\\', '0'})
+		default:
+			if strconv.IsPrint(rune(r)) {
+				sb.WriteByte(r)
+				continue
+			}
+			sb.WriteString("\\u")
+			sb.WriteString(strconv.FormatInt(int64(r), 16))
+		}
+	}
+	return sb.String()
+}
+
 func GetDefaultString(val any) string {
 	if expr, ok := val.(defaultSQLExpression); ok {
 		return expr.SQLExpression()
 	}
 	_, err := strconv.ParseFloat(fmt.Sprintf("%v", val), 64)
 	if err != nil {
-		return fmt.Sprintf("'%s'", utils.EscapeString(fmt.Sprintf("%v", val)))
+		return fmt.Sprintf("'%s'", escapeString(fmt.Sprintf("%v", val)))
 	}
 	return fmt.Sprintf("%v", val)
 }
@@ -180,7 +191,7 @@ func GenMergeInto(tableMeta *table.Meta, filePath string, stageName string, high
 	}
 
 	// TODO: Remove QUALIFY row_number() after cdc support merge dml or snowflake support deterministic merge
-	stageFile := fmt.Sprintf("@%s/%s", quoteIdent(stageName), utils.EscapeString(filePath))
+	stageFile := fmt.Sprintf("@%s/%s", quoteIdent(stageName), escapeString(filePath))
 	mergeQuery := fmt.Sprintf(
 		`MERGE INTO %s AS T USING
 		(
@@ -211,7 +222,7 @@ func GenMergeInto(tableMeta *table.Meta, filePath string, stageName string, high
 }
 
 func GenCountCommitTSAfter(filePath string, stageName string, highWatermark uint64) string {
-	stageFile := fmt.Sprintf("@%s/%s", quoteIdent(stageName), utils.EscapeString(filePath))
+	stageFile := fmt.Sprintf("@%s/%s", quoteIdent(stageName), escapeString(filePath))
 	return fmt.Sprintf(`SELECT COUNT(*) FROM (
 	SELECT 1
 	FROM '%s'

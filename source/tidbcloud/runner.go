@@ -74,9 +74,7 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 		return nil
 	}
 
-	var (
-		snapshotTSO string
-	)
+	var snapshotTSO string
 	exportID := r.state.Snapshot().TaskInfo.ExportID
 	if exportID == "" {
 		exportID, snapshotTSO, err = r.createExport(ctx)
@@ -94,9 +92,9 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 		return errors.Annotate(err, "wait TiDB Cloud export")
 	}
 
-	tso, err := snapshotTSOFromString(snapshotTSO)
+	tso, err := strconv.ParseUint(snapshotTSO, 10, 64)
 	if err != nil {
-		return errors.Trace(err)
+		return errors.Annotate(err, "parse TiDB Cloud export snapshotTso")
 	}
 	if err := r.state.SetSnapshotTSO(ctx, tso); err != nil {
 		return errors.Trace(err)
@@ -138,9 +136,6 @@ func (r *Runner) EnsureChangefeed(ctx context.Context) error {
 	err = r.waitChangefeed(ctx, changefeedID)
 	if err != nil {
 		return errors.Annotate(err, "wait TiDB Cloud changefeed")
-	}
-	if err := r.state.SetChangefeedID(ctx, changefeedID); err != nil {
-		return errors.Trace(err)
 	}
 	log.Info("TiDB Cloud changefeed ready", zap.String("changefeedID", changefeedID))
 	return nil
@@ -196,20 +191,6 @@ func (r *Runner) createChangefeed(ctx context.Context) (string, error) {
 	return cf.ChangefeedID, nil
 }
 
-func snapshotTSOFromString(tso string) (uint64, error) {
-	if tso == "" {
-		return 0, errors.New("TiDB Cloud export returned empty snapshotTso")
-	}
-	parsed, err := strconv.ParseUint(tso, 10, 64)
-	if err != nil {
-		return 0, errors.Annotate(err, "parse TiDB Cloud export snapshotTso")
-	}
-	if parsed == 0 {
-		return 0, errors.New("TiDB Cloud export returned zero snapshotTso")
-	}
-	return parsed, nil
-}
-
 func (r *Runner) waitChangefeed(ctx context.Context, changefeedID string) error {
 	c, err := r.tidbCloudClient()
 	if err != nil {
@@ -242,13 +223,6 @@ func (r *Runner) tidbCloudClient() (*tidbcloud.Client, error) {
 }
 
 func buildChangefeedRequest(cfg Config, cleanIncrementURI string, cred *credentials.Value, snapshotTSO string) *tidbcloud.CreateChangefeedRequest {
-	start := &tidbcloud.StartPosition{}
-	if snapshotTSO != "" {
-		start.Mode = tidbcloud.StartModeFromTSO
-		start.TSO = snapshotTSO
-	} else {
-		start.Mode = tidbcloud.StartModeFromNow
-	}
 	return &tidbcloud.CreateChangefeedRequest{
 		DisplayName: "tidb2snowflake-incremental",
 		Sink: &tidbcloud.Sink{
@@ -276,7 +250,7 @@ func buildChangefeedRequest(cfg Config, cleanIncrementURI string, cred *credenti
 			},
 		},
 		Filter:        &tidbcloud.ChangefeedFilter{FilterRule: cfg.Tables, Mode: tidbcloud.TableModeForceSync},
-		StartPosition: start,
+		StartPosition: &tidbcloud.StartPosition{Mode: tidbcloud.StartModeFromTSO, TSO: snapshotTSO},
 	}
 }
 

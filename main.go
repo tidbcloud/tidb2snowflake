@@ -29,7 +29,7 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print the version of tidb2snowflake",
 		Run: func(_ *cobra.Command, _ []string) {
-			fmt.Println(version.NewVersion().String())
+			fmt.Println(version.String())
 		},
 	}
 }

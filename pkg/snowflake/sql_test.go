@@ -20,6 +20,10 @@ func TestQuoteIdent(t *testing.T) {
 	require.Equal(t, `"a""b"`, quoteIdent(`a"b`))
 }
 
+func TestEscapeString(t *testing.T) {
+	require.Equal(t, `a\'b\\c\"d\n`, escapeString("a'b\\c\"d\n"))
+}
+
 func TestLoadSnapshotFromStageEscapesFilePath(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

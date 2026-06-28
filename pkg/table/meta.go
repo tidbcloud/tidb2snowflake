@@ -54,8 +54,6 @@ type Meta struct {
 	Table       string
 	Columns     []Column
 	PrimaryKeys []string
-
-	snowflakeTableName string
 }
 
 func FromSchemaFile(schemaFile cloudstorage.SchemaFile) *Meta {
@@ -76,8 +74,6 @@ func FromSchemaFile(schemaFile cloudstorage.SchemaFile) *Meta {
 		Table:       schemaFile.Table,
 		Columns:     columns,
 		PrimaryKeys: primaryKeys,
-
-		snowflakeTableName: fmt.Sprintf("%s.%s", schemaFile.Schema, schemaFile.Table),
 	}
 }
 
@@ -113,19 +109,15 @@ func BuildSchema(database, table, createTableDDL string) *Meta {
 		columns = append(columns, col)
 	}
 	return &Meta{
-		Schema:             database,
-		Table:              table,
-		Columns:            columns,
-		PrimaryKeys:        primaryKeys,
-		snowflakeTableName: fmt.Sprintf("%s.%s", database, table),
+		Schema:      database,
+		Table:       table,
+		Columns:     columns,
+		PrimaryKeys: primaryKeys,
 	}
 }
 
 func (m *Meta) SnowflakeTableName() string {
-	if m.snowflakeTableName == "" {
-		return fmt.Sprintf("%s.%s", m.Schema, m.Table)
-	}
-	return m.snowflakeTableName
+	return fmt.Sprintf("%s.%s", m.Schema, m.Table)
 }
 
 func findCreateTableStmt(stmts []ast.StmtNode, database, table string) *ast.CreateTableStmt {

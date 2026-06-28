@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,9 +22,7 @@ import (
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
-	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
 	"go.uber.org/zap"
-	"golang.org/x/exp/slices"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -65,6 +64,7 @@ func Load(ctx context.Context, cfg Config, store storeapi.Storage) error {
 		"increment_external",
 		cfg.StorageURI,
 		cfg.Credential,
+		"",
 	)
 	if err != nil {
 		return errors.Trace(err)
@@ -187,7 +187,10 @@ func newLoader(ctx context.Context, cfg Config, store storeapi.Storage, conn *sn
 		l.highWatermark = st.Incremental.Scan.HighWatermark
 	}
 	for _, tableFQN := range cfg.Tables {
-		sourceDatabase, sourceTable := utils.SplitTableFQN(tableFQN)
+		sourceDatabase, sourceTable, ok := strings.Cut(tableFQN, ".")
+		if !ok {
+			sourceDatabase, sourceTable = "", ""
+		}
 		storedTable := st.Incremental.Tables[tableFQN]
 		metrics.AddGauge(metrics.IncrementPendingSizeGauge, 0, tableFQN)
 		table := &tableState{

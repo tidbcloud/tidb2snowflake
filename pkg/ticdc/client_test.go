@@ -76,7 +76,7 @@ func TestClientCreateAndWaitChangefeed(t *testing.T) {
 
 	cf, err := client.CreateChangefeed(context.Background(), &ChangefeedConfig{SinkURI: "s3://bucket/increment?protocol=csv"})
 	require.NoError(t, err)
-	require.Equal(t, "cf-1", ChangefeedID(cf))
+	require.Equal(t, "cf-1", cf.ID)
 	require.Equal(t, "/api/v2/changefeeds", createPath)
 	require.Equal(t, "s3://bucket/increment?protocol=csv", createBody["sink_uri"])
 

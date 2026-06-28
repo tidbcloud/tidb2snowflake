@@ -14,7 +14,6 @@ import (
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
-	"github.com/tidbcloud/tidb2snowflake/pkg/utils"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -59,7 +58,7 @@ func Load(ctx context.Context, cfg Config, store storeapi.Storage) error {
 		"snapshot_external",
 		cfg.StorageURI,
 		cfg.Credential,
-		snowflake.WithStageFileCompression(cfg.Compression),
+		cfg.Compression,
 	)
 	if err != nil {
 		return errors.Trace(err)
@@ -88,7 +87,10 @@ func prepareSnapshotTables(
 	tables := make(map[string]snapshotFile, len(cfg.Tables))
 
 	for _, tableFQN := range cfg.Tables {
-		sourceDatabase, sourceTable := utils.SplitTableFQN(tableFQN)
+		sourceDatabase, sourceTable, ok := strings.Cut(tableFQN, ".")
+		if !ok {
+			sourceDatabase, sourceTable = "", ""
+		}
 		schemaFilePath := path.Join(cfg.StorageDir, table.SchemaFilePath(sourceDatabase, sourceTable))
 		schemaSQL, err := store.ReadFile(ctx, schemaFilePath)
 		if err != nil {

@@ -21,7 +21,7 @@ func TestBuildConfig_SnowflakeSnapshotDump(t *testing.T) {
 	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, storageURI.String())
 	require.NoError(t, err)
 
-	cfg, err := buildConfig(ctx, store, &tidb.Config{
+	cfg, err := buildConfig(store, &tidb.Config{
 		Host: "127.0.0.1",
 		Port: 4000,
 		User: "root",

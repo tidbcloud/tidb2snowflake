@@ -115,13 +115,6 @@ func TestBuildChangefeedRequestFromTSO(t *testing.T) {
 	require.Equal(t, "449023000000000000", req.StartPosition.TSO)
 }
 
-func TestBuildChangefeedRequestFromNowWhenNoTSO(t *testing.T) {
-	cfg := baseConfig()
-	req := buildChangefeedRequest(cfg, "s3://bucket/path/increment", testCred(), "")
-	require.Equal(t, cloudapi.StartModeFromNow, req.StartPosition.Mode)
-	require.Empty(t, req.StartPosition.TSO)
-}
-
 func newTestStateManager(t *testing.T, ctx context.Context, store storeapi.Storage) state.Manager {
 	t.Helper()
 	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"})

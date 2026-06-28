@@ -155,9 +155,6 @@ func (m *manager) SetDMLFileWatermark(ctx context.Context, table, scope string, 
 		if !ok {
 			return errors.Errorf("state missing incremental table entry %q", table)
 		}
-		if tableState.DMLFileWatermarks == nil {
-			tableState.DMLFileWatermarks = make(map[string]uint64)
-		}
 		if fileIdx > tableState.DMLFileWatermarks[scope] {
 			tableState.DMLFileWatermarks[scope] = fileIdx
 		}
@@ -186,9 +183,7 @@ func (m *manager) MarkSnapshotFinished(ctx context.Context) error {
 			return errors.New("snapshot.tso is required before marking snapshot finished")
 		}
 		st.Snapshot.Finished = true
-		if st.Incremental.CheckpointTS == 0 {
-			st.Incremental.CheckpointTS = st.Snapshot.TSO
-		}
+		st.Incremental.CheckpointTS = st.Snapshot.TSO
 		return nil
 	})
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/tidbcloud/tidb2snowflake/pkg/common"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/source"
@@ -235,6 +236,7 @@ func (opt *Option) logSummary() {
 		zap.Int("tableCount", len(opt.Tables)),
 		zap.String("mode", opt.Mode),
 		zap.String("sourceMode", opt.SourceMode),
+		zap.String("storage", common.RedactURLRawQuery(opt.StoragePath)),
 		zap.String("snapshotCompression", opt.SnapshotCompression),
 		zap.Duration("changefeedFlushInterval", opt.ChangefeedFlushInterval),
 		zap.Int("changefeedFileSizeMiB", opt.ChangefeedFileSizeMiB),

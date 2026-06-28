@@ -110,13 +110,6 @@ func BuildChangefeedConfig(opts ChangefeedConfigOptions) (*ChangefeedConfig, err
 	}, nil
 }
 
-func ChangefeedID(cf *Changefeed) string {
-	if cf == nil {
-		return ""
-	}
-	return cf.ID
-}
-
 func (c *Client) CreateChangefeed(ctx context.Context, cfg *ChangefeedConfig) (*Changefeed, error) {
 	var out Changefeed
 	if err := c.doJSON(ctx, http.MethodPost, []string{"changefeeds"}, cfg, &out); err != nil {

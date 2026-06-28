@@ -20,15 +20,7 @@ type Connector struct {
 	stageFileCompression string
 }
 
-type Option func(*Connector)
-
-func WithStageFileCompression(compression string) Option {
-	return func(sc *Connector) {
-		sc.stageFileCompression = compression
-	}
-}
-
-func NewConnector(sfConfig *Config, stageName string, storageURI *url.URL, credentials *credentials.Value, opts ...Option) (*Connector, error) {
+func NewConnector(sfConfig *Config, stageName string, storageURI *url.URL, credentials *credentials.Value, stageFileCompression string) (*Connector, error) {
 	db, err := OpenDB(sfConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -44,11 +36,9 @@ func NewConnector(sfConfig *Config, stageName string, storageURI *url.URL, crede
 	}
 
 	sc := &Connector{
-		db:        db,
-		stageName: stageName,
-	}
-	for _, opt := range opts {
-		opt(sc)
+		db:                   db,
+		stageName:            stageName,
+		stageFileCompression: stageFileCompression,
 	}
 	log.Info("Snowflake connector initialized",
 		zap.String("stage", stageName),

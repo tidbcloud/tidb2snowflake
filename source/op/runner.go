@@ -151,7 +151,7 @@ func (r *Runner) createChangefeed(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", errors.Trace(err)
 	}
-	return ticdc.ChangefeedID(cf), nil
+	return cf.ID, nil
 }
 
 func (r *Runner) waitChangefeed(ctx context.Context, id string) error {
