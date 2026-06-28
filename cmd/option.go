@@ -9,7 +9,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/tidbcloud/tidb2snowflake/pkg/common"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/source"
@@ -232,11 +231,17 @@ func (opt *Option) validate() error {
 }
 
 func (opt *Option) logSummary() {
+	storage := opt.StoragePath
+	if uri, err := url.Parse(opt.StoragePath); err == nil {
+		uri.RawQuery = ""
+		storage = uri.String()
+	}
+
 	log.Info("replication options validated",
 		zap.Int("tableCount", len(opt.Tables)),
 		zap.String("mode", opt.Mode),
 		zap.String("sourceMode", opt.SourceMode),
-		zap.String("storage", common.RedactURLRawQuery(opt.StoragePath)),
+		zap.String("storage", storage),
 		zap.String("snapshotCompression", opt.SnapshotCompression),
 		zap.Duration("changefeedFlushInterval", opt.ChangefeedFlushInterval),
 		zap.Int("changefeedFileSizeMiB", opt.ChangefeedFileSizeMiB),

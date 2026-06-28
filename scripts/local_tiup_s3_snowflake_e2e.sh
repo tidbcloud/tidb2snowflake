@@ -183,74 +183,6 @@ null = '\N'
 TOML
 }
 
-write_snowflake_probe() {
-  cat >"$WORKDIR/snowflake_probe.go" <<'GO'
-package main
-
-import (
-	"database/sql"
-	"flag"
-	"fmt"
-	"os"
-	"time"
-
-	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
-)
-
-func main() {
-	var table string
-	var timeout time.Duration
-	flag.StringVar(&table, "table", "", "table name")
-	flag.DurationVar(&timeout, "timeout", 5*time.Minute, "poll timeout")
-	flag.Parse()
-	if table == "" {
-		fmt.Fprintln(os.Stderr, "--table is required")
-		os.Exit(2)
-	}
-	cfg := &snowflake.Config{
-		AccountId: os.Getenv("SNOWFLAKE_ACCOUNT_ID"),
-		Warehouse: os.Getenv("SNOWFLAKE_WAREHOUSE"),
-		User:      os.Getenv("SNOWFLAKE_USER"),
-		Pass:      os.Getenv("SNOWFLAKE_PASS"),
-		Database:  os.Getenv("SNOWFLAKE_DATABASE"),
-		Schema:    os.Getenv("SNOWFLAKE_SCHEMA"),
-	}
-	db, err := cfg.OpenDB()
-	if err != nil {
-		panic(err)
-	}
-	defer db.Close()
-	deadline := time.Now().Add(timeout)
-	var last string
-	for time.Now().Before(deadline) {
-		var count int
-		var amount sql.NullInt64
-		var year sql.NullInt64
-		var enumVal sql.NullString
-		var vectorVal sql.NullString
-		var deleted int
-		err = db.QueryRow(fmt.Sprintf("SELECT COUNT(*), COALESCE(MAX(IFF(id=2, amount, NULL)), -1), COALESCE(MAX(IFF(id=2, c_year, NULL)), -1), COALESCE(MAX(IFF(id=2, c_enum, NULL)), ''), COALESCE(MAX(IFF(id=2, c_vector, NULL)), ''), SUM(IFF(id=3, 1, 0)) FROM %s", table)).Scan(&count, &amount, &year, &enumVal, &vectorVal, &deleted)
-		if err == nil {
-			last = fmt.Sprintf("count=%d id2_amount=%d id2_year=%d id2_enum=%s id2_vector=%s id3_rows=%d", count, amount.Int64, year.Int64, enumVal.String, vectorVal.String, deleted)
-			if count == 4 &&
-				amount.Valid && amount.Int64 == 222 &&
-				year.Valid && year.Int64 == 2030 &&
-				enumVal.Valid && enumVal.String == "large" &&
-				vectorVal.Valid && vectorVal.String == "[9,8,7]" &&
-				deleted == 0 {
-				fmt.Println(last)
-				return
-			}
-		} else {
-			last = err.Error()
-		}
-		time.Sleep(5 * time.Second)
-	}
-	panic("Snowflake assertion did not pass before timeout; last=" + last)
-}
-GO
-}
-
 main() {
   need tiup
   need aws
@@ -347,14 +279,13 @@ SQL
   TOOL_PID=$!
 
   log "waiting for Snowflake assertion"
-  write_snowflake_probe
   SNOWFLAKE_ACCOUNT_ID="$SNOWFLAKE_ACCOUNT_ID" \
   SNOWFLAKE_USER="$SNOWFLAKE_USER" \
   SNOWFLAKE_PASS="$SNOWFLAKE_PASS" \
   SNOWFLAKE_WAREHOUSE="$SNOWFLAKE_WAREHOUSE" \
   SNOWFLAKE_DATABASE="$SNOWFLAKE_DATABASE" \
   SNOWFLAKE_SCHEMA="$SNOWFLAKE_SCHEMA" \
-    go run -ldflags=-checklinkname=0 "$WORKDIR/snowflake_probe.go" --table "$SOURCE_TABLE" --timeout 8m
+    go run -ldflags=-checklinkname=0 "$ROOT/scripts/local_tiup_s3_snowflake_probe" --table "$SOURCE_TABLE" --timeout 8m
 
   log "success"
   log "logs are in $WORKDIR"
