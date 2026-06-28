@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/stretchr/testify/require"
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 )
@@ -37,7 +36,7 @@ func TestGenMergeIntoEscapesIdentifiersAndFilePath(t *testing.T) {
 	meta := &table.Meta{
 		Schema: "db",
 		Table:  `"target`,
-		Columns: []cloudstorage.TableCol{
+		Columns: []table.Column{
 			{Name: `id`, Tp: "int"},
 		},
 		PrimaryKeys: []string{"id"},
@@ -68,7 +67,7 @@ func TestLoadIncrementReturnsWhetherFileFullyConsumed(t *testing.T) {
 	meta := &table.Meta{
 		Schema: "db",
 		Table:  "tbl",
-		Columns: []cloudstorage.TableCol{
+		Columns: []table.Column{
 			{Name: "id", Tp: "int"},
 		},
 		PrimaryKeys: []string{"id"},

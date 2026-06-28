@@ -84,6 +84,19 @@ func TestEnsureSnapshotSkipsWhenSnapshotTSOExists(t *testing.T) {
 	require.NoError(t, runner.EnsureSnapshot(ctx))
 }
 
+func TestCreateChangefeedRequiresSnapshotTSO(t *testing.T) {
+	ctx := context.Background()
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
+	defer store.Close()
+	manager := newTestStateManager(t, ctx, store)
+
+	runner := NewRunner(Config{}, store, manager)
+	_, err = runner.createChangefeed(ctx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "snapshot.tso is required")
+}
+
 func newTestStateManager(t *testing.T, ctx context.Context, store storeapi.Storage) state.Manager {
 	t.Helper()
 	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"})

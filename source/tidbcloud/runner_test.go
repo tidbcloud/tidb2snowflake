@@ -24,7 +24,7 @@ func baseConfig() Config {
 		Tables:                  []string{"db1.t1", "db2.t2"},
 		ChangefeedFlushInterval: 60 * time.Second,
 		ChangefeedFileSizeMiB:   64,
-		SnapshotCompression:     "none",
+		SnapshotCompression:     cloudapi.ExportCompressionNone,
 	}
 }
 
@@ -86,7 +86,7 @@ func TestBuildExportRequestPinnedSnapshotTSO(t *testing.T) {
 
 func TestBuildExportRequestGzipCompression(t *testing.T) {
 	cfg := baseConfig()
-	cfg.SnapshotCompression = "gzip"
+	cfg.SnapshotCompression = cloudapi.ExportCompressionGzip
 	req := buildExportRequest(cfg, "s3://bucket/path/snapshot/", testCred(), "")
 	require.Equal(t, cloudapi.ExportCompressionGzip, req.ExportOptions.Compression)
 }

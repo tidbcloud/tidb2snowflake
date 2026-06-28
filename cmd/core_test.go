@@ -34,6 +34,7 @@ func TestNewOptionDefaults(t *testing.T) {
 	require.Equal(t, snapshotCompressionNone, opt.SnapshotCompression)
 	require.Equal(t, sourceModeTiDBCloud, opt.SourceMode)
 	require.Equal(t, runModeFull, opt.Mode)
+	require.Empty(t, opt.SnapshotTSO)
 }
 
 func TestValidateConfig(t *testing.T) {
@@ -103,6 +104,12 @@ func TestValidateConfig(t *testing.T) {
 	require.Equal(t, sourceModeTiDBCloud, opt.SourceMode)
 
 	opt = validationOption()
+	opt.SnapshotTSO = "0"
+	err = opt.validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--snapshot-tso must be greater than 0")
+
+	opt = validationOption()
 	opt.SourceMode = sourceModeOP
 	err = opt.validate()
 	require.Error(t, err)
@@ -135,7 +142,7 @@ func TestMarkSnapshotFinishedInitializesIncrementalCheckpoint(t *testing.T) {
 	manager := newCmdTestStateManager(t, ctx, store)
 	require.NoError(t, manager.SetSnapshotTSO(ctx, 466924115091783691))
 
-	require.NoError(t, markSnapshotFinished(ctx, manager))
+	require.NoError(t, manager.MarkSnapshotFinished(ctx))
 	st := manager.Snapshot()
 	require.True(t, st.Snapshot.Finished)
 	require.Equal(t, uint64(466924115091783691), st.Incremental.CheckpointTS)

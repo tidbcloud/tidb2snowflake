@@ -73,7 +73,7 @@ func NewSnowflakeCmd() *cobra.Command {
 	f.StringVar(&opt.AWSSecretKey, "aws.secret-key", opt.AWSSecretKey, "AWS secret key for the storage bucket")
 
 	// consistency / changefeed tuning
-	f.Uint64Var(&opt.SnapshotTSO, "snapshot-tso", opt.SnapshotTSO, "pin the snapshot to a specific TiDB TSO (optional; default: chosen at export time)")
+	f.StringVar(&opt.SnapshotTSO, "snapshot-tso", opt.SnapshotTSO, "pin the snapshot to a specific TiDB TSO (optional; default: chosen at export time)")
 	f.StringVar(&opt.SnapshotCompression, "snapshot.compression", opt.SnapshotCompression, "snapshot export compression: none or gzip")
 	f.DurationVar(&opt.ChangefeedFlushInterval, "changefeed.flush-interval", opt.ChangefeedFlushInterval, "changefeed flush interval")
 	f.IntVar(&opt.ChangefeedFileSizeMiB, "changefeed.file-size", opt.ChangefeedFileSizeMiB, "changefeed file size in MiB")

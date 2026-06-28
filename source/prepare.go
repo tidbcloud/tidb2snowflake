@@ -20,7 +20,7 @@ type Request struct {
 	PrepareSnapshot   bool
 	PrepareChangefeed bool
 	UseOPSource       bool
-	SnapshotTSO       uint64
+	SnapshotTSO       string
 
 	TiDB                    *tidb.Config
 	TiDBCloudClusterID      string
@@ -54,6 +54,9 @@ func Prepare(ctx context.Context, request Request, store storeapi.Storage, state
 	if request.PrepareSnapshot {
 		if err := runner.EnsureSnapshot(ctx); err != nil {
 			return errors.Trace(err)
+		}
+		if state.Snapshot().Snapshot.TSO == 0 {
+			return errors.New("snapshot.tso is required after preparing snapshot")
 		}
 	}
 	if request.PrepareChangefeed {

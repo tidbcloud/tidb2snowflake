@@ -21,7 +21,7 @@ import (
 type Config struct {
 	Concurrency  int
 	StorageURI   *url.URL
-	SnapshotTSO  uint64
+	SnapshotTSO  string
 	Tables       []string
 	Compression  string
 	ReadTimeout  time.Duration
@@ -66,8 +66,11 @@ func buildConfig(ctx context.Context, store storeapi.Storage, tidbCfg *tidb.Conf
 
 	conf.OutputDirPath = cfg.StorageURI.String()
 	conf.ReadTimeout = cfg.ReadTimeout
-	if cfg.SnapshotTSO != 0 {
-		conf.Snapshot = strconv.FormatUint(cfg.SnapshotTSO, 10)
+	if cfg.SnapshotTSO != "" {
+		if _, err := strconv.ParseUint(cfg.SnapshotTSO, 10, 64); err != nil {
+			return nil, errors.Annotate(err, "parse snapshot tso")
+		}
+		conf.Snapshot = cfg.SnapshotTSO
 	}
 
 	compressType, err := compressedio.ParseCompressType(compression)
@@ -146,7 +149,7 @@ func LoadTSOFromMetadata(ctx context.Context, store storeapi.Storage) (uint64, e
 		return 0, errors.Annotatef(err, "check snapshot metadata %s", metadataPath)
 	}
 	if !exists {
-		return 0, errors.Errorf("snapshot data exists but missing data")
+		return 0, errors.Errorf("%s is missing", metadataPath)
 	}
 	data, err := store.ReadFile(ctx, metadataPath)
 	if err != nil {

@@ -15,9 +15,13 @@ type Manager interface {
 	SetSnapshotTSO(context.Context, uint64) error
 	SetExportID(context.Context, string) error
 	SetChangefeedID(context.Context, string) error
-
+	StartIncrementalScan(context.Context, uint64) error
+	FinishIncrementalScan(context.Context, uint64) error
+	SetDMLFileWatermark(context.Context, string, string, uint64) error
+	SetDDLTableVersionWatermark(context.Context, string, uint64) error
 	MarkSnapshotFinished(context.Context) error
 }
+
 type manager struct {
 	mu     sync.Mutex
 	store  storeapi.Storage
@@ -92,9 +96,14 @@ func (m *manager) update(ctx context.Context, fn func(*State) error) error {
 }
 
 func (m *manager) SetSnapshotTSO(ctx context.Context, tso uint64) error {
+	if tso == 0 {
+		return errors.New("snapshot.tso is empty")
+	}
 	return m.update(ctx, func(st *State) error {
+		if st.Snapshot.TSO != 0 && st.Snapshot.TSO != tso {
+			return errors.Errorf("snapshot.tso mismatch: state %d, new %d", st.Snapshot.TSO, tso)
+		}
 		st.Snapshot.TSO = tso
-		st.Incremental.CheckpointTS = st.Snapshot.TSO
 		return nil
 	})
 }
@@ -119,9 +128,67 @@ func (m *manager) SetChangefeedID(ctx context.Context, changefeedID string) erro
 	})
 }
 
+func (m *manager) StartIncrementalScan(ctx context.Context, highWatermark uint64) error {
+	if highWatermark == 0 {
+		return errors.New("incremental scan high watermark is empty")
+	}
+	return m.update(ctx, func(st *State) error {
+		st.Incremental.Scan = &ScanState{HighWatermark: highWatermark}
+		return nil
+	})
+}
+
+func (m *manager) FinishIncrementalScan(ctx context.Context, checkpointTS uint64) error {
+	if checkpointTS == 0 {
+		return errors.New("incremental checkpoint is empty")
+	}
+	return m.update(ctx, func(st *State) error {
+		st.Incremental.CheckpointTS = checkpointTS
+		st.Incremental.Scan = nil
+		return nil
+	})
+}
+
+func (m *manager) SetDMLFileWatermark(ctx context.Context, table, scope string, fileIdx uint64) error {
+	return m.update(ctx, func(st *State) error {
+		tableState, ok := st.Incremental.Tables[table]
+		if !ok {
+			return errors.Errorf("state missing incremental table entry %q", table)
+		}
+		if tableState.DMLFileWatermarks == nil {
+			tableState.DMLFileWatermarks = make(map[string]uint64)
+		}
+		if fileIdx > tableState.DMLFileWatermarks[scope] {
+			tableState.DMLFileWatermarks[scope] = fileIdx
+		}
+		st.Incremental.Tables[table] = tableState
+		return nil
+	})
+}
+
+func (m *manager) SetDDLTableVersionWatermark(ctx context.Context, table string, tableVersion uint64) error {
+	return m.update(ctx, func(st *State) error {
+		tableState, ok := st.Incremental.Tables[table]
+		if !ok {
+			return errors.Errorf("state missing incremental table entry %q", table)
+		}
+		if tableVersion > tableState.DDLTableVersionWatermark {
+			tableState.DDLTableVersionWatermark = tableVersion
+		}
+		st.Incremental.Tables[table] = tableState
+		return nil
+	})
+}
+
 func (m *manager) MarkSnapshotFinished(ctx context.Context) error {
 	return m.update(ctx, func(st *State) error {
+		if st.Snapshot.TSO == 0 {
+			return errors.New("snapshot.tso is required before marking snapshot finished")
+		}
 		st.Snapshot.Finished = true
+		if st.Incremental.CheckpointTS == 0 {
+			st.Incremental.CheckpointTS = st.Snapshot.TSO
+		}
 		return nil
 	})
 }

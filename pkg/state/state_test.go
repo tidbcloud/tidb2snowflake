@@ -3,7 +3,6 @@ package state
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/url"
 	"testing"
 
@@ -25,15 +24,15 @@ func TestOpenCreatesStateFile(t *testing.T) {
 	require.Empty(t, st.TaskInfo.ChangefeedID)
 	require.Empty(t, st.Snapshot.TSO)
 	require.False(t, st.Snapshot.Finished)
-	require.Equal(t, "0", st.Incremental.CheckpointTS)
+	require.Zero(t, st.Incremental.CheckpointTS)
 	require.Nil(t, st.Incremental.Scan)
 	require.Equal(t, TableState{
 		DMLFileWatermarks:        map[string]uint64{},
-		DDLTableVersionWatermark: "0",
+		DDLTableVersionWatermark: 0,
 	}, st.Incremental.Tables["db1.t1"])
 	require.Equal(t, TableState{
 		DMLFileWatermarks:        map[string]uint64{},
-		DDLTableVersionWatermark: "0",
+		DDLTableVersionWatermark: 0,
 	}, st.Incremental.Tables["db2.t2"])
 
 	data, err := store.ReadFile(ctx, FileName)
@@ -51,17 +50,17 @@ func TestOpenRejectsMissingRequiredField(t *testing.T) {
     "changefeed_id": ""
   },
   "snapshot": {
-    "tso": "",
+    "tso": 0,
     "finished": false
   },
   "incremental": {
-    "tables": {}
+    "checkpoint_ts": 0
   }
 }`)))
 
 	_, err := Open(ctx, store, []string{"db.t"})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "incremental.checkpoint_ts")
+	require.Contains(t, err.Error(), "incremental.tables")
 }
 
 func TestOpenRejectsUnknownField(t *testing.T) {
@@ -74,12 +73,12 @@ func TestOpenRejectsUnknownField(t *testing.T) {
     "changefeed_id": ""
   },
   "snapshot": {
-    "tso": "",
+    "tso": 0,
     "finished": false,
     "extra": true
   },
   "incremental": {
-    "checkpoint_ts": "0",
+    "checkpoint_ts": 0,
     "tables": {}
   }
 }`)))
@@ -99,17 +98,17 @@ func TestOpenAddsConfiguredTableEntries(t *testing.T) {
     "changefeed_id": ""
   },
   "snapshot": {
-    "tso": "449",
+    "tso": 449,
     "finished": true
   },
   "incremental": {
-    "checkpoint_ts": "0",
+    "checkpoint_ts": 0,
     "tables": {
       "db1.t1": {
         "dml_file_watermarks": {
           "42/0/2026-06-25/": 9
         },
-        "ddl_table_version_watermark": "42"
+        "ddl_table_version_watermark": 42
       }
     }
   }
@@ -120,58 +119,37 @@ func TestOpenAddsConfiguredTableEntries(t *testing.T) {
 
 	st := manager.Snapshot()
 	require.Equal(t, uint64(9), st.Incremental.Tables["db1.t1"].DMLFileWatermarks["42/0/2026-06-25/"])
-	require.Equal(t, "42", st.Incremental.Tables["db1.t1"].DDLTableVersionWatermark)
+	require.Equal(t, uint64(42), st.Incremental.Tables["db1.t1"].DDLTableVersionWatermark)
 	require.Equal(t, TableState{
 		DMLFileWatermarks:        map[string]uint64{},
-		DDLTableVersionWatermark: "0",
+		DDLTableVersionWatermark: 0,
 	}, st.Incremental.Tables["db2.t2"])
 }
 
-func TestUpdatePersistsState(t *testing.T) {
+func TestStateMutationsPersist(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	manager, err := Open(ctx, store, []string{"db.t"})
 	require.NoError(t, err)
 
-	err = manager.Update(ctx, func(st *State) error {
-		st.TaskInfo.ExportID = "exp-1"
-		st.Snapshot.TSO = "449"
-		st.Snapshot.Finished = true
-		st.Incremental.CheckpointTS = "450"
-		st.Incremental.Scan = &ScanState{HighWatermark: "500"}
-		tableState := st.Incremental.Tables["db.t"]
-		tableState.DMLFileWatermarks["42/0/2026-06-25/"] = 9
-		tableState.DDLTableVersionWatermark = "42"
-		st.Incremental.Tables["db.t"] = tableState
-		return nil
-	})
-	require.NoError(t, err)
+	require.NoError(t, manager.SetExportID(ctx, "exp-1"))
+	require.NoError(t, manager.SetSnapshotTSO(ctx, 449))
+	require.NoError(t, manager.StartIncrementalScan(ctx, 500))
+	require.NoError(t, manager.SetDMLFileWatermark(ctx, "db.t", "42/0/2026-06-25/", 9))
+	require.NoError(t, manager.SetDDLTableVersionWatermark(ctx, "db.t", 42))
+	require.NoError(t, manager.MarkSnapshotFinished(ctx))
+	require.NoError(t, manager.FinishIncrementalScan(ctx, 500))
 
 	reopened, err := Open(ctx, store, []string{"db.t"})
 	require.NoError(t, err)
 	st := reopened.Snapshot()
 	require.Equal(t, "exp-1", st.TaskInfo.ExportID)
-	require.Equal(t, "449", st.Snapshot.TSO)
+	require.Equal(t, uint64(449), st.Snapshot.TSO)
 	require.True(t, st.Snapshot.Finished)
-	require.Equal(t, "450", st.Incremental.CheckpointTS)
-	require.Equal(t, &ScanState{HighWatermark: "500"}, st.Incremental.Scan)
+	require.Equal(t, uint64(500), st.Incremental.CheckpointTS)
+	require.Nil(t, st.Incremental.Scan)
 	require.Equal(t, uint64(9), st.Incremental.Tables["db.t"].DMLFileWatermarks["42/0/2026-06-25/"])
-	require.Equal(t, "42", st.Incremental.Tables["db.t"].DDLTableVersionWatermark)
-}
-
-func TestUpdateDoesNotMutateStateOnError(t *testing.T) {
-	ctx := context.Background()
-	store := newTestStore(t)
-	manager, err := Open(ctx, store, []string{"db.t"})
-	require.NoError(t, err)
-
-	err = manager.Update(ctx, func(st *State) error {
-		st.Snapshot.Finished = true
-		return errors.New("boom")
-	})
-	require.Error(t, err)
-
-	require.False(t, manager.Snapshot().Snapshot.Finished)
+	require.Equal(t, uint64(42), st.Incremental.Tables["db.t"].DDLTableVersionWatermark)
 }
 
 func TestSnapshotReturnsDeepCopy(t *testing.T) {
@@ -182,7 +160,7 @@ func TestSnapshotReturnsDeepCopy(t *testing.T) {
 
 	snapshot := manager.Snapshot()
 	snapshot.Snapshot.Finished = true
-	snapshot.Incremental.Scan = &ScanState{HighWatermark: "500"}
+	snapshot.Incremental.Scan = &ScanState{HighWatermark: 500}
 	tableState := snapshot.Incremental.Tables["db.t"]
 	tableState.DMLFileWatermarks["42/0/2026-06-25/"] = 9
 	snapshot.Incremental.Tables["db.t"] = tableState
@@ -193,29 +171,14 @@ func TestSnapshotReturnsDeepCopy(t *testing.T) {
 	require.Empty(t, st.Incremental.Tables["db.t"].DMLFileWatermarks)
 }
 
-func TestUpdateRejectsInvalidState(t *testing.T) {
-	ctx := context.Background()
-	store := newTestStore(t)
-	manager, err := Open(ctx, store, []string{"db.t"})
-	require.NoError(t, err)
-
-	err = manager.Update(ctx, func(st *State) error {
-		st.Version = 2
-		return nil
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported state version")
-	require.Equal(t, Version, manager.Snapshot().Version)
-}
-
 func TestSetSnapshotTSORejectsMismatch(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	manager, err := Open(ctx, store, []string{"db.t"})
 	require.NoError(t, err)
-	require.NoError(t, manager.SetSnapshotTSO(ctx, "466924115091783691"))
+	require.NoError(t, manager.SetSnapshotTSO(ctx, 466924115091783691))
 
-	err = manager.SetSnapshotTSO(ctx, "466924115091783692")
+	err = manager.SetSnapshotTSO(ctx, 466924115091783692)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "snapshot.tso mismatch")
 }

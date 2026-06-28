@@ -122,6 +122,9 @@ func BuildSchema(database, table, createTableDDL string) *Meta {
 }
 
 func (m *Meta) SnowflakeTableName() string {
+	if m.snowflakeTableName == "" {
+		return fmt.Sprintf("%s.%s", m.Schema, m.Table)
+	}
 	return m.snowflakeTableName
 }
 

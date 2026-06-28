@@ -10,6 +10,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+	"github.com/tidbcloud/tidb2snowflake/pkg/dumpling"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 	"github.com/tidbcloud/tidb2snowflake/source/storage"
@@ -25,7 +26,7 @@ type Config struct {
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int
 	SnapshotCompression     tidbcloud.ExportCompression
-	SnapshotTSO             uint64
+	SnapshotTSO             string
 
 	Credential  *credentials.Value
 	StoragePath string
@@ -55,9 +56,26 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 		return nil
 	}
 
+	snapshotExists, err := storage.DirHasObjects(ctx, r.store, storage.SnapshotDirName)
+	if err != nil {
+		return errors.Annotatef(err, "check %s directory", storage.SnapshotDirName)
+	}
+	if snapshotExists {
+		snapshotTSO, err := dumpling.LoadTSOFromMetadata(ctx, r.store)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if err := r.state.SetSnapshotTSO(ctx, snapshotTSO); err != nil {
+			return errors.Trace(err)
+		}
+		log.Info("snapshot data already exists in storage, skipping TiDB Cloud export",
+			zap.String("dir", storage.SnapshotDirName),
+			zap.Uint64("snapshotTSO", snapshotTSO))
+		return nil
+	}
+
 	var (
 		snapshotTSO string
-		err         error
 	)
 	exportID := r.state.Snapshot().TaskInfo.ExportID
 	if exportID == "" {
@@ -76,7 +94,10 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 		return errors.Annotate(err, "wait TiDB Cloud export")
 	}
 
-	tso, _ := strconv.ParseUint(snapshotTSO, 10, 64)
+	tso, err := snapshotTSOFromString(snapshotTSO)
+	if err != nil {
+		return errors.Trace(err)
+	}
 	if err := r.state.SetSnapshotTSO(ctx, tso); err != nil {
 		return errors.Trace(err)
 	}
@@ -134,7 +155,7 @@ func (r *Runner) createExport(ctx context.Context) (string, string, error) {
 	if err != nil {
 		return "", "", errors.Trace(err)
 	}
-	req := buildExportRequest(r.cfg, cleanSnapshotURI, r.cfg.Credential, strconv.FormatUint(r.cfg.SnapshotTSO, 10))
+	req := buildExportRequest(r.cfg, cleanSnapshotURI, r.cfg.Credential, r.cfg.SnapshotTSO)
 	export, err := client.CreateExport(ctx, r.cfg.ClusterID, req)
 	if err != nil {
 		return "", "", err
@@ -163,12 +184,30 @@ func (r *Runner) createChangefeed(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", errors.Trace(err)
 	}
-	req := buildChangefeedRequest(r.cfg, cleanIncrementURI, r.cfg.Credential, strconv.FormatUint(r.state.Snapshot().Snapshot.TSO, 10))
+	snapshotTSO := r.state.Snapshot().Snapshot.TSO
+	if snapshotTSO == 0 {
+		return "", errors.New("snapshot.tso is required to create TiDB Cloud changefeed")
+	}
+	req := buildChangefeedRequest(r.cfg, cleanIncrementURI, r.cfg.Credential, strconv.FormatUint(snapshotTSO, 10))
 	cf, err := c.CreateChangefeed(ctx, r.cfg.ClusterID, req)
 	if err != nil {
 		return "", err
 	}
 	return cf.ChangefeedID, nil
+}
+
+func snapshotTSOFromString(tso string) (uint64, error) {
+	if tso == "" {
+		return 0, errors.New("TiDB Cloud export returned empty snapshotTso")
+	}
+	parsed, err := strconv.ParseUint(tso, 10, 64)
+	if err != nil {
+		return 0, errors.Annotate(err, "parse TiDB Cloud export snapshotTso")
+	}
+	if parsed == 0 {
+		return 0, errors.New("TiDB Cloud export returned zero snapshotTso")
+	}
+	return parsed, nil
 }
 
 func (r *Runner) waitChangefeed(ctx context.Context, changefeedID string) error {

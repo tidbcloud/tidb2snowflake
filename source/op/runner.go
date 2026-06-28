@@ -24,7 +24,7 @@ type Config struct {
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int
 	SnapshotCompression     string
-	SnapshotTSO             uint64
+	SnapshotTSO             string
 
 	SnapshotURI  *url.URL
 	IncrementURI *url.URL
@@ -47,6 +47,13 @@ func NewRunner(cfg Config, store storeapi.Storage, state state.Manager) *Runner 
 }
 
 func (r *Runner) EnsureSnapshot(ctx context.Context) error {
+	stateSnapshot := r.stateManager.Snapshot()
+	if stateSnapshot.Snapshot.TSO != 0 {
+		log.Info("snapshot TSO already exists in state, skipping OP Dumpling snapshot dump",
+			zap.Uint64("snapshotTSO", stateSnapshot.Snapshot.TSO))
+		return nil
+	}
+
 	exist, err := storage.DirHasObjects(ctx, r.store, storage.SnapshotDirName)
 	if err != nil {
 		return errors.Annotate(err, "check snapshot directory")
@@ -120,6 +127,11 @@ func (r *Runner) EnsureChangefeed(ctx context.Context) error {
 }
 
 func (r *Runner) createChangefeed(ctx context.Context) (string, error) {
+	snapshotTSO := r.stateManager.Snapshot().Snapshot.TSO
+	if snapshotTSO == 0 {
+		return "", errors.New("snapshot.tso is required to create OP TiCDC changefeed")
+	}
+
 	client, err := r.ticdcClient()
 	if err != nil {
 		return "", errors.Trace(err)
@@ -128,7 +140,7 @@ func (r *Runner) createChangefeed(ctx context.Context) (string, error) {
 	req, err := ticdc.BuildChangefeedConfig(ticdc.ChangefeedConfigOptions{
 		Tables:        r.cfg.Tables,
 		StorageURI:    r.cfg.IncrementURI,
-		StartTSO:      r.stateManager.Snapshot().Snapshot.TSO,
+		StartTSO:      snapshotTSO,
 		FlushInterval: r.cfg.ChangefeedFlushInterval,
 		FileSizeMiB:   r.cfg.ChangefeedFileSizeMiB,
 	})

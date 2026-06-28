@@ -278,10 +278,7 @@ func (loader *loader) beginScan() (bool, error) {
 	if !ok || checkpointTs <= loader.checkpointTs {
 		return false, nil
 	}
-	if err := loader.state.Update(loader.ctx, func(st *state.State) error {
-		st.Incremental.Scan = &state.ScanState{HighWatermark: checkpointTs}
-		return nil
-	}); err != nil {
+	if err := loader.state.StartIncrementalScan(loader.ctx, checkpointTs); err != nil {
 		return false, errors.Trace(err)
 	}
 	loader.highWatermark = checkpointTs
@@ -309,11 +306,7 @@ func (loader *loader) readMetadata() (uint64, bool, error) {
 }
 
 func (loader *loader) finishScan() error {
-	if err := loader.state.Update(loader.ctx, func(st *state.State) error {
-		st.Incremental.CheckpointTS = loader.highWatermark
-		st.Incremental.Scan = nil
-		return nil
-	}); err != nil {
+	if err := loader.state.FinishIncrementalScan(loader.ctx, loader.highWatermark); err != nil {
 		return errors.Trace(err)
 	}
 	loader.checkpointTs = loader.highWatermark
@@ -624,17 +617,7 @@ func (loader *loader) syncExecDMLEvents(
 		return false, nil
 	}
 	scopeKey := dmlScopeKey(key, fileIndexKey)
-	if err := loader.state.Update(loader.ctx, func(st *state.State) error {
-		tableState := st.Incremental.Tables[tbl.tableFQN]
-		if tableState.DMLFileWatermarks == nil {
-			tableState.DMLFileWatermarks = make(map[string]uint64)
-		}
-		if fileIdx > tableState.DMLFileWatermarks[scopeKey] {
-			tableState.DMLFileWatermarks[scopeKey] = fileIdx
-		}
-		st.Incremental.Tables[tbl.tableFQN] = tableState
-		return nil
-	}); err != nil {
+	if err := loader.state.SetDMLFileWatermark(loader.ctx, tbl.tableFQN, scopeKey, fileIdx); err != nil {
 		return false, errors.Trace(err)
 	}
 
@@ -699,14 +682,7 @@ func (loader *loader) syncExecDDLEvents(tbl *tableState, tableDef cloudstorage.S
 		}
 	}
 	tbl.currentMeta = nextMeta
-	if err := loader.state.Update(loader.ctx, func(st *state.State) error {
-		tableState := st.Incremental.Tables[tbl.tableFQN]
-		if tableDef.TableVersion > tableState.DDLTableVersionWatermark {
-			tableState.DDLTableVersionWatermark = tableDef.TableVersion
-		}
-		st.Incremental.Tables[tbl.tableFQN] = tableState
-		return nil
-	}); err != nil {
+	if err := loader.state.SetDDLTableVersionWatermark(loader.ctx, tbl.tableFQN, tableDef.TableVersion); err != nil {
 		return errors.Trace(err)
 	}
 	tbl.ddlTableVersionWatermark = tableDef.TableVersion

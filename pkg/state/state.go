@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/pingcap/errors"
-	"github.com/tidbcloud/tidb2snowflake/pkg/common/strconv"
 )
 
 const (
@@ -41,7 +41,7 @@ type SnapshotState struct {
 }
 
 type IncrementalState struct {
-	// CheckpointTS is the latest commit timestamp fully loaded into Snowflake, stored as a decimal string.
+	// CheckpointTS is the latest commit timestamp fully loaded into Snowflake.
 	CheckpointTS uint64 `json:"checkpoint_ts"`
 	// Scan records an in-progress incremental scan, if the process stopped mid-scan.
 	Scan *ScanState `json:"scan,omitempty"`
@@ -50,14 +50,14 @@ type IncrementalState struct {
 }
 
 type ScanState struct {
-	// HighWatermark is the upper commit timestamp bound selected for the current scan, stored as a decimal string.
+	// HighWatermark is the upper commit timestamp bound selected for the current scan.
 	HighWatermark uint64 `json:"high_watermark"`
 }
 
 type TableState struct {
 	// DMLFileWatermarks records the highest loaded DML file index per table-version scope.
 	DMLFileWatermarks map[string]uint64 `json:"dml_file_watermarks"`
-	// DDLTableVersionWatermark records the highest applied schema table version, stored as a decimal string.
+	// DDLTableVersionWatermark records the highest applied schema table version.
 	DDLTableVersionWatermark uint64 `json:"ddl_table_version_watermark"`
 }
 
@@ -103,14 +103,6 @@ func validateState(st State, tables []string) error {
 			return errors.Errorf("state missing incremental table entry %q", table)
 		}
 	}
-	if err := validateUint64String("incremental.checkpoint_ts", st.Incremental.CheckpointTS); err != nil {
-		return err
-	}
-	if st.Incremental.Scan != nil {
-		if err := validateUint64String("incremental.scan.high_watermark", st.Incremental.Scan.HighWatermark); err != nil {
-			return err
-		}
-	}
 	for table, tableState := range st.Incremental.Tables {
 		if tableState.DMLFileWatermarks == nil {
 			return errors.Errorf("state missing required field incremental.tables.%s.dml_file_watermarks", table)
@@ -120,19 +112,6 @@ func validateState(st State, tables []string) error {
 				return errors.Annotatef(err, "invalid dml_file_watermarks scope for table %s", table)
 			}
 		}
-		if err := validateUint64String(
-			"incremental.tables."+table+".ddl_table_version_watermark",
-			tableState.DDLTableVersionWatermark,
-		); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateUint64String(field string, value uint64) error {
-	if value == 0 {
-		return errors.Errorf("state missing required field %s", field)
 	}
 	return nil
 }
@@ -142,8 +121,12 @@ func validateDMLFileWatermarkScope(scope string) error {
 	if len(parts) != 4 {
 		return errors.Errorf("invalid scope %q", scope)
 	}
-	strconv.MustParseUint(parts[0], 10, 64)
-	strconv.ParseInt(parts[1], 10, 64)
+	if _, err := strconv.ParseUint(parts[0], 10, 64); err != nil {
+		return errors.Trace(err)
+	}
+	if _, err := strconv.ParseInt(parts[1], 10, 64); err != nil {
+		return errors.Trace(err)
+	}
 	return nil
 }
 

@@ -13,7 +13,7 @@ func TestGenDDLViaMetaDiff(t *testing.T) {
 	prevMeta := &table.Meta{
 		Table:  "test_table",
 		Schema: "test_schema",
-		Columns: []cloudstorage.TableCol{
+		Columns: []table.Column{
 			{
 				ID:        "1",
 				Name:      "id",
@@ -81,22 +81,22 @@ func TestGenDDLViaMetaDiff(t *testing.T) {
 func TestGetSnowflakeTypeString_NewScalarMappings(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		col  cloudstorage.TableCol
+		col  table.Column
 		want string
 	}{
 		{
 			name: "year",
-			col:  cloudstorage.TableCol{Name: "c_year", Tp: "year"},
+			col:  table.Column{Name: "c_year", Tp: "year"},
 			want: `"c_year" NUMBER`,
 		},
 		{
 			name: "enum",
-			col:  cloudstorage.TableCol{Name: "c_enum", Tp: "enum"},
+			col:  table.Column{Name: "c_enum", Tp: "enum"},
 			want: `"c_enum" VARCHAR`,
 		},
 		{
 			name: "vector",
-			col:  cloudstorage.TableCol{Name: "c_vector", Tp: "vector"},
+			col:  table.Column{Name: "c_vector", Tp: "vector"},
 			want: `"c_vector" VARCHAR`,
 		},
 	} {

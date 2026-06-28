@@ -8,9 +8,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/dumpling/export"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
-	"github.com/tidbcloud/tidb2snowflake/pkg/state"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"github.com/tidbcloud/tidb2snowflake/source/storage"
 )
@@ -31,7 +29,7 @@ func TestBuildConfig_SnowflakeSnapshotDump(t *testing.T) {
 	}, Config{
 		Concurrency:  8,
 		StorageURI:   storageURI,
-		SnapshotTSO:  449023000000000000,
+		SnapshotTSO:  "449023000000000000",
 		Tables:       []string{"db1.t1", "db2.t2"},
 		Compression:  "gzip",
 		ReadTimeout:  15 * time.Second,
@@ -88,23 +86,7 @@ func TestLoadTSOFromMetadataRequiresMetadata(t *testing.T) {
 	require.Contains(t, err.Error(), "snapshot/metadata is missing")
 }
 
-func TestLoadTSOFromMetadataRejectsMismatch(t *testing.T) {
-	ctx := context.Background()
-	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
-	require.NoError(t, err)
-	manager := newTestStateManager(t, ctx, store)
-	require.NoError(t, manager.SetSnapshotTSO(ctx, 466924115091783691))
-	require.NoError(t, store.WriteFile(ctx, storage.SnapshotDirName+"/metadata", []byte("Pos: 466924115091783692\n")))
-}
-
 func TestTSOFromMetadata(t *testing.T) {
 	tso := tsoFromMetadata([]byte("Started dump at: x\n\tPos: 466924115091783691\n"))
 	require.Equal(t, "466924115091783691", tso)
-}
-
-func newTestStateManager(t *testing.T, ctx context.Context, store storeapi.Storage) state.Manager {
-	t.Helper()
-	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"})
-	require.NoError(t, err)
-	return manager
 }

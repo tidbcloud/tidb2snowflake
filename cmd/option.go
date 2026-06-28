@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,7 +61,7 @@ type Option struct {
 
 	Tables []string
 
-	SnapshotTSO uint64
+	SnapshotTSO string
 
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int
@@ -211,6 +212,15 @@ func (opt *Option) validate() error {
 
 	if len(opt.Tables) == 0 {
 		return errors.New("no tables specified")
+	}
+	if opt.SnapshotTSO != "" {
+		tso, err := strconv.ParseUint(opt.SnapshotTSO, 10, 64)
+		if err != nil {
+			return errors.Annotate(err, "parse --snapshot-tso")
+		}
+		if tso == 0 {
+			return errors.New("--snapshot-tso must be greater than 0")
+		}
 	}
 	// TiDB Cloud API credentials are only required when an export/changefeed has
 	// to be created (i.e. the snapshot/increment data does not already exist), so
