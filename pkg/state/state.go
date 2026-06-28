@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"strconv"
 	"strings"
 
 	"github.com/pingcap/errors"
+	"github.com/tidbcloud/tidb2snowflake/pkg/common/strconv"
 )
 
 const (
@@ -16,42 +16,57 @@ const (
 )
 
 type State struct {
-	Version     int              `json:"version"`
-	TaskInfo    TaskInfo         `json:"task_info"`
-	Snapshot    SnapshotState    `json:"snapshot"`
+	// Version is the on-disk state schema version.
+	Version int `json:"version"`
+	// TaskInfo records source-side jobs created or reused by the prepare phase.
+	TaskInfo TaskInfo `json:"task_info"`
+	// Snapshot records the source snapshot artifact and downstream load progress.
+	Snapshot SnapshotState `json:"snapshot"`
+	// Incremental records the current TiCDC-to-Snowflake load progress.
 	Incremental IncrementalState `json:"incremental"`
 }
 
 type TaskInfo struct {
-	ExportID     string `json:"export_id"`
+	// ExportID is the TiDB Cloud export job to wait for when snapshot export is resumed.
+	ExportID string `json:"export_id"`
+	// ChangefeedID is the source changefeed job to wait for when incremental export is resumed.
 	ChangefeedID string `json:"changefeed_id"`
 }
 
 type SnapshotState struct {
-	TSO      string `json:"tso"`
-	Finished bool   `json:"finished"`
+	// TSO is the snapshot artifact TSO confirmed after the source snapshot is ready.
+	TSO uint64 `json:"tso"`
+	// Finished means the snapshot data has been loaded into downstream Snowflake.
+	Finished bool `json:"finished"`
 }
 
 type IncrementalState struct {
-	CheckpointTS uint64                `json:"checkpoint_ts"`
-	Scan         *ScanState            `json:"scan,omitempty"`
-	Tables       map[string]TableState `json:"tables"`
+	// CheckpointTS is the latest commit timestamp fully loaded into Snowflake, stored as a decimal string.
+	CheckpointTS uint64 `json:"checkpoint_ts"`
+	// Scan records an in-progress incremental scan, if the process stopped mid-scan.
+	Scan *ScanState `json:"scan,omitempty"`
+	// Tables records per-table incremental load watermarks.
+	Tables map[string]TableState `json:"tables"`
 }
 
 type ScanState struct {
+	// HighWatermark is the upper commit timestamp bound selected for the current scan, stored as a decimal string.
 	HighWatermark uint64 `json:"high_watermark"`
 }
 
 type TableState struct {
-	DMLFileWatermarks        map[string]uint64 `json:"dml_file_watermarks"`
-	DDLTableVersionWatermark uint64            `json:"ddl_table_version_watermark"`
+	// DMLFileWatermarks records the highest loaded DML file index per table-version scope.
+	DMLFileWatermarks map[string]uint64 `json:"dml_file_watermarks"`
+	// DDLTableVersionWatermark records the highest applied schema table version, stored as a decimal string.
+	DDLTableVersionWatermark uint64 `json:"ddl_table_version_watermark"`
 }
 
 func newState(tables []string) State {
 	st := State{
 		Version: Version,
 		Incremental: IncrementalState{
-			Tables: make(map[string]TableState, len(tables)),
+			CheckpointTS: 0,
+			Tables:       make(map[string]TableState, len(tables)),
 		},
 	}
 	ensureConfiguredTables(&st, tables)
@@ -67,7 +82,8 @@ func ensureConfiguredTables(st *State, tables []string) bool {
 	for _, table := range tables {
 		if _, ok := st.Incremental.Tables[table]; !ok {
 			st.Incremental.Tables[table] = TableState{
-				DMLFileWatermarks: make(map[string]uint64),
+				DMLFileWatermarks:        make(map[string]uint64),
+				DDLTableVersionWatermark: 0,
 			}
 			changed = true
 		}
@@ -87,6 +103,14 @@ func validateState(st State, tables []string) error {
 			return errors.Errorf("state missing incremental table entry %q", table)
 		}
 	}
+	if err := validateUint64String("incremental.checkpoint_ts", st.Incremental.CheckpointTS); err != nil {
+		return err
+	}
+	if st.Incremental.Scan != nil {
+		if err := validateUint64String("incremental.scan.high_watermark", st.Incremental.Scan.HighWatermark); err != nil {
+			return err
+		}
+	}
 	for table, tableState := range st.Incremental.Tables {
 		if tableState.DMLFileWatermarks == nil {
 			return errors.Errorf("state missing required field incremental.tables.%s.dml_file_watermarks", table)
@@ -96,6 +120,19 @@ func validateState(st State, tables []string) error {
 				return errors.Annotatef(err, "invalid dml_file_watermarks scope for table %s", table)
 			}
 		}
+		if err := validateUint64String(
+			"incremental.tables."+table+".ddl_table_version_watermark",
+			tableState.DDLTableVersionWatermark,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateUint64String(field string, value uint64) error {
+	if value == 0 {
+		return errors.Errorf("state missing required field %s", field)
 	}
 	return nil
 }
@@ -105,12 +142,8 @@ func validateDMLFileWatermarkScope(scope string) error {
 	if len(parts) != 4 {
 		return errors.Errorf("invalid scope %q", scope)
 	}
-	if _, err := strconv.ParseUint(parts[0], 10, 64); err != nil {
-		return errors.Trace(err)
-	}
-	if _, err := strconv.ParseInt(parts[1], 10, 64); err != nil {
-		return errors.Trace(err)
-	}
+	strconv.MustParseUint(parts[0], 10, 64)
+	strconv.ParseInt(parts[1], 10, 64)
 	return nil
 }
 
@@ -132,117 +165,16 @@ func cloneState(st State) State {
 	return out
 }
 
-type rawState struct {
-	Version     *int            `json:"version"`
-	TaskInfo    *rawTaskInfo    `json:"task_info"`
-	Snapshot    *rawSnapshot    `json:"snapshot"`
-	Incremental *rawIncremental `json:"incremental"`
-}
-
-type rawTaskInfo struct {
-	ExportID     *string `json:"export_id"`
-	ChangefeedID *string `json:"changefeed_id"`
-}
-
-type rawSnapshot struct {
-	TSO      *string `json:"tso"`
-	Finished *bool   `json:"finished"`
-}
-
-type rawIncremental struct {
-	CheckpointTS *uint64                   `json:"checkpoint_ts"`
-	Scan         *rawScan                  `json:"scan"`
-	Tables       *map[string]rawTableState `json:"tables"`
-}
-
-type rawScan struct {
-	HighWatermark *uint64 `json:"high_watermark"`
-}
-
-type rawTableState struct {
-	DMLFileWatermarks        *map[string]uint64 `json:"dml_file_watermarks"`
-	DDLTableVersionWatermark *uint64            `json:"ddl_table_version_watermark"`
-}
-
 func decodeState(data []byte) (State, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 
-	var raw rawState
-	if err := dec.Decode(&raw); err != nil {
+	var st State
+	if err := dec.Decode(&st); err != nil {
 		return State{}, errors.Trace(err)
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return State{}, errors.New("state file contains trailing JSON data")
-	}
-
-	if raw.Version == nil {
-		return State{}, errors.New("state missing required field version")
-	}
-	if raw.TaskInfo == nil {
-		return State{}, errors.New("state missing required field task_info")
-	}
-	if raw.TaskInfo.ExportID == nil {
-		return State{}, errors.New("state missing required field task_info.export_id")
-	}
-	if raw.TaskInfo.ChangefeedID == nil {
-		return State{}, errors.New("state missing required field task_info.changefeed_id")
-	}
-	if raw.Snapshot == nil {
-		return State{}, errors.New("state missing required field snapshot")
-	}
-	if raw.Snapshot.TSO == nil {
-		return State{}, errors.New("state missing required field snapshot.tso")
-	}
-	if raw.Snapshot.Finished == nil {
-		return State{}, errors.New("state missing required field snapshot.finished")
-	}
-	if raw.Incremental == nil {
-		return State{}, errors.New("state missing required field incremental")
-	}
-	if raw.Incremental.CheckpointTS == nil {
-		return State{}, errors.New("state missing required field incremental.checkpoint_ts")
-	}
-	if raw.Incremental.Scan != nil && raw.Incremental.Scan.HighWatermark == nil {
-		return State{}, errors.New("state missing required field incremental.scan.high_watermark")
-	}
-	if raw.Incremental.Tables == nil {
-		return State{}, errors.New("state missing required field incremental.tables")
-	}
-
-	st := State{
-		Version: *raw.Version,
-		TaskInfo: TaskInfo{
-			ExportID:     *raw.TaskInfo.ExportID,
-			ChangefeedID: *raw.TaskInfo.ChangefeedID,
-		},
-		Snapshot: SnapshotState{
-			TSO:      *raw.Snapshot.TSO,
-			Finished: *raw.Snapshot.Finished,
-		},
-		Incremental: IncrementalState{
-			CheckpointTS: *raw.Incremental.CheckpointTS,
-			Tables:       make(map[string]TableState, len(*raw.Incremental.Tables)),
-		},
-	}
-	if raw.Incremental.Scan != nil {
-		st.Incremental.Scan = &ScanState{HighWatermark: *raw.Incremental.Scan.HighWatermark}
-	}
-	for table, tableState := range *raw.Incremental.Tables {
-		if tableState.DMLFileWatermarks == nil {
-			return State{}, errors.Errorf("state missing required field incremental.tables.%s.dml_file_watermarks", table)
-		}
-		if tableState.DDLTableVersionWatermark == nil {
-			return State{}, errors.Errorf("state missing required field incremental.tables.%s.ddl_table_version_watermark", table)
-		}
-		watermarks := make(map[string]uint64, len(*tableState.DMLFileWatermarks))
-		for scope, idx := range *tableState.DMLFileWatermarks {
-			watermarks[scope] = idx
-		}
-		st.Incremental.Tables[table] = TableState{
-			DMLFileWatermarks:        watermarks,
-			DDLTableVersionWatermark: *tableState.DDLTableVersionWatermark,
-		}
 	}
 	if err := validateState(st, nil); err != nil {
 		return State{}, err

@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"net/url"
-	"strconv"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
@@ -55,25 +54,6 @@ func Run(ctx context.Context, opt *Option) error {
 	return loadIntoSnowflake(ctx, opt, opt.snowflakeConfig(), cred, storageURI, store, stateManager)
 }
 
-func markSnapshotFinished(ctx context.Context, manager state.Manager) error {
-	return manager.Update(ctx, func(st *state.State) error {
-		if st.Snapshot.TSO == "" {
-			log.Panic("snapshot.tso is empty after snapshot load")
-		}
-		tso, err := strconv.ParseUint(st.Snapshot.TSO, 10, 64)
-		if err != nil {
-			log.Panic("invalid snapshot.tso after snapshot load",
-				zap.String("snapshotTSO", st.Snapshot.TSO),
-				zap.Error(err))
-		}
-		st.Snapshot.Finished = true
-		if st.Incremental.CheckpointTS == 0 {
-			st.Incremental.CheckpointTS = tso
-		}
-		return nil
-	})
-}
-
 func loadIntoSnowflake(
 	ctx context.Context,
 	opt *Option,
@@ -86,23 +66,19 @@ func loadIntoSnowflake(
 	metrics.TableNumGauge.Add(float64(len(opt.Tables)))
 	log.Info("starting Snowflake load phase", zap.Int("tableCount", len(opt.Tables)))
 
-	if opt.Mode != runModeIncrementalOnly {
-		if stateManager.Snapshot().Snapshot.Finished {
-			log.Info("snapshot already marked finished in state, skipping Snowflake snapshot load")
-		} else {
-			if err := snapshot.Load(ctx, snapshot.Config{
-				Snowflake:   snowflakeCfg,
-				Credential:  cred,
-				Tables:      opt.Tables,
-				StorageURI:  storageURI,
-				StorageDir:  storage.SnapshotDirName,
-				Compression: opt.SnapshotCompression,
-			}, store); err != nil {
-				return errors.Trace(err)
-			}
-			if err := markSnapshotFinished(ctx, stateManager); err != nil {
-				return errors.Trace(err)
-			}
+	if opt.Mode != runModeIncrementalOnly && !stateManager.Snapshot().Snapshot.Finished {
+		if err := snapshot.Load(ctx, snapshot.Config{
+			Snowflake:   snowflakeCfg,
+			Credential:  cred,
+			Tables:      opt.Tables,
+			StorageURI:  storageURI,
+			StorageDir:  storage.SnapshotDirName,
+			Compression: opt.SnapshotCompression,
+		}, store); err != nil {
+			return errors.Trace(err)
+		}
+		if err := stateManager.MarkSnapshotFinished(ctx); err != nil {
+			return errors.Trace(err)
 		}
 	}
 	if opt.Mode != runModeSnapshotOnly {

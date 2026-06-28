@@ -71,11 +71,13 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	snapshotTSO, snapshotTSO, err = r.waitExport(ctx, exportID)
+	_, snapshotTSO, err = r.waitExport(ctx, exportID)
 	if err != nil {
 		return errors.Annotate(err, "wait TiDB Cloud export")
 	}
-	if err := r.state.SetSnapshotTSO(ctx, snapshotTSO); err != nil {
+
+	tso, _ := strconv.ParseUint(snapshotTSO, 10, 64)
+	if err := r.state.SetSnapshotTSO(ctx, tso); err != nil {
 		return errors.Trace(err)
 	}
 	return nil
@@ -105,7 +107,7 @@ func (r *Runner) EnsureChangefeed(ctx context.Context) error {
 	if err != nil {
 		return errors.Annotate(err, "create TiDB Cloud changefeed")
 	}
-	if err := r.state.UpdateChangefeedID(ctx, changefeedID); err != nil {
+	if err := r.state.SetChangefeedID(ctx, changefeedID); err != nil {
 		return errors.Trace(err)
 	}
 	log.Info("TiDB Cloud changefeed created",
@@ -116,7 +118,7 @@ func (r *Runner) EnsureChangefeed(ctx context.Context) error {
 	if err != nil {
 		return errors.Annotate(err, "wait TiDB Cloud changefeed")
 	}
-	if err := r.state.UpdateChangefeedID(ctx, changefeedID); err != nil {
+	if err := r.state.SetChangefeedID(ctx, changefeedID); err != nil {
 		return errors.Trace(err)
 	}
 	log.Info("TiDB Cloud changefeed ready", zap.String("changefeedID", changefeedID))

@@ -3,21 +3,25 @@ package dumpling
 import (
 	"context"
 	"net/url"
+	"path"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/dumpling/export"
 	"github.com/pingcap/tidb/pkg/objstore/compressedio"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
+	"github.com/tidbcloud/tidb2snowflake/source/storage"
 	"go.uber.org/zap"
 )
 
 type Config struct {
 	Concurrency  int
 	StorageURI   *url.URL
-	SnapshotTSO  string
+	SnapshotTSO  uint64
 	Tables       []string
 	Compression  string
 	ReadTimeout  time.Duration
@@ -26,21 +30,12 @@ type Config struct {
 	OnProgress   func(dumpedRows, totalRows int64)
 }
 
-func BuildConfig(ctx context.Context, tidbCfg *tidb.Config, cfg Config) (*export.Config, error) {
-	if tidbCfg == nil {
-		return nil, errors.New("tidb config is required")
-	}
-	if cfg.StorageURI == nil {
-		return nil, errors.New("storage uri is required")
-	}
+func buildConfig(ctx context.Context, store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) (*export.Config, error) {
 	concurrency := cfg.Concurrency
 	if concurrency <= 0 {
 		concurrency = 8
 	}
-	fileSize := cfg.FileSize
-	if fileSize == "" {
-		fileSize = "5GiB"
-	}
+
 	csvNullValue := cfg.CSVNullValue
 	if csvNullValue == "" {
 		csvNullValue = "\\N"
@@ -56,6 +51,8 @@ func BuildConfig(ctx context.Context, tidbCfg *tidb.Config, cfg Config) (*export
 	conf.Password = tidbCfg.Pass
 	conf.Host = tidbCfg.Host
 	conf.Port = tidbCfg.Port
+	conf.Security.CAPath = tidbCfg.SSLCA
+
 	conf.Threads = concurrency
 	conf.NoHeader = true
 	conf.FileType = "csv"
@@ -66,11 +63,11 @@ func BuildConfig(ctx context.Context, tidbCfg *tidb.Config, cfg Config) (*export
 	conf.TransactionalConsistency = true
 	conf.CsvOutputDialect = export.CSVDialectSnowflake
 	conf.Rows = 1
+
 	conf.OutputDirPath = cfg.StorageURI.String()
 	conf.ReadTimeout = cfg.ReadTimeout
-	conf.Security.CAPath = tidbCfg.SSLCA
-	if cfg.SnapshotTSO != "" && cfg.SnapshotTSO != "0" {
-		conf.Snapshot = cfg.SnapshotTSO
+	if cfg.SnapshotTSO != 0 {
+		conf.Snapshot = strconv.FormatUint(cfg.SnapshotTSO, 10)
 	}
 
 	compressType, err := compressedio.ParseCompressType(compression)
@@ -79,6 +76,10 @@ func BuildConfig(ctx context.Context, tidbCfg *tidb.Config, cfg Config) (*export
 	}
 	conf.CompressType = compressType
 
+	fileSize := cfg.FileSize
+	if fileSize == "" {
+		fileSize = "5GiB"
+	}
 	parsedFileSize, err := export.ParseFileSize(fileSize)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -91,26 +92,15 @@ func BuildConfig(ctx context.Context, tidbCfg *tidb.Config, cfg Config) (*export
 		return nil, errors.Trace(err)
 	}
 	conf.Tables = tables
-
-	externalStorage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, cfg.StorageURI.String())
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	conf.ExtStorage = externalStorage
-
+	conf.ExtStorage = store
 	return conf, nil
 }
 
-func Run(ctx context.Context, tidbCfg *tidb.Config, cfg Config) error {
-	dumpConfig, err := BuildConfig(ctx, tidbCfg, cfg)
+func Run(ctx context.Context, store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) error {
+	dumpConfig, err := buildConfig(ctx, store, tidbCfg, cfg)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	db, err := tidb.OpenDB(tidbCfg)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	defer db.Close()
 
 	dumper, err := export.NewDumper(ctx, dumpConfig)
 	if err != nil {
@@ -147,4 +137,33 @@ func Run(ctx context.Context, tidbCfg *tidb.Config, cfg Config) error {
 	status := dumper.GetStatus()
 	log.Info("snapshot dumped from TiDB", zap.Any("status", status))
 	return nil
+}
+
+func LoadTSOFromMetadata(ctx context.Context, store storeapi.Storage) (uint64, error) {
+	metadataPath := path.Join(storage.SnapshotDirName, "metadata")
+	exists, err := store.FileExists(ctx, metadataPath)
+	if err != nil {
+		return 0, errors.Annotatef(err, "check snapshot metadata %s", metadataPath)
+	}
+	if !exists {
+		return 0, errors.Errorf("snapshot data exists but missing data")
+	}
+	data, err := store.ReadFile(ctx, metadataPath)
+	if err != nil {
+		return 0, errors.Annotatef(err, "read snapshot metadata %s", metadataPath)
+	}
+	tso := tsoFromMetadata(data)
+	return strconv.ParseUint(tso, 10, 64)
+}
+
+func tsoFromMetadata(data []byte) string {
+	for line := range strings.SplitSeq(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "Pos:") {
+			continue
+		}
+		return strings.TrimSpace(strings.TrimPrefix(line, "Pos:"))
+	}
+	log.Panic("metadata Pos is missing")
+	return ""
 }

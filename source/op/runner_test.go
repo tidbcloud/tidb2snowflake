@@ -66,7 +66,7 @@ func TestPrepareFullUsesSnapshotMetadataForChangefeedStart(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, []string{"changefeed"}, events)
-	require.Equal(t, "466924115091783691", manager.Snapshot().Snapshot.TSO)
+	require.Equal(t, uint64(466924115091783691), manager.Snapshot().Snapshot.TSO)
 	require.Equal(t, "cf-1", manager.Snapshot().TaskInfo.ChangefeedID)
 	require.Equal(t, uint64(466924115091783691), createReq.StartTS)
 }
@@ -77,7 +77,7 @@ func TestEnsureSnapshotSkipsWhenSnapshotTSOExists(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	manager := newTestStateManager(t, ctx, store)
-	require.NoError(t, manager.SetSnapshotTSO(ctx, "466924115091783691"))
+	require.NoError(t, manager.SetSnapshotTSO(ctx, 466924115091783691))
 
 	runner := NewRunner(Config{}, store, manager)
 

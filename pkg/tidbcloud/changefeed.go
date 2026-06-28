@@ -240,22 +240,22 @@ func (c *Client) StopChangefeed(ctx context.Context, clusterID, changefeedID str
 
 // WaitChangefeed polls GetChangefeed until the changefeed is operational
 // (RUNNING or WARNING) or reaches a failure/terminal state.
-func (c *Client) WaitChangefeed(ctx context.Context, clusterID, changefeedID string) (*Changefeed, error) {
+func (c *Client) WaitChangefeed(ctx context.Context, clusterID, changefeedID string) error {
 	for {
 		cf, err := c.GetChangefeed(ctx, clusterID, changefeedID)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		switch cf.State {
 		case ChangefeedStateRunning, ChangefeedStateWarning:
-			return cf, nil
+			return nil
 		case ChangefeedStateCreateFailed, ChangefeedStateRunningFailed,
 			ChangefeedStateDeleting, ChangefeedStateDeleted:
-			return cf, fmt.Errorf("tidbcloud: changefeed %s ended in state %s", changefeedID, cf.State)
+			return fmt.Errorf("tidbcloud: changefeed %s ended in state %s", changefeedID, cf.State)
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		case <-time.After(3 * time.Second):
 		}
 	}

@@ -62,7 +62,7 @@ func TestEnsureSnapshotLoadsExistingMetadata(t *testing.T) {
 	runner := NewRunner(baseConfig(), store, manager)
 
 	require.NoError(t, runner.EnsureSnapshot(ctx))
-	require.Equal(t, "466924115091783691", manager.Snapshot().Snapshot.TSO)
+	require.Equal(t, uint64(466924115091783691), manager.Snapshot().Snapshot.TSO)
 }
 
 func TestEnsureSnapshotSkipsWhenSnapshotTSOExists(t *testing.T) {
@@ -71,7 +71,7 @@ func TestEnsureSnapshotSkipsWhenSnapshotTSOExists(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	manager := newTestStateManager(t, ctx, store)
-	require.NoError(t, manager.SetSnapshotTSO(ctx, "466924115091783691"))
+	require.NoError(t, manager.SetSnapshotTSO(ctx, 466924115091783691))
 
 	runner := NewRunner(Config{}, store, manager)
 

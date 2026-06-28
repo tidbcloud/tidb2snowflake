@@ -88,9 +88,8 @@ func TestWaitChangefeedReturnsRunningChangefeed(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	cf, err := c.WaitChangefeed(context.Background(), "10", "cf-1")
+	err := c.WaitChangefeed(context.Background(), "10", "cf-1")
 	require.NoError(t, err)
-	require.Equal(t, ChangefeedStateRunning, cf.State)
 }
 
 func TestWaitChangefeedFailsOnCreateFailed(t *testing.T) {
@@ -101,9 +100,8 @@ func TestWaitChangefeedFailsOnCreateFailed(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	cf, err := c.WaitChangefeed(context.Background(), "10", "cf-1")
+	err := c.WaitChangefeed(context.Background(), "10", "cf-1")
 	require.Error(t, err)
-	require.Equal(t, ChangefeedStateCreateFailed, cf.State)
 }
 
 func TestChangefeedVerbPaths(t *testing.T) {

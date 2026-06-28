@@ -60,7 +60,7 @@ type Option struct {
 
 	Tables []string
 
-	SnapshotTSO string
+	SnapshotTSO uint64
 
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int

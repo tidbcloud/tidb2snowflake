@@ -51,35 +51,34 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 	if err != nil {
 		return errors.Annotate(err, "check snapshot directory")
 	}
-	if exist {
-		if err := dumpling.LoadTSOFromMetadata(ctx, r.store, r.stateManager); err != nil {
+
+	if !exist {
+		log.Info("dumping OP TiDB snapshot with Dumpling")
+		if err := dumpling.Run(ctx, r.store, r.cfg.TiDB, dumpling.Config{
+			Concurrency:  r.cfg.SnapshotConcurrency,
+			StorageURI:   r.cfg.SnapshotURI,
+			SnapshotTSO:  r.cfg.SnapshotTSO,
+			Tables:       r.cfg.Tables,
+			Compression:  r.cfg.SnapshotCompression,
+			CSVNullValue: "\\N",
+			OnProgress: func(dumpedRows, totalRows int64) {
+				log.Info("snapshot dumpling progress",
+					zap.Int64("dumpedRows", dumpedRows),
+					zap.Int64("estimatedTotalRows", totalRows))
+			},
+		}); err != nil {
 			return errors.Trace(err)
 		}
-		log.Info("snapshot data already exists in storage, skipping OP Dumpling snapshot dump",
-			zap.String("dir", storage.SnapshotDirName))
-		return nil
 	}
 
-	log.Info("dumping OP TiDB snapshot with Dumpling")
-	if err := dumpling.Run(ctx, r.store, r.cfg.TiDB, dumpling.Config{
-		Concurrency:  r.cfg.SnapshotConcurrency,
-		StorageURI:   r.cfg.SnapshotURI,
-		SnapshotTSO:  r.cfg.SnapshotTSO,
-		Tables:       r.cfg.Tables,
-		Compression:  r.cfg.SnapshotCompression,
-		CSVNullValue: "\\N",
-		OnProgress: func(dumpedRows, totalRows int64) {
-			log.Info("snapshot dumpling progress",
-				zap.Int64("dumpedRows", dumpedRows),
-				zap.Int64("estimatedTotalRows", totalRows))
-		},
-	}); err != nil {
+	snapshotTSO, err := dumpling.LoadTSOFromMetadata(ctx, r.store)
+	if err != nil {
 		return errors.Trace(err)
 	}
-	if err := dumpling.LoadTSOFromMetadata(ctx, r.store, r.stateManager); err != nil {
-		return errors.Trace(err)
-	}
-	return nil
+	log.Info("snapshot data already exists in storage, skipping OP Dumpling snapshot dump",
+		zap.String("dir", storage.SnapshotDirName),
+		zap.Uint64("snapshotTSO", snapshotTSO))
+	return r.stateManager.SetSnapshotTSO(ctx, snapshotTSO)
 }
 
 func (r *Runner) EnsureChangefeed(ctx context.Context) error {
@@ -105,7 +104,7 @@ func (r *Runner) EnsureChangefeed(ctx context.Context) error {
 	if err != nil {
 		return errors.Annotate(err, "create OP TiCDC changefeed")
 	}
-	if err := r.stateManager.UpdateChangefeedID(ctx, changefeedID); err != nil {
+	if err := r.stateManager.SetChangefeedID(ctx, changefeedID); err != nil {
 		return errors.Trace(err)
 	}
 	log.Info("OP TiCDC changefeed created",

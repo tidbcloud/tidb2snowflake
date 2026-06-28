@@ -133,7 +133,7 @@ func TestMarkSnapshotFinishedInitializesIncrementalCheckpoint(t *testing.T) {
 	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
 	require.NoError(t, err)
 	manager := newCmdTestStateManager(t, ctx, store)
-	require.NoError(t, manager.SetSnapshotTSO(ctx, "466924115091783691"))
+	require.NoError(t, manager.SetSnapshotTSO(ctx, 466924115091783691))
 
 	require.NoError(t, markSnapshotFinished(ctx, manager))
 	st := manager.Snapshot()
