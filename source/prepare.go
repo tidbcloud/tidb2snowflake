@@ -10,6 +10,7 @@ import (
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
+	cloudapi "github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 	"github.com/tidbcloud/tidb2snowflake/source/op"
 	"github.com/tidbcloud/tidb2snowflake/source/storage"
 	"github.com/tidbcloud/tidb2snowflake/source/tidbcloud"
@@ -19,7 +20,7 @@ type Request struct {
 	PrepareSnapshot   bool
 	PrepareChangefeed bool
 	UseOPSource       bool
-	SnapshotTSO       string
+	SnapshotTSO       uint64
 
 	TiDB                    *tidb.Config
 	TiDBCloudClusterID      string
@@ -49,17 +50,10 @@ func Prepare(ctx context.Context, request Request, store storeapi.Storage, state
 			return errors.New("storage URI is required to prepare source")
 		}
 	}
-	if err := state.SetSnapshotTSO(ctx, request.SnapshotTSO); err != nil {
-		return errors.Trace(err)
-	}
-
 	runner := newRunner(request, store, state)
 	if request.PrepareSnapshot {
 		if err := runner.EnsureSnapshot(ctx); err != nil {
 			return errors.Trace(err)
-		}
-		if state.Snapshot().Snapshot.TSO == "" {
-			return errors.New("snapshot.tso is required after preparing snapshot")
 		}
 	}
 	if request.PrepareChangefeed {
@@ -86,12 +80,20 @@ func (request Request) opConfig() op.Config {
 		ChangefeedFlushInterval: request.ChangefeedFlushInterval,
 		ChangefeedFileSizeMiB:   request.ChangefeedFileSizeMiB,
 		SnapshotCompression:     request.SnapshotCompression,
+		SnapshotTSO:             request.SnapshotTSO,
 		SnapshotURI:             request.StorageURI.JoinPath(storage.SnapshotDirName),
 		IncrementURI:            request.StorageURI.JoinPath(storage.IncrementDirName),
 	}
 }
 
 func (request Request) tidbCloudConfig() tidbcloud.Config {
+	var compression cloudapi.ExportCompression
+	switch request.SnapshotCompression {
+	case "gzip":
+		compression = cloudapi.ExportCompressionGzip
+	default:
+		compression = cloudapi.ExportCompressionNone
+	}
 	return tidbcloud.Config{
 		ClusterID:               request.TiDBCloudClusterID,
 		PublicKey:               request.TiDBCloudPublicKey,
@@ -100,7 +102,8 @@ func (request Request) tidbCloudConfig() tidbcloud.Config {
 		Tables:                  request.Tables,
 		ChangefeedFlushInterval: request.ChangefeedFlushInterval,
 		ChangefeedFileSizeMiB:   request.ChangefeedFileSizeMiB,
-		SnapshotCompression:     request.SnapshotCompression,
+		SnapshotCompression:     compression,
+		SnapshotTSO:             request.SnapshotTSO,
 		Credential:              request.Credential,
 		StoragePath:             request.StoragePath,
 	}

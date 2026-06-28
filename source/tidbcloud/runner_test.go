@@ -1,12 +1,18 @@
 package tidbcloud
 
 import (
+	"context"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
+	"github.com/tidbcloud/tidb2snowflake/pkg/state"
 	cloudapi "github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
+	"github.com/tidbcloud/tidb2snowflake/source/storage"
 )
 
 func testCred() *credentials.Value {
@@ -43,6 +49,33 @@ func TestBuildExportRequest(t *testing.T) {
 	require.Equal(t, cloudapi.S3AuthTypeAccessKey, req.Target.S3.AuthType)
 	require.Equal(t, "AKIA", req.Target.S3.AccessKey.ID)
 	require.Equal(t, "secret", req.Target.S3.AccessKey.Secret)
+}
+
+func TestEnsureSnapshotLoadsExistingMetadata(t *testing.T) {
+	ctx := context.Background()
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
+	defer store.Close()
+	manager := newTestStateManager(t, ctx, store)
+	require.NoError(t, store.WriteFile(ctx, storage.SnapshotDirName+"/metadata", []byte("Pos: 466924115091783691\n")))
+
+	runner := NewRunner(baseConfig(), store, manager)
+
+	require.NoError(t, runner.EnsureSnapshot(ctx))
+	require.Equal(t, "466924115091783691", manager.Snapshot().Snapshot.TSO)
+}
+
+func TestEnsureSnapshotSkipsWhenSnapshotTSOExists(t *testing.T) {
+	ctx := context.Background()
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
+	defer store.Close()
+	manager := newTestStateManager(t, ctx, store)
+	require.NoError(t, manager.SetSnapshotTSO(ctx, "466924115091783691"))
+
+	runner := NewRunner(Config{}, store, manager)
+
+	require.NoError(t, runner.EnsureSnapshot(ctx))
 }
 
 func TestBuildExportRequestPinnedSnapshotTSO(t *testing.T) {
@@ -87,4 +120,11 @@ func TestBuildChangefeedRequestFromNowWhenNoTSO(t *testing.T) {
 	req := buildChangefeedRequest(cfg, "s3://bucket/path/increment", testCred(), "")
 	require.Equal(t, cloudapi.StartModeFromNow, req.StartPosition.Mode)
 	require.Empty(t, req.StartPosition.TSO)
+}
+
+func newTestStateManager(t *testing.T, ctx context.Context, store storeapi.Storage) state.Manager {
+	t.Helper()
+	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"})
+	require.NoError(t, err)
+	return manager
 }

@@ -71,6 +71,19 @@ func TestPrepareFullUsesSnapshotMetadataForChangefeedStart(t *testing.T) {
 	require.Equal(t, uint64(466924115091783691), createReq.StartTS)
 }
 
+func TestEnsureSnapshotSkipsWhenSnapshotTSOExists(t *testing.T) {
+	ctx := context.Background()
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
+	defer store.Close()
+	manager := newTestStateManager(t, ctx, store)
+	require.NoError(t, manager.SetSnapshotTSO(ctx, "466924115091783691"))
+
+	runner := NewRunner(Config{}, store, manager)
+
+	require.NoError(t, runner.EnsureSnapshot(ctx))
+}
+
 func newTestStateManager(t *testing.T, ctx context.Context, store storeapi.Storage) state.Manager {
 	t.Helper()
 	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"})
