@@ -127,24 +127,24 @@ func TestTiDBCloudClientUsesEnvironmentAliasDefaults(t *testing.T) {
 	require.Equal(t, "api.example.com", cfg.TiDBCloud.Host)
 }
 
-func TestTiDBCloudEnvDefaultsPreserveFlagValues(t *testing.T) {
+func TestTiDBCloudEnvDefaultsPreserveExplicitValues(t *testing.T) {
 	t.Setenv("TIDBCLOUD_CLUSTER_ID", "cluster-from-env")
 	t.Setenv("TIDBCLOUD_PUBLIC_KEY", "public-from-env")
 	t.Setenv("TIDBCLOUD_PRIVATE_KEY", "private-from-env")
 	t.Setenv("TIDBCLOUD_HOST", "api.env.example.com")
 
 	cfg := &Config{TiDBCloud: TiDBCloudConfig{
-		ClusterID:  "cluster-from-flag",
-		PublicKey:  "public-from-flag",
-		PrivateKey: "private-from-flag",
-		Host:       "api.flag.example.com",
+		ClusterID:  "cluster-from-config",
+		PublicKey:  "public-from-config",
+		PrivateKey: "private-from-config",
+		Host:       " api.config.example.com ",
 	}}
 	applyTiDBCloudEnvDefaults(cfg)
 
-	require.Equal(t, "cluster-from-flag", cfg.TiDBCloud.ClusterID)
-	require.Equal(t, "public-from-flag", cfg.TiDBCloud.PublicKey)
-	require.Equal(t, "private-from-flag", cfg.TiDBCloud.PrivateKey)
-	require.Equal(t, "api.flag.example.com", cfg.TiDBCloud.Host)
+	require.Equal(t, "cluster-from-config", cfg.TiDBCloud.ClusterID)
+	require.Equal(t, "public-from-config", cfg.TiDBCloud.PublicKey)
+	require.Equal(t, "private-from-config", cfg.TiDBCloud.PrivateKey)
+	require.Equal(t, "api.config.example.com", cfg.TiDBCloud.Host)
 }
 
 func TestTiDBCloudClientReportsCredentialInputs(t *testing.T) {
@@ -152,10 +152,9 @@ func TestTiDBCloudClientReportsCredentialInputs(t *testing.T) {
 	runner := &tidbCloudSourceRunner{cfg: cfg}
 	_, err := runner.tidbCloudClient()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "--tidbcloud.public-key")
 	require.Contains(t, err.Error(), "TIDBCLOUD_PUBLIC_KEY")
-	require.Contains(t, err.Error(), "--tidbcloud.private-key")
 	require.Contains(t, err.Error(), "TIDBCLOUD_PRIVATE_KEY")
+	require.NotContains(t, err.Error(), "--tidbcloud")
 }
 
 func TestTiDBCloudClientReportsOnlyMissingCredentialInputs(t *testing.T) {
@@ -166,8 +165,9 @@ func TestTiDBCloudClientReportsOnlyMissingCredentialInputs(t *testing.T) {
 	runner := &tidbCloudSourceRunner{cfg: cfg}
 	_, err := runner.tidbCloudClient()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "--tidbcloud.public-key")
-	require.NotContains(t, err.Error(), "--tidbcloud.private-key")
+	require.Contains(t, err.Error(), "TIDBCLOUD_PUBLIC_KEY")
+	require.NotContains(t, err.Error(), "TIDBCLOUD_PRIVATE_KEY")
+	require.NotContains(t, err.Error(), "--tidbcloud")
 }
 
 func TestBuildChangefeedRequest_FromTSO(t *testing.T) {

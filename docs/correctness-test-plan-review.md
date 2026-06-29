@@ -94,7 +94,7 @@ If snapshot or increment objects already exist and there is no stored job ID, th
 tool can skip creation without calling TiDB Cloud. But when
 `tidb2snowflake.state.json` contains an export or changefeed ID, the code calls
 the OpenAPI client to resume/wait for that job. In that state-based reuse path,
-credentials and `--tidbcloud.cluster-id` are still required.
+TiDB Cloud API environment variables are still required.
 
 Recommended fix:
 

@@ -28,7 +28,21 @@ func TestSnowflakeCmdExposesSourceModeAndOPFlags(t *testing.T) {
 	require.Equal(t, "1m0s", incrementScanIntervalFlag.DefValue)
 }
 
-func TestSnowflakeCmdReadsTiDBCloudFlags(t *testing.T) {
+func TestSnowflakeCmdDoesNotExposeTiDBCloudCredentialFlags(t *testing.T) {
+	cmd := NewSnowflakeCmd()
+
+	require.Nil(t, cmd.Flags().Lookup("tidbcloud.cluster-id"))
+	require.Nil(t, cmd.Flags().Lookup("tidbcloud.public-key"))
+	require.Nil(t, cmd.Flags().Lookup("tidbcloud.private-key"))
+	require.Nil(t, cmd.Flags().Lookup("tidbcloud.host"))
+}
+
+func TestSnowflakeCmdReadsTiDBCloudEnvironment(t *testing.T) {
+	t.Setenv("TIDBCLOUD_CLUSTER_ID", "cluster-from-env")
+	t.Setenv("TIDBCLOUD_PUBLIC_KEY", "public-from-env")
+	t.Setenv("TIDBCLOUD_PRIVATE_KEY", "private-from-env")
+	t.Setenv("TIDBCLOUD_HOST", " api.env.example.com ")
+
 	var captured *Config
 	cmd := newSnowflakeCmdWithRun(func(_ context.Context, cfg *Config) error {
 		captured = cfg
@@ -37,10 +51,6 @@ func TestSnowflakeCmdReadsTiDBCloudFlags(t *testing.T) {
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	cmd.SetArgs([]string{
-		"--tidbcloud.cluster-id", "cluster-from-flag",
-		"--tidbcloud.public-key", "public-from-flag",
-		"--tidbcloud.private-key", "private-from-flag",
-		"--tidbcloud.host", " api.flag.example.com ",
 		"--aws.access-key", "AKIA",
 		"--aws.secret-key", "secret",
 		"--snowflake.database", "SNOW",
@@ -51,15 +61,15 @@ func TestSnowflakeCmdReadsTiDBCloudFlags(t *testing.T) {
 
 	require.NoError(t, cmd.Execute())
 	require.NotNil(t, captured)
-	require.Equal(t, "cluster-from-flag", captured.TiDBCloud.ClusterID)
-	require.Equal(t, "public-from-flag", captured.TiDBCloud.PublicKey)
-	require.Equal(t, "private-from-flag", captured.TiDBCloud.PrivateKey)
-	require.Equal(t, "api.flag.example.com", captured.TiDBCloud.Host)
+	require.Equal(t, "cluster-from-env", captured.TiDBCloud.ClusterID)
+	require.Equal(t, "public-from-env", captured.TiDBCloud.PublicKey)
+	require.Equal(t, "private-from-env", captured.TiDBCloud.PrivateKey)
+	require.Equal(t, "api.env.example.com", captured.TiDBCloud.Host)
 }
 
-func TestSnowflakeCmdRejectsFlagsAfterArgTerminator(t *testing.T) {
+func TestSnowflakeCmdRejectsTiDBCloudCredentialFlags(t *testing.T) {
 	cmd := newSnowflakeCmdWithRun(func(context.Context, *Config) error {
-		t.Fatal("run should not be called when arguments remain after --")
+		t.Fatal("run should not be called when TiDB Cloud flags are passed")
 		return nil
 	})
 	cmd.SetOut(io.Discard)
@@ -71,11 +81,10 @@ func TestSnowflakeCmdRejectsFlagsAfterArgTerminator(t *testing.T) {
 		"--snowflake.schema", "PUBLIC",
 		"--storage", "s3://bucket/path",
 		"--table", "db1.t1",
-		"--",
-		"--tidbcloud.public-key", "public-after-terminator",
+		"--tidbcloud.public-key", "public-from-flag",
 	})
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "unknown command")
+	require.Contains(t, err.Error(), "unknown flag: --tidbcloud.public-key")
 }

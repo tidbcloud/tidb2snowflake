@@ -270,16 +270,16 @@ func (r *tidbCloudSourceRunner) tidbCloudClient() (*tidbcloud.Client, error) {
 func missingTiDBCloudInputsError(cfg TiDBCloudConfig) error {
 	var missing []string
 	if cfg.ClusterID == "" {
-		missing = append(missing, "--tidbcloud.cluster-id (or "+envTiDBCloudClusterID+"/"+envTiDBCloudClusterIDAlias+")")
+		missing = append(missing, envTiDBCloudClusterID+"/"+envTiDBCloudClusterIDAlias)
 	}
 	if cfg.PublicKey == "" {
-		missing = append(missing, "--tidbcloud.public-key (or "+envTiDBCloudPublicKey+"/"+envTiDBCloudPublicKeyAlias+")")
+		missing = append(missing, envTiDBCloudPublicKey+"/"+envTiDBCloudPublicKeyAlias)
 	}
 	if cfg.PrivateKey == "" {
-		missing = append(missing, "--tidbcloud.private-key (or "+envTiDBCloudPrivateKey+"/"+envTiDBCloudPrivateKeyAlias+")")
+		missing = append(missing, envTiDBCloudPrivateKey+"/"+envTiDBCloudPrivateKeyAlias)
 	}
 	return errors.Errorf(
-		"missing TiDB Cloud API input(s): %s. Pass the --tidbcloud.* flags after the snowflake subcommand",
+		"missing TiDB Cloud API environment variable(s): %s",
 		strings.Join(missing, ", "),
 	)
 }
