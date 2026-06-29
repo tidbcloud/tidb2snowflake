@@ -110,23 +110,6 @@ func TestTiDBCloudClientUsesEnvironmentDefaults(t *testing.T) {
 	require.Equal(t, "api.example.com", cfg.TiDBCloud.Host)
 }
 
-func TestTiDBCloudClientUsesEnvironmentAliasDefaults(t *testing.T) {
-	t.Setenv("TIDB_CLOUD_CLUSTER_ID", "cluster-1")
-	t.Setenv("TIDB_CLOUD_PUBLIC_KEY", "public-key")
-	t.Setenv("TIDB_CLOUD_PRIVATE_KEY", "private-key")
-	t.Setenv("TIDB_CLOUD_HOST", "api.example.com")
-
-	cfg := &Config{}
-	runner := &tidbCloudSourceRunner{cfg: cfg}
-	client, err := runner.tidbCloudClient()
-	require.NoError(t, err)
-	require.NotNil(t, client)
-	require.Equal(t, "cluster-1", cfg.TiDBCloud.ClusterID)
-	require.Equal(t, "public-key", cfg.TiDBCloud.PublicKey)
-	require.Equal(t, "private-key", cfg.TiDBCloud.PrivateKey)
-	require.Equal(t, "api.example.com", cfg.TiDBCloud.Host)
-}
-
 func TestTiDBCloudEnvDefaultsPreserveExplicitValues(t *testing.T) {
 	t.Setenv("TIDBCLOUD_CLUSTER_ID", "cluster-from-env")
 	t.Setenv("TIDBCLOUD_PUBLIC_KEY", "public-from-env")

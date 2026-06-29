@@ -78,9 +78,7 @@ make build       # produces bin/tidb2snowflake
 TiDB Cloud API parameters are only needed when the tool must create or wait on a
 managed export/changefeed. Configure TiDB Cloud OpenAPI with
 `TIDBCLOUD_CLUSTER_ID`, `TIDBCLOUD_PUBLIC_KEY`, `TIDBCLOUD_PRIVATE_KEY`, and
-optionally `TIDBCLOUD_HOST`. The aliases `TIDB_CLOUD_CLUSTER_ID`,
-`TIDB_CLOUD_PUBLIC_KEY`, `TIDB_CLOUD_PRIVATE_KEY`, and `TIDB_CLOUD_HOST` are
-also accepted.
+optionally `TIDBCLOUD_HOST`.
 
 ```bash
 export TIDBCLOUD_CLUSTER_ID="..."

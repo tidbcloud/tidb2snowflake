@@ -72,14 +72,10 @@ const (
 const defaultIncrementScanInterval = time.Minute
 
 const (
-	envTiDBCloudClusterID       = "TIDBCLOUD_CLUSTER_ID"
-	envTiDBCloudPublicKey       = "TIDBCLOUD_PUBLIC_KEY"
-	envTiDBCloudPrivateKey      = "TIDBCLOUD_PRIVATE_KEY"
-	envTiDBCloudHost            = "TIDBCLOUD_HOST"
-	envTiDBCloudClusterIDAlias  = "TIDB_CLOUD_CLUSTER_ID"
-	envTiDBCloudPublicKeyAlias  = "TIDB_CLOUD_PUBLIC_KEY"
-	envTiDBCloudPrivateKeyAlias = "TIDB_CLOUD_PRIVATE_KEY"
-	envTiDBCloudHostAlias       = "TIDB_CLOUD_HOST"
+	envTiDBCloudClusterID  = "TIDBCLOUD_CLUSTER_ID"
+	envTiDBCloudPublicKey  = "TIDBCLOUD_PUBLIC_KEY"
+	envTiDBCloudPrivateKey = "TIDBCLOUD_PRIVATE_KEY"
+	envTiDBCloudHost       = "TIDBCLOUD_HOST"
 )
 
 // Config is the full configuration for one replication run.
@@ -270,13 +266,13 @@ func (r *tidbCloudSourceRunner) tidbCloudClient() (*tidbcloud.Client, error) {
 func missingTiDBCloudInputsError(cfg TiDBCloudConfig) error {
 	var missing []string
 	if cfg.ClusterID == "" {
-		missing = append(missing, envTiDBCloudClusterID+"/"+envTiDBCloudClusterIDAlias)
+		missing = append(missing, envTiDBCloudClusterID)
 	}
 	if cfg.PublicKey == "" {
-		missing = append(missing, envTiDBCloudPublicKey+"/"+envTiDBCloudPublicKeyAlias)
+		missing = append(missing, envTiDBCloudPublicKey)
 	}
 	if cfg.PrivateKey == "" {
-		missing = append(missing, envTiDBCloudPrivateKey+"/"+envTiDBCloudPrivateKeyAlias)
+		missing = append(missing, envTiDBCloudPrivateKey)
 	}
 	return errors.Errorf(
 		"missing TiDB Cloud API environment variable(s): %s",
@@ -290,26 +286,21 @@ func applyTiDBCloudEnvDefaults(cfg *Config) {
 	}
 	cfg.TiDBCloud.Host = strings.TrimSpace(cfg.TiDBCloud.Host)
 	if cfg.TiDBCloud.ClusterID == "" {
-		cfg.TiDBCloud.ClusterID = envDefault(envTiDBCloudClusterID, envTiDBCloudClusterIDAlias)
+		cfg.TiDBCloud.ClusterID = envDefault(envTiDBCloudClusterID)
 	}
 	if cfg.TiDBCloud.PublicKey == "" {
-		cfg.TiDBCloud.PublicKey = envDefault(envTiDBCloudPublicKey, envTiDBCloudPublicKeyAlias)
+		cfg.TiDBCloud.PublicKey = envDefault(envTiDBCloudPublicKey)
 	}
 	if cfg.TiDBCloud.PrivateKey == "" {
-		cfg.TiDBCloud.PrivateKey = envDefault(envTiDBCloudPrivateKey, envTiDBCloudPrivateKeyAlias)
+		cfg.TiDBCloud.PrivateKey = envDefault(envTiDBCloudPrivateKey)
 	}
 	if cfg.TiDBCloud.Host == "" {
-		cfg.TiDBCloud.Host = envDefault(envTiDBCloudHost, envTiDBCloudHostAlias)
+		cfg.TiDBCloud.Host = envDefault(envTiDBCloudHost)
 	}
 }
 
-func envDefault(names ...string) string {
-	for _, name := range names {
-		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-			return v
-		}
-	}
-	return ""
+func envDefault(name string) string {
+	return strings.TrimSpace(os.Getenv(name))
 }
 
 func (r *opSourceRunner) sourceJobName(jobType sourceJobType) string {
