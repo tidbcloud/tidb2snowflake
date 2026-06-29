@@ -9,7 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 	"go.uber.org/zap"
 )
@@ -79,18 +79,18 @@ func (sc *Connector) InitSchema(columns []cloudstorage.TableCol) error {
 	return nil
 }
 
-func (sc *Connector) ExecDDL(tableDef cloudstorage.TableDefinition) error {
+func (sc *Connector) ExecDDL(schemaFile cloudstorage.SchemaFile) error {
 	if len(sc.columns) == 0 {
 		return errors.New("Columns not initialized. Maybe you execute a DDL before all DMLs, which is not supported now.")
 	}
-	ddls, err := GenDDLViaColumnsDiff(sc.columns, tableDef)
+	ddls, err := GenDDLViaColumnsDiff(sc.columns, schemaFile)
 	if err != nil {
 		return errors.Trace(err)
 	}
 	if len(ddls) == 0 {
 		log.Info("No need to execute this DDL in Snowflake",
-			zap.String("ddl", tableDef.Query),
-			zap.Uint64("tableVersion", tableDef.TableVersion))
+			zap.String("ddl", schemaFile.Query),
+			zap.Uint64("tableVersion", schemaFile.TableVersion))
 		return nil
 	}
 	// One DDL may be rewritten to multiple DDLs
@@ -98,18 +98,18 @@ func (sc *Connector) ExecDDL(tableDef cloudstorage.TableDefinition) error {
 		_, err := sc.db.Exec(ddl)
 		if err != nil {
 			log.Error("Failed to executed DDL",
-				zap.String("received", tableDef.Query),
+				zap.String("received", schemaFile.Query),
 				zap.String("rewritten", strings.Join(ddls, "\n")),
-				zap.Uint64("tableVersion", tableDef.TableVersion))
+				zap.Uint64("tableVersion", schemaFile.TableVersion))
 			return errors.Annotate(err, fmt.Sprint("failed to execute", ddl))
 		}
 	}
 	// update columns
-	sc.columns = tableDef.Columns
+	sc.columns = schemaFile.Columns
 	log.Info("Successfully executed DDL",
-		zap.String("received", tableDef.Query),
+		zap.String("received", schemaFile.Query),
 		zap.String("rewritten", strings.Join(ddls, "\n")),
-		zap.Uint64("tableVersion", tableDef.TableVersion))
+		zap.Uint64("tableVersion", schemaFile.TableVersion))
 	return nil
 }
 
@@ -138,9 +138,9 @@ func (sc *Connector) LoadSnapshot(targetTable, filePath string) error {
 	return nil
 }
 
-func (sc *Connector) LoadIncrement(tableDef cloudstorage.TableDefinition, filePath string) error {
+func (sc *Connector) LoadIncrement(schemaFile cloudstorage.SchemaFile, filePath string) error {
 	// merge staged file into table
-	mergeQuery := GenMergeInto(tableDef, filePath, sc.stageName)
+	mergeQuery := GenMergeInto(schemaFile, filePath, sc.stageName)
 	_, err := sc.db.Exec(mergeQuery)
 	if err != nil {
 		return errors.Trace(err)

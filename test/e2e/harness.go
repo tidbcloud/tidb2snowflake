@@ -20,11 +20,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/tidb/br/pkg/storage"
-	putil "github.com/pingcap/tiflow/pkg/util"
+	putil "github.com/pingcap/ticdc/pkg/util"
+	storage "github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
-	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 )
 
 // e2eConfig is the full set of credentials/endpoints an e2e run needs, read
@@ -136,19 +135,6 @@ func (c *e2eConfig) snowflakeDB(t *testing.T, schema string) *sql.DB {
 		t.Fatalf("open Snowflake: %v", err)
 	}
 	return db
-}
-
-func (c *e2eConfig) apiClient(t *testing.T) *tidbcloud.Client {
-	t.Helper()
-	var opts []tidbcloud.Option
-	if c.APIHost != "" {
-		opts = append(opts, tidbcloud.WithHost(c.APIHost))
-	}
-	cli, err := tidbcloud.NewClient(c.PublicKey, c.PrivateKey, opts...)
-	if err != nil {
-		t.Fatalf("new tidbcloud client: %v", err)
-	}
-	return cli
 }
 
 // runTool runs the built binary to completion (used for snapshot-only) and
@@ -263,8 +249,7 @@ func waitForColValue(t *testing.T, db *sql.DB, table, col string, id, want int, 
 
 // ---- cleanup ----
 
-// cleanup best-effort removes the Snowflake schema, the TiDB table, and the
-// export/changefeed recorded in the run's storage state file.
+// cleanup best-effort removes the Snowflake schema and the TiDB table.
 func cleanup(t *testing.T, cfg *e2eConfig, storagePath, schema, dbTable string) {
 	t.Helper()
 	// Snowflake schema (drops the loaded table too).
@@ -281,21 +266,6 @@ func cleanup(t *testing.T, cfg *e2eConfig, storagePath, schema, dbTable string) 
 		}
 		_ = db.Close()
 	}
-	// export / changefeed recorded in state.json.
-	exportID, changefeedID := readState(t, cfg, storagePath)
-	cli := cfg.apiClient(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	if changefeedID != "" {
-		if err := cli.DeleteChangefeed(ctx, cfg.ClusterID, changefeedID); err != nil {
-			t.Logf("cleanup: delete changefeed %s: %v", changefeedID, err)
-		}
-	}
-	if exportID != "" {
-		if _, err := cli.DeleteExport(ctx, cfg.ClusterID, exportID); err != nil {
-			t.Logf("cleanup: delete export %s: %v", exportID, err)
-		}
-	}
 }
 
 func mustTiDB(cfg *e2eConfig) *sql.DB {
@@ -304,24 +274,6 @@ func mustTiDB(cfg *e2eConfig) *sql.DB {
 		return nil
 	}
 	return db
-}
-
-// readState reads tidb2snowflake.state.json from the run's storage path.
-func readState(t *testing.T, cfg *e2eConfig, storagePath string) (exportID, changefeedID string) {
-	t.Helper()
-	store := openRunStorage(t, cfg, storagePath)
-	exists, err := store.FileExists(context.Background(), "tidb2snowflake.state.json")
-	if err != nil || !exists {
-		return "", ""
-	}
-	data, err := store.ReadFile(context.Background(), "tidb2snowflake.state.json")
-	if err != nil {
-		return "", ""
-	}
-	// minimal extraction without importing the cmd package
-	exportID = jsonString(data, "exportId")
-	changefeedID = jsonString(data, "changefeedId")
-	return exportID, changefeedID
 }
 
 func waitForStorageFile(t *testing.T, cfg *e2eConfig, storagePath, file string, timeout time.Duration) {
@@ -338,7 +290,7 @@ func waitForStorageFile(t *testing.T, cfg *e2eConfig, storagePath, file string, 
 	t.Fatalf("storage file %s did not appear under %s within %s", file, storagePath, timeout)
 }
 
-func openRunStorage(t *testing.T, cfg *e2eConfig, storagePath string) storage.ExternalStorage {
+func openRunStorage(t *testing.T, cfg *e2eConfig, storagePath string) storage.Storage {
 	t.Helper()
 	uri, err := url.Parse(storagePath)
 	if err != nil {
@@ -349,30 +301,9 @@ func openRunStorage(t *testing.T, cfg *e2eConfig, storagePath string) storage.Ex
 	q.Set("secret-access-key", cfg.AWSSecretKey)
 	uri.RawQuery = q.Encode()
 	ctx := context.Background()
-	store, err := putil.GetExternalStorageFromURI(ctx, uri.String())
+	store, err := putil.GetExternalStorageWithDefaultTimeout(ctx, uri.String())
 	if err != nil {
 		t.Fatalf("open storage: %v", err)
 	}
 	return store
-}
-
-// jsonString does a tiny extraction of a top-level string field, avoiding a
-// dependency on the unexported runState type.
-func jsonString(data []byte, key string) string {
-	needle := fmt.Sprintf("%q:", key)
-	i := strings.Index(string(data), needle)
-	if i < 0 {
-		return ""
-	}
-	rest := string(data)[i+len(needle):]
-	j := strings.Index(rest, "\"")
-	if j < 0 {
-		return ""
-	}
-	rest = rest[j+1:]
-	k := strings.Index(rest, "\"")
-	if k < 0 {
-		return ""
-	}
-	return rest[:k]
 }

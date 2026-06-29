@@ -216,28 +216,21 @@ Expected:
 
 ### Local Mode and Compression Matrix
 
-Run the local e2e script for all combinations:
+Run the local e2e script for both snapshot compression settings:
 
 ```bash
-SNAPSHOT_LOAD_MODE=bulk SNAPSHOT_COMPRESSION=none \
+SNAPSHOT_COMPRESSION=none \
   ./scripts/local_tiup_s3_snowflake_e2e.sh
 
-SNAPSHOT_LOAD_MODE=per-file SNAPSHOT_COMPRESSION=none \
-  ./scripts/local_tiup_s3_snowflake_e2e.sh
-
-SNAPSHOT_LOAD_MODE=bulk SNAPSHOT_COMPRESSION=gzip \
-  ./scripts/local_tiup_s3_snowflake_e2e.sh
-
-SNAPSHOT_LOAD_MODE=per-file SNAPSHOT_COMPRESSION=gzip \
+SNAPSHOT_COMPRESSION=gzip \
   ./scripts/local_tiup_s3_snowflake_e2e.sh
 ```
 
 Expected:
 
-- all four runs produce identical final Snowflake data
+- both runs produce identical final Snowflake data
 - gzip snapshot files are read correctly
-- bulk mode uses one table-wide load pattern
-- per-file mode loads every data file and no metadata files
+- snapshot loading uses one table-wide load pattern
 
 ### Restart Idempotency
 
@@ -566,7 +559,6 @@ Force Dumpling to produce multiple files.
 Expected:
 
 - bulk mode loads all files once
-- per-file mode loads all files once
 - final row count equals TiDB row count
 
 ### Metadata and Extra Files
@@ -673,24 +665,6 @@ Expected:
 - loadinfo is eventually written
 
 This is a high-risk case because the current marker is table-level.
-
-### Snapshot Partial Per-File Load
-
-Stop after only part of the snapshot files are loaded in per-file mode.
-
-Trigger:
-
-- run per-file mode with `T2SF_FAIL_AFTER_N_SNAPSHOT_FILES=1` for a table that
-  has at least two snapshot data files
-
-Expected:
-
-- command exits non-zero after exactly one file is loaded
-- table-level `loadinfo` is absent
-- rerun reaches a correct final table state
-- already-loaded files are not duplicated
-
-If duplicate rows are possible, record a P0 correctness bug.
 
 ### Increment MERGE Succeeds, Checkpoint Missing
 
@@ -940,7 +914,6 @@ After those hooks exist, correctness validation also requires:
 
 - snapshot COPY success followed by missing loadinfo reruns to a correct final
   state
-- partial per-file snapshot load reruns without duplicate rows
 - increment MERGE success followed by missing checkpoint reruns correctly
 - checkpoint-without-progress backfills progress and does not remerge
 - Snowflake COPY/MERGE failures do not write success markers

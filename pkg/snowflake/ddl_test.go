@@ -3,7 +3,7 @@ package snowflake
 import (
 	"testing"
 
-	"github.com/pingcap/tiflow/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,7 +31,7 @@ func TestGenDDLViaColumnsDiff(t *testing.T) {
 			Tp:   "date",
 		},
 	}
-	curTableDef := cloudstorage.TableDefinition{
+	curTableDef := cloudstorage.SchemaFile{
 		Table:  "test_table",
 		Schema: "test_schema",
 		Columns: []cloudstorage.TableCol{

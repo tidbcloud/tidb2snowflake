@@ -20,7 +20,6 @@ SNOWFLAKE_DATABASE="${SNOWFLAKE_DATABASE:-TIDB2SNOWFLAKE_E2E}"
 SNOWFLAKE_SCHEMA="${SNOWFLAKE_SCHEMA:-LOCAL_${RUN_ID//[^0-9A-Za-z_]/_}}"
 CHANGEFEED_ID="${CHANGEFEED_ID:-tidb2sf-${RUN_ID//[^0-9A-Za-z-]/-}}"
 WORKDIR="${WORKDIR:-$ROOT/.local-e2e/$RUN_ID}"
-SNAPSHOT_LOAD_MODE="${SNAPSHOT_LOAD_MODE:-bulk}"
 SNAPSHOT_COMPRESSION="${SNAPSHOT_COMPRESSION:-none}"
 mkdir -p "$WORKDIR"
 
@@ -263,7 +262,7 @@ main() {
   log "workdir: $WORKDIR"
   log "storage root: $STORAGE_ROOT"
   log "snowflake database/schema: $SNOWFLAKE_DATABASE.$SNOWFLAKE_SCHEMA"
-  log "snapshot load mode/compression: $SNAPSHOT_LOAD_MODE/$SNAPSHOT_COMPRESSION"
+  log "snapshot compression: $SNAPSHOT_COMPRESSION"
 
   log "building tidb2snowflake"
   make -C "$ROOT" build >/dev/null
@@ -342,7 +341,6 @@ SQL
     --aws.access-key "$AWS_ACCESS_KEY_ID" \
     --aws.secret-key "$AWS_SECRET_ACCESS_KEY" \
     --table "$TABLE_FQN" \
-    --snapshot.load-mode "$SNAPSHOT_LOAD_MODE" \
     --snapshot.compression "$SNAPSHOT_COMPRESSION" \
     --changefeed.flush-interval 10s \
     --log.level info >"$WORKDIR/tidb2snowflake.log" 2>&1 &
