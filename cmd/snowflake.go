@@ -16,6 +16,10 @@ import (
 
 // NewSnowflakeCmd builds the `snowflake` subcommand.
 func NewSnowflakeCmd() *cobra.Command {
+	return newSnowflakeCmdWithRun(Replicate)
+}
+
+func newSnowflakeCmdWithRun(run func(context.Context, *Config) error) *cobra.Command {
 	cfg := &Config{
 		TiDB:      &tidb.Config{},
 		Snowflake: &snowflake.Config{},
@@ -28,15 +32,18 @@ func NewSnowflakeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "snowflake",
 		Short: "Replicate snapshot and incremental data from TiDB to Snowflake",
+		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			if err := logger.InitLogger(&logger.Config{Level: logLevel, File: logFile}); err != nil {
 				return errors.Trace(err)
 			}
+			applyTiDBCloudEnvDefaults(cfg)
+			logTiDBCloudInputStatus(cfg)
 			if err := validateConfig(cfg); err != nil {
 				return err
 			}
 			ctx := context.Background()
-			if err := Replicate(ctx, cfg); err != nil {
+			if err := run(ctx, cfg); err != nil {
 				log.Error("replication failed", zap.Error(err))
 				return err
 			}
@@ -59,12 +66,6 @@ func NewSnowflakeCmd() *cobra.Command {
 	f.StringVarP(&cfg.TiDB.Pass, "tidb.pass", "p", "", "TiDB password")
 	f.BoolVar(&cfg.TiDB.TLS, "tidb.tls", false, "enable TLS for TiDB connection")
 	f.StringVar(&cfg.TiDB.SSLCA, "tidb.ssl-ca", "", "TiDB SSL CA path")
-
-	// TiDB Cloud OpenAPI
-	f.StringVar(&cfg.TiDBCloud.ClusterID, "tidbcloud.cluster-id", "", "TiDB Cloud Serverless cluster ID")
-	f.StringVar(&cfg.TiDBCloud.PublicKey, "tidbcloud.public-key", "", "TiDB Cloud API key public part")
-	f.StringVar(&cfg.TiDBCloud.PrivateKey, "tidbcloud.private-key", "", "TiDB Cloud API key private part")
-	f.StringVar(&cfg.TiDBCloud.Host, "tidbcloud.host", "", "TiDB Cloud OpenAPI host (default serverless.tidbapi.com)")
 
 	// OP deployment services
 	f.StringVar(&cfg.OP.TiCDCAddress, "ticdc.address", "", "TiCDC OpenAPI base address for --source.mode=op, e.g. http://127.0.0.1:8300")
@@ -100,6 +101,17 @@ func NewSnowflakeCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("table")
 
 	return cmd
+}
+
+func logTiDBCloudInputStatus(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	log.Info("TiDB Cloud input status",
+		zap.Bool("clusterIDConfigured", cfg.TiDBCloud.ClusterID != ""),
+		zap.Bool("publicKeyConfigured", cfg.TiDBCloud.PublicKey != ""),
+		zap.Bool("privateKeyConfigured", cfg.TiDBCloud.PrivateKey != ""),
+		zap.Bool("hostConfigured", cfg.TiDBCloud.Host != ""))
 }
 
 func validateConfig(cfg *Config) error {
