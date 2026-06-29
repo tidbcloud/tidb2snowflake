@@ -252,8 +252,8 @@ Expected:
 
 - the tool can load without creating a new export/changefeed when data already
   exists
-- TiDB Cloud API credentials and `--tidbcloud.cluster-id` are not required for
-  this data-only reuse path
+- TiDB Cloud API environment variables are not required for this data-only reuse
+  path
 - the run does not call TiDB Cloud OpenAPI
 
 ### Stored State-ID Reuse With API Credentials
@@ -265,8 +265,8 @@ Expected:
 
 - the tool waits for or reuses the stored export/changefeed instead of creating a
   duplicate
-- TiDB Cloud API credentials and `--tidbcloud.cluster-id` are required because
-  the stored job IDs must be checked through OpenAPI
+- TiDB Cloud API environment variables are required because the stored job IDs
+  must be checked through OpenAPI
 - if the stored job is terminal-failed or missing, the command fails clearly and
   does not mark load success
 

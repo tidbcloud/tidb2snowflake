@@ -38,7 +38,7 @@ func newSnowflakeCmdWithRun(run func(context.Context, *Config) error) *cobra.Com
 				return errors.Trace(err)
 			}
 			applyTiDBCloudEnvDefaults(cfg)
-			logTiDBCloudInputStatus(c, cfg)
+			logTiDBCloudInputStatus(cfg)
 			if err := validateConfig(cfg); err != nil {
 				return err
 			}
@@ -66,12 +66,6 @@ func newSnowflakeCmdWithRun(run func(context.Context, *Config) error) *cobra.Com
 	f.StringVarP(&cfg.TiDB.Pass, "tidb.pass", "p", "", "TiDB password")
 	f.BoolVar(&cfg.TiDB.TLS, "tidb.tls", false, "enable TLS for TiDB connection")
 	f.StringVar(&cfg.TiDB.SSLCA, "tidb.ssl-ca", "", "TiDB SSL CA path")
-
-	// TiDB Cloud OpenAPI
-	f.StringVar(&cfg.TiDBCloud.ClusterID, "tidbcloud.cluster-id", "", "TiDB Cloud Serverless cluster ID")
-	f.StringVar(&cfg.TiDBCloud.PublicKey, "tidbcloud.public-key", "", "TiDB Cloud API key public part")
-	f.StringVar(&cfg.TiDBCloud.PrivateKey, "tidbcloud.private-key", "", "TiDB Cloud API key private part")
-	f.StringVar(&cfg.TiDBCloud.Host, "tidbcloud.host", "", "TiDB Cloud OpenAPI host (default serverless.tidbapi.com)")
 
 	// OP deployment services
 	f.StringVar(&cfg.OP.TiCDCAddress, "ticdc.address", "", "TiCDC OpenAPI base address for --source.mode=op, e.g. http://127.0.0.1:8300")
@@ -109,7 +103,7 @@ func newSnowflakeCmdWithRun(run func(context.Context, *Config) error) *cobra.Com
 	return cmd
 }
 
-func logTiDBCloudInputStatus(cmd *cobra.Command, cfg *Config) {
+func logTiDBCloudInputStatus(cfg *Config) {
 	if cfg == nil {
 		return
 	}
@@ -117,11 +111,7 @@ func logTiDBCloudInputStatus(cmd *cobra.Command, cfg *Config) {
 		zap.Bool("clusterIDConfigured", cfg.TiDBCloud.ClusterID != ""),
 		zap.Bool("publicKeyConfigured", cfg.TiDBCloud.PublicKey != ""),
 		zap.Bool("privateKeyConfigured", cfg.TiDBCloud.PrivateKey != ""),
-		zap.Bool("hostConfigured", cfg.TiDBCloud.Host != ""),
-		zap.Bool("clusterIDFlagSet", cmd.Flags().Changed("tidbcloud.cluster-id")),
-		zap.Bool("publicKeyFlagSet", cmd.Flags().Changed("tidbcloud.public-key")),
-		zap.Bool("privateKeyFlagSet", cmd.Flags().Changed("tidbcloud.private-key")),
-		zap.Bool("hostFlagSet", cmd.Flags().Changed("tidbcloud.host")))
+		zap.Bool("hostConfigured", cfg.TiDBCloud.Host != ""))
 }
 
 func validateConfig(cfg *Config) error {
