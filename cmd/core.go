@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -69,6 +70,13 @@ const (
 )
 
 const defaultIncrementScanInterval = time.Minute
+
+const (
+	envTiDBCloudClusterID  = "TIDBCLOUD_CLUSTER_ID"
+	envTiDBCloudPublicKey  = "TIDBCLOUD_PUBLIC_KEY"
+	envTiDBCloudPrivateKey = "TIDBCLOUD_PRIVATE_KEY"
+	envTiDBCloudHost       = "TIDBCLOUD_HOST"
+)
 
 // Config is the full configuration for one replication run.
 type Config struct {
@@ -236,8 +244,12 @@ func (r *tidbCloudSourceRunner) tidbCloudClient() (*tidbcloud.Client, error) {
 	if r.cdcClient != nil {
 		return r.cdcClient, nil
 	}
+	applyTiDBCloudEnvDefaults(r.cfg)
 	if r.cfg.TiDBCloud.ClusterID == "" {
-		return nil, errors.New("--tidbcloud.cluster-id is required to create or wait on an export/changefeed")
+		return nil, missingTiDBCloudInputsError(r.cfg.TiDBCloud)
+	}
+	if r.cfg.TiDBCloud.PublicKey == "" || r.cfg.TiDBCloud.PrivateKey == "" {
+		return nil, missingTiDBCloudInputsError(r.cfg.TiDBCloud)
 	}
 	var opts []tidbcloud.Option
 	if r.cfg.TiDBCloud.Host != "" {
@@ -249,6 +261,46 @@ func (r *tidbCloudSourceRunner) tidbCloudClient() (*tidbcloud.Client, error) {
 	}
 	r.cdcClient = c
 	return c, nil
+}
+
+func missingTiDBCloudInputsError(cfg TiDBCloudConfig) error {
+	var missing []string
+	if cfg.ClusterID == "" {
+		missing = append(missing, envTiDBCloudClusterID)
+	}
+	if cfg.PublicKey == "" {
+		missing = append(missing, envTiDBCloudPublicKey)
+	}
+	if cfg.PrivateKey == "" {
+		missing = append(missing, envTiDBCloudPrivateKey)
+	}
+	return errors.Errorf(
+		"missing TiDB Cloud API environment variable(s): %s",
+		strings.Join(missing, ", "),
+	)
+}
+
+func applyTiDBCloudEnvDefaults(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	cfg.TiDBCloud.Host = strings.TrimSpace(cfg.TiDBCloud.Host)
+	if cfg.TiDBCloud.ClusterID == "" {
+		cfg.TiDBCloud.ClusterID = envDefault(envTiDBCloudClusterID)
+	}
+	if cfg.TiDBCloud.PublicKey == "" {
+		cfg.TiDBCloud.PublicKey = envDefault(envTiDBCloudPublicKey)
+	}
+	if cfg.TiDBCloud.PrivateKey == "" {
+		cfg.TiDBCloud.PrivateKey = envDefault(envTiDBCloudPrivateKey)
+	}
+	if cfg.TiDBCloud.Host == "" {
+		cfg.TiDBCloud.Host = envDefault(envTiDBCloudHost)
+	}
+}
+
+func envDefault(name string) string {
+	return strings.TrimSpace(os.Getenv(name))
 }
 
 func (r *opSourceRunner) sourceJobName(jobType sourceJobType) string {
@@ -341,6 +393,7 @@ func managedSourceJobStorageDir(jobType sourceJobType) string {
 // from the selected source deployment, then load the resulting object-storage
 // files into Snowflake.
 func Replicate(ctx context.Context, cfg *Config) error {
+	applyTiDBCloudEnvDefaults(cfg)
 	if len(cfg.Tables) == 0 {
 		return errors.New("no tables specified")
 	}
