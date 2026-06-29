@@ -124,9 +124,11 @@ Snapshot export compression defaults to `none`; use `--snapshot.compression=gzip
 to ask TiDB Cloud export for gzip CSV files and configure Snowflake `COPY` to
 read gzip input.
 
-Incremental replay no longer reads or writes legacy per-file `.checkpoint`
-markers or per-table `_consumer/progress.json`. Persistent resume is expected to
-be handled by the new state manager.
+Incremental replay writes a per-table `_consumer/progress.json` under the
+incremental storage prefix after each successfully applied CDC file. On restart,
+the loader restores that applied-file cursor before scanning object storage. Use
+`--increment.scan-interval` to tune how often the loader scans the incremental
+storage prefix; the default is `1m`.
 
 ## Type mapping
 

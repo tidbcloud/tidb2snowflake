@@ -89,6 +89,7 @@ func NewSnowflakeCmd() *cobra.Command {
 	f.StringVar(&cfg.SnapshotCompression, "snapshot.compression", SnapshotCompressionNone, "snapshot export compression: none or gzip")
 	f.DurationVar(&cfg.ChangefeedFlushInterval, "changefeed.flush-interval", 60*time.Second, "changefeed flush interval")
 	f.IntVar(&cfg.ChangefeedFileSizeMiB, "changefeed.file-size", 64, "changefeed file size in MiB")
+	f.DurationVar(&cfg.IncrementScanInterval, "increment.scan-interval", defaultIncrementScanInterval, "incremental storage scan interval")
 	f.DurationVar(&cfg.PollInterval, "poll-interval", 10*time.Second, "interval to poll export/changefeed status")
 
 	// logging
