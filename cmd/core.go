@@ -288,6 +288,7 @@ func applyTiDBCloudEnvDefaults(cfg *Config) {
 	if cfg == nil {
 		return
 	}
+	cfg.TiDBCloud.Host = strings.TrimSpace(cfg.TiDBCloud.Host)
 	if cfg.TiDBCloud.ClusterID == "" {
 		cfg.TiDBCloud.ClusterID = envDefault(envTiDBCloudClusterID, envTiDBCloudClusterIDAlias)
 	}

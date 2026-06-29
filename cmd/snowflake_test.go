@@ -40,7 +40,7 @@ func TestSnowflakeCmdReadsTiDBCloudFlags(t *testing.T) {
 		"--tidbcloud.cluster-id", "cluster-from-flag",
 		"--tidbcloud.public-key", "public-from-flag",
 		"--tidbcloud.private-key", "private-from-flag",
-		"--tidbcloud.host", "api.flag.example.com",
+		"--tidbcloud.host", " api.flag.example.com ",
 		"--aws.access-key", "AKIA",
 		"--aws.secret-key", "secret",
 		"--snowflake.database", "SNOW",
