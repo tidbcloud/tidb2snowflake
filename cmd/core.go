@@ -72,10 +72,14 @@ const (
 const defaultIncrementScanInterval = time.Minute
 
 const (
-	envTiDBCloudClusterID  = "TIDBCLOUD_CLUSTER_ID"
-	envTiDBCloudPublicKey  = "TIDBCLOUD_PUBLIC_KEY"
-	envTiDBCloudPrivateKey = "TIDBCLOUD_PRIVATE_KEY"
-	envTiDBCloudHost       = "TIDBCLOUD_HOST"
+	envTiDBCloudClusterID       = "TIDBCLOUD_CLUSTER_ID"
+	envTiDBCloudPublicKey       = "TIDBCLOUD_PUBLIC_KEY"
+	envTiDBCloudPrivateKey      = "TIDBCLOUD_PRIVATE_KEY"
+	envTiDBCloudHost            = "TIDBCLOUD_HOST"
+	envTiDBCloudClusterIDAlias  = "TIDB_CLOUD_CLUSTER_ID"
+	envTiDBCloudPublicKeyAlias  = "TIDB_CLOUD_PUBLIC_KEY"
+	envTiDBCloudPrivateKeyAlias = "TIDB_CLOUD_PRIVATE_KEY"
+	envTiDBCloudHostAlias       = "TIDB_CLOUD_HOST"
 )
 
 // Config is the full configuration for one replication run.
@@ -246,14 +250,10 @@ func (r *tidbCloudSourceRunner) tidbCloudClient() (*tidbcloud.Client, error) {
 	}
 	applyTiDBCloudEnvDefaults(r.cfg)
 	if r.cfg.TiDBCloud.ClusterID == "" {
-		return nil, errors.Errorf("--tidbcloud.cluster-id or %s is required to create or wait on an export/changefeed", envTiDBCloudClusterID)
+		return nil, missingTiDBCloudInputsError(r.cfg.TiDBCloud)
 	}
 	if r.cfg.TiDBCloud.PublicKey == "" || r.cfg.TiDBCloud.PrivateKey == "" {
-		return nil, errors.Errorf(
-			"--tidbcloud.public-key or %s, and --tidbcloud.private-key or %s are required to create or wait on an export/changefeed",
-			envTiDBCloudPublicKey,
-			envTiDBCloudPrivateKey,
-		)
+		return nil, missingTiDBCloudInputsError(r.cfg.TiDBCloud)
 	}
 	var opts []tidbcloud.Option
 	if r.cfg.TiDBCloud.Host != "" {
@@ -267,26 +267,48 @@ func (r *tidbCloudSourceRunner) tidbCloudClient() (*tidbcloud.Client, error) {
 	return c, nil
 }
 
+func missingTiDBCloudInputsError(cfg TiDBCloudConfig) error {
+	var missing []string
+	if cfg.ClusterID == "" {
+		missing = append(missing, "--tidbcloud.cluster-id (or "+envTiDBCloudClusterID+"/"+envTiDBCloudClusterIDAlias+")")
+	}
+	if cfg.PublicKey == "" {
+		missing = append(missing, "--tidbcloud.public-key (or "+envTiDBCloudPublicKey+"/"+envTiDBCloudPublicKeyAlias+")")
+	}
+	if cfg.PrivateKey == "" {
+		missing = append(missing, "--tidbcloud.private-key (or "+envTiDBCloudPrivateKey+"/"+envTiDBCloudPrivateKeyAlias+")")
+	}
+	return errors.Errorf(
+		"missing TiDB Cloud API input(s): %s. Pass the --tidbcloud.* flags after the snowflake subcommand",
+		strings.Join(missing, ", "),
+	)
+}
+
 func applyTiDBCloudEnvDefaults(cfg *Config) {
 	if cfg == nil {
 		return
 	}
 	if cfg.TiDBCloud.ClusterID == "" {
-		cfg.TiDBCloud.ClusterID = envDefault(envTiDBCloudClusterID)
+		cfg.TiDBCloud.ClusterID = envDefault(envTiDBCloudClusterID, envTiDBCloudClusterIDAlias)
 	}
 	if cfg.TiDBCloud.PublicKey == "" {
-		cfg.TiDBCloud.PublicKey = envDefault(envTiDBCloudPublicKey)
+		cfg.TiDBCloud.PublicKey = envDefault(envTiDBCloudPublicKey, envTiDBCloudPublicKeyAlias)
 	}
 	if cfg.TiDBCloud.PrivateKey == "" {
-		cfg.TiDBCloud.PrivateKey = envDefault(envTiDBCloudPrivateKey)
+		cfg.TiDBCloud.PrivateKey = envDefault(envTiDBCloudPrivateKey, envTiDBCloudPrivateKeyAlias)
 	}
 	if cfg.TiDBCloud.Host == "" {
-		cfg.TiDBCloud.Host = envDefault(envTiDBCloudHost)
+		cfg.TiDBCloud.Host = envDefault(envTiDBCloudHost, envTiDBCloudHostAlias)
 	}
 }
 
-func envDefault(name string) string {
-	return strings.TrimSpace(os.Getenv(name))
+func envDefault(names ...string) string {
+	for _, name := range names {
+		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func (r *opSourceRunner) sourceJobName(jobType sourceJobType) string {

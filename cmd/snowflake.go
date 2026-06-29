@@ -32,10 +32,13 @@ func newSnowflakeCmdWithRun(run func(context.Context, *Config) error) *cobra.Com
 	cmd := &cobra.Command{
 		Use:   "snowflake",
 		Short: "Replicate snapshot and incremental data from TiDB to Snowflake",
+		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			if err := logger.InitLogger(&logger.Config{Level: logLevel, File: logFile}); err != nil {
 				return errors.Trace(err)
 			}
+			applyTiDBCloudEnvDefaults(cfg)
+			logTiDBCloudInputStatus(c, cfg)
 			if err := validateConfig(cfg); err != nil {
 				return err
 			}
@@ -104,6 +107,21 @@ func newSnowflakeCmdWithRun(run func(context.Context, *Config) error) *cobra.Com
 	_ = cmd.MarkFlagRequired("table")
 
 	return cmd
+}
+
+func logTiDBCloudInputStatus(cmd *cobra.Command, cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	log.Info("TiDB Cloud input status",
+		zap.Bool("clusterIDConfigured", cfg.TiDBCloud.ClusterID != ""),
+		zap.Bool("publicKeyConfigured", cfg.TiDBCloud.PublicKey != ""),
+		zap.Bool("privateKeyConfigured", cfg.TiDBCloud.PrivateKey != ""),
+		zap.Bool("hostConfigured", cfg.TiDBCloud.Host != ""),
+		zap.Bool("clusterIDFlagSet", cmd.Flags().Changed("tidbcloud.cluster-id")),
+		zap.Bool("publicKeyFlagSet", cmd.Flags().Changed("tidbcloud.public-key")),
+		zap.Bool("privateKeyFlagSet", cmd.Flags().Changed("tidbcloud.private-key")),
+		zap.Bool("hostFlagSet", cmd.Flags().Changed("tidbcloud.host")))
 }
 
 func validateConfig(cfg *Config) error {

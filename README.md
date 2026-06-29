@@ -76,9 +76,12 @@ make build       # produces bin/tidb2snowflake
 
 `--source.mode=tidbcloud` is the default and preserves the existing behavior.
 TiDB Cloud API parameters are only needed when the tool must create or wait on a
-managed export/changefeed. You can pass them as flags, or set
+managed export/changefeed. The `--tidbcloud.*` flags belong to the `snowflake`
+subcommand, so pass them after `snowflake`. You can pass them as flags, or set
 `TIDBCLOUD_CLUSTER_ID`, `TIDBCLOUD_PUBLIC_KEY`, `TIDBCLOUD_PRIVATE_KEY`, and
-optionally `TIDBCLOUD_HOST`:
+optionally `TIDBCLOUD_HOST`. The aliases `TIDB_CLOUD_CLUSTER_ID`,
+`TIDB_CLOUD_PUBLIC_KEY`, `TIDB_CLOUD_PRIVATE_KEY`, and `TIDB_CLOUD_HOST` are
+also accepted:
 
 ```bash
 ./bin/tidb2snowflake snowflake \
