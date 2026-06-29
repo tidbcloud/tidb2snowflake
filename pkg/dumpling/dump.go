@@ -7,8 +7,9 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/dumpling/export"
-	putil "github.com/pingcap/tiflow/pkg/util"
+	"github.com/pingcap/tidb/pkg/objstore/compressedio"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"go.uber.org/zap"
 )
@@ -72,7 +73,7 @@ func BuildConfig(ctx context.Context, tidbCfg *tidb.Config, cfg Config) (*export
 		conf.Snapshot = cfg.SnapshotTSO
 	}
 
-	compressType, err := export.ParseCompressType(compression)
+	compressType, err := compressedio.ParseCompressType(compression)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -91,7 +92,7 @@ func BuildConfig(ctx context.Context, tidbCfg *tidb.Config, cfg Config) (*export
 	}
 	conf.Tables = tables
 
-	externalStorage, err := putil.GetExternalStorageFromURI(ctx, cfg.StorageURI.String())
+	externalStorage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, cfg.StorageURI.String())
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

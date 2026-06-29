@@ -1,6 +1,6 @@
 package utils
 
-import "github.com/pingcap/tiflow/pkg/sink/cloudstorage"
+import "github.com/pingcap/ticdc/pkg/cloudstorage"
 
 var (
 	CDCFlagColumnName       = "tidb2snow_flag"
