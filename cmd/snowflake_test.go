@@ -56,3 +56,26 @@ func TestSnowflakeCmdReadsTiDBCloudFlags(t *testing.T) {
 	require.Equal(t, "private-from-flag", captured.TiDBCloud.PrivateKey)
 	require.Equal(t, "api.flag.example.com", captured.TiDBCloud.Host)
 }
+
+func TestSnowflakeCmdRejectsFlagsAfterArgTerminator(t *testing.T) {
+	cmd := newSnowflakeCmdWithRun(func(context.Context, *Config) error {
+		t.Fatal("run should not be called when arguments remain after --")
+		return nil
+	})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{
+		"--aws.access-key", "AKIA",
+		"--aws.secret-key", "secret",
+		"--snowflake.database", "SNOW",
+		"--snowflake.schema", "PUBLIC",
+		"--storage", "s3://bucket/path",
+		"--table", "db1.t1",
+		"--",
+		"--tidbcloud.public-key", "public-after-terminator",
+	})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown command")
+}
