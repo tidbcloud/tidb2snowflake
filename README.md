@@ -76,7 +76,9 @@ make build       # produces bin/tidb2snowflake
 
 `--source.mode=tidbcloud` is the default and preserves the existing behavior.
 TiDB Cloud API parameters are only needed when the tool must create or wait on a
-managed export/changefeed:
+managed export/changefeed. You can pass them as flags, or set
+`TIDBCLOUD_CLUSTER_ID`, `TIDBCLOUD_PUBLIC_KEY`, `TIDBCLOUD_PRIVATE_KEY`, and
+optionally `TIDBCLOUD_HOST`:
 
 ```bash
 ./bin/tidb2snowflake snowflake \
@@ -88,6 +90,9 @@ managed export/changefeed:
   --storage "s3://bucket/path" \
   --table db1.t1
 ```
+
+When those environment variables are set, the equivalent command can omit the
+`--tidbcloud.*` flags.
 
 `--source.mode=op` uses the direct TiDB and TiCDC services instead of TiDB Cloud
 OpenAPI. The existing `--tidb.*` flags configure the TiDB SQL endpoint, and

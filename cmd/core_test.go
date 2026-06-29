@@ -93,6 +93,54 @@ func TestNewSourceRunnerSelectsImplementation(t *testing.T) {
 	require.IsType(t, &opSourceRunner{}, runner)
 }
 
+func TestTiDBCloudClientUsesEnvironmentDefaults(t *testing.T) {
+	t.Setenv("TIDBCLOUD_CLUSTER_ID", "cluster-1")
+	t.Setenv("TIDBCLOUD_PUBLIC_KEY", "public-key")
+	t.Setenv("TIDBCLOUD_PRIVATE_KEY", "private-key")
+	t.Setenv("TIDBCLOUD_HOST", "api.example.com")
+
+	cfg := &Config{}
+	runner := &tidbCloudSourceRunner{cfg: cfg}
+	client, err := runner.tidbCloudClient()
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	require.Equal(t, "cluster-1", cfg.TiDBCloud.ClusterID)
+	require.Equal(t, "public-key", cfg.TiDBCloud.PublicKey)
+	require.Equal(t, "private-key", cfg.TiDBCloud.PrivateKey)
+	require.Equal(t, "api.example.com", cfg.TiDBCloud.Host)
+}
+
+func TestTiDBCloudEnvDefaultsPreserveFlagValues(t *testing.T) {
+	t.Setenv("TIDBCLOUD_CLUSTER_ID", "cluster-from-env")
+	t.Setenv("TIDBCLOUD_PUBLIC_KEY", "public-from-env")
+	t.Setenv("TIDBCLOUD_PRIVATE_KEY", "private-from-env")
+	t.Setenv("TIDBCLOUD_HOST", "api.env.example.com")
+
+	cfg := &Config{TiDBCloud: TiDBCloudConfig{
+		ClusterID:  "cluster-from-flag",
+		PublicKey:  "public-from-flag",
+		PrivateKey: "private-from-flag",
+		Host:       "api.flag.example.com",
+	}}
+	applyTiDBCloudEnvDefaults(cfg)
+
+	require.Equal(t, "cluster-from-flag", cfg.TiDBCloud.ClusterID)
+	require.Equal(t, "public-from-flag", cfg.TiDBCloud.PublicKey)
+	require.Equal(t, "private-from-flag", cfg.TiDBCloud.PrivateKey)
+	require.Equal(t, "api.flag.example.com", cfg.TiDBCloud.Host)
+}
+
+func TestTiDBCloudClientReportsCredentialInputs(t *testing.T) {
+	cfg := &Config{TiDBCloud: TiDBCloudConfig{ClusterID: "cluster-1"}}
+	runner := &tidbCloudSourceRunner{cfg: cfg}
+	_, err := runner.tidbCloudClient()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--tidbcloud.public-key")
+	require.Contains(t, err.Error(), "TIDBCLOUD_PUBLIC_KEY")
+	require.Contains(t, err.Error(), "--tidbcloud.private-key")
+	require.Contains(t, err.Error(), "TIDBCLOUD_PRIVATE_KEY")
+}
+
 func TestBuildChangefeedRequest_FromTSO(t *testing.T) {
 	cfg := baseConfig()
 	req := buildChangefeedRequest(cfg, "s3://bucket/path/increment/", testCred(), "449023000000000000")

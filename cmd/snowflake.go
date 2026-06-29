@@ -16,6 +16,10 @@ import (
 
 // NewSnowflakeCmd builds the `snowflake` subcommand.
 func NewSnowflakeCmd() *cobra.Command {
+	return newSnowflakeCmdWithRun(Replicate)
+}
+
+func newSnowflakeCmdWithRun(run func(context.Context, *Config) error) *cobra.Command {
 	cfg := &Config{
 		TiDB:      &tidb.Config{},
 		Snowflake: &snowflake.Config{},
@@ -36,7 +40,7 @@ func NewSnowflakeCmd() *cobra.Command {
 				return err
 			}
 			ctx := context.Background()
-			if err := Replicate(ctx, cfg); err != nil {
+			if err := run(ctx, cfg); err != nil {
 				log.Error("replication failed", zap.Error(err))
 				return err
 			}
