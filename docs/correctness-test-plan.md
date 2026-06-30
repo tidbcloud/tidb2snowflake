@@ -42,7 +42,7 @@ not prove Snowflake value round-trip correctness.
 - Existing `snapshot/` data must contain `snapshot/metadata`.
 - The `Pos` line in `snapshot/metadata` must initialize `checkpoint_ts` after
   snapshot load succeeds.
-- TiDB Cloud export TSO, OP pre-dump TSO, and `--snapshot.tso` are allowed to
+- TiDB Cloud export TSO, OP pre-dump TSO, and `--snapshot-tso` are allowed to
   pin source job creation, but metadata `Pos` is the final value.
 
 ### Snapshot Completion

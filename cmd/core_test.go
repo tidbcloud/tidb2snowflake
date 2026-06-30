@@ -31,6 +31,7 @@ func TestNewOptionDefaults(t *testing.T) {
 	require.Equal(t, "COMPUTE_WH", opt.SnowflakeWarehouse)
 	require.Equal(t, 60*time.Second, opt.ChangefeedFlushInterval)
 	require.Equal(t, 64, opt.ChangefeedFileSizeMiB)
+	require.Equal(t, defaultIncrementScanInterval, opt.IncrementScanInterval)
 	require.Equal(t, snapshotCompressionNone, opt.SnapshotCompression)
 	require.Equal(t, snapshotCSVNullValue, opt.SnapshotCSVNullValue)
 	require.Equal(t, sourceModeTiDBCloud, opt.SourceMode)
@@ -50,6 +51,7 @@ func TestValidateConfig(t *testing.T) {
 		SnapshotCompression:     "GZIP",
 		ChangefeedFlushInterval: -1,
 		ChangefeedFileSizeMiB:   -1,
+		IncrementScanInterval:   -1,
 		SnapshotConcurrency:     -1,
 	}
 	err := opt.validate()
@@ -60,6 +62,7 @@ func TestValidateConfig(t *testing.T) {
 	require.Equal(t, "COMPUTE_WH", opt.SnowflakeWarehouse)
 	require.Equal(t, 60*time.Second, opt.ChangefeedFlushInterval)
 	require.Equal(t, 64, opt.ChangefeedFileSizeMiB)
+	require.Equal(t, defaultIncrementScanInterval, opt.IncrementScanInterval)
 	require.Equal(t, runModeSnapshotOnly, opt.Mode)
 	require.Equal(t, sourceModeOP, opt.SourceMode)
 	require.Equal(t, snapshotCompressionGzip, opt.SnapshotCompression)

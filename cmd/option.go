@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,15 @@ const (
 	snapshotCompressionNone = "none"
 	snapshotCompressionGzip = "gzip"
 	snapshotCSVNullValue    = "\\N"
+)
+
+const defaultIncrementScanInterval = time.Minute
+
+const (
+	envTiDBCloudClusterID  = "TIDBCLOUD_CLUSTER_ID"
+	envTiDBCloudPublicKey  = "TIDBCLOUD_PUBLIC_KEY"
+	envTiDBCloudPrivateKey = "TIDBCLOUD_PRIVATE_KEY"
+	envTiDBCloudHost       = "TIDBCLOUD_HOST"
 )
 
 // Option contains the raw values accepted from the command line.
@@ -69,6 +79,7 @@ type Option struct {
 
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int
+	IncrementScanInterval   time.Duration
 	SnapshotCompression     string
 	SnapshotCSVNullValue    string
 
@@ -87,6 +98,7 @@ func NewOption() *Option {
 		SnowflakeWarehouse:      "COMPUTE_WH",
 		ChangefeedFlushInterval: 60 * time.Second,
 		ChangefeedFileSizeMiB:   64,
+		IncrementScanInterval:   defaultIncrementScanInterval,
 		SnapshotCompression:     snapshotCompressionNone,
 		SnapshotCSVNullValue:    snapshotCSVNullValue,
 		SourceMode:              sourceModeTiDBCloud,
@@ -180,7 +192,7 @@ func (opt *Option) loadRequest(
 			Tables:       opt.Tables,
 			StorageURI:   storageURI,
 			StorageDir:   storage.IncrementDirName,
-			ScanInterval: opt.ChangefeedFlushInterval / 5,
+			ScanInterval: opt.IncrementScanInterval,
 		},
 	}
 }
@@ -194,6 +206,11 @@ func (req loadRequest) tableCount() int {
 
 func (opt *Option) adjust() {
 	defaults := NewOption()
+
+	opt.TiDBCloudClusterID = firstNonEmpty(strings.TrimSpace(opt.TiDBCloudClusterID), envDefault(envTiDBCloudClusterID))
+	opt.TiDBCloudPublicKey = firstNonEmpty(strings.TrimSpace(opt.TiDBCloudPublicKey), envDefault(envTiDBCloudPublicKey))
+	opt.TiDBCloudPrivateKey = firstNonEmpty(strings.TrimSpace(opt.TiDBCloudPrivateKey), envDefault(envTiDBCloudPrivateKey))
+	opt.TiDBCloudHost = firstNonEmpty(strings.TrimSpace(opt.TiDBCloudHost), envDefault(envTiDBCloudHost))
 
 	opt.SourceMode = strings.ToLower(strings.TrimSpace(opt.SourceMode))
 	switch opt.SourceMode {
@@ -219,6 +236,9 @@ func (opt *Option) adjust() {
 	}
 	if opt.ChangefeedFileSizeMiB <= 0 {
 		opt.ChangefeedFileSizeMiB = defaults.ChangefeedFileSizeMiB
+	}
+	if opt.IncrementScanInterval <= 0 {
+		opt.IncrementScanInterval = defaults.IncrementScanInterval
 	}
 
 	opt.Mode = strings.ToLower(strings.TrimSpace(opt.Mode))
@@ -298,8 +318,22 @@ func (opt *Option) logSummary() {
 		zap.String("snapshotCompression", opt.SnapshotCompression),
 		zap.Duration("changefeedFlushInterval", opt.ChangefeedFlushInterval),
 		zap.Int("changefeedFileSizeMiB", opt.ChangefeedFileSizeMiB),
+		zap.Duration("incrementScanInterval", opt.IncrementScanInterval),
 		zap.Bool("tidbCloudConfigured", opt.TiDBCloudClusterID != ""),
 		zap.String("ticdcAddress", opt.TiCDCAddress),
 		zap.String("snowflakeDatabase", opt.SnowflakeDatabase),
 		zap.String("snowflakeSchema", opt.SnowflakeSchema))
+}
+
+func envDefault(name string) string {
+	return strings.TrimSpace(os.Getenv(name))
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

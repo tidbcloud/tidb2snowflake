@@ -12,6 +12,10 @@ import (
 
 // NewSnowflakeCmd builds the `snowflake` subcommand.
 func NewSnowflakeCmd() *cobra.Command {
+	return newSnowflakeCmdWithRun(run)
+}
+
+func newSnowflakeCmdWithRun(run func(context.Context, *Option) error) *cobra.Command {
 	var (
 		logFile  string
 		logLevel string
@@ -48,12 +52,6 @@ func NewSnowflakeCmd() *cobra.Command {
 	f.BoolVar(&opt.TiDBTLS, "tidb.tls", opt.TiDBTLS, "enable TLS for TiDB connection")
 	f.StringVar(&opt.TiDBSSLCA, "tidb.ssl-ca", opt.TiDBSSLCA, "TiDB SSL CA path")
 
-	// TiDB Cloud OpenAPI
-	f.StringVar(&opt.TiDBCloudClusterID, "tidbcloud.cluster-id", opt.TiDBCloudClusterID, "TiDB Cloud Serverless cluster ID")
-	f.StringVar(&opt.TiDBCloudPublicKey, "tidbcloud.public-key", opt.TiDBCloudPublicKey, "TiDB Cloud API key public part")
-	f.StringVar(&opt.TiDBCloudPrivateKey, "tidbcloud.private-key", opt.TiDBCloudPrivateKey, "TiDB Cloud API key private part")
-	f.StringVar(&opt.TiDBCloudHost, "tidbcloud.host", opt.TiDBCloudHost, "TiDB Cloud OpenAPI host (default serverless.tidbapi.com)")
-
 	// OP deployment services
 	f.StringVar(&opt.TiCDCAddress, "ticdc.address", opt.TiCDCAddress, "TiCDC OpenAPI base address for --source.mode=op, e.g. http://127.0.0.1:8300")
 	f.IntVar(&opt.SnapshotConcurrency, "snapshot.concurrency", opt.SnapshotConcurrency, "Dumpling snapshot dump concurrency for --source.mode=op")
@@ -77,6 +75,7 @@ func NewSnowflakeCmd() *cobra.Command {
 	f.StringVar(&opt.SnapshotCompression, "snapshot.compression", opt.SnapshotCompression, "snapshot export compression: none or gzip")
 	f.DurationVar(&opt.ChangefeedFlushInterval, "changefeed.flush-interval", opt.ChangefeedFlushInterval, "changefeed flush interval")
 	f.IntVar(&opt.ChangefeedFileSizeMiB, "changefeed.file-size", opt.ChangefeedFileSizeMiB, "changefeed file size in MiB")
+	f.DurationVar(&opt.IncrementScanInterval, "increment.scan-interval", opt.IncrementScanInterval, "incremental storage scan interval")
 
 	// logging
 	f.StringVar(&logFile, "log.file", "", "log file path")

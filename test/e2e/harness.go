@@ -142,6 +142,7 @@ func (c *e2eConfig) snowflakeDB(t *testing.T, schema string) *sql.DB {
 func runTool(ctx context.Context, t *testing.T, cfg *e2eConfig, mode, storagePath, schema, table string) error {
 	t.Helper()
 	cmd := exec.CommandContext(ctx, toolBinary, toolArgs(cfg, mode, storagePath, schema, table)...)
+	cmd.Env = toolEnv(cfg)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -156,6 +157,7 @@ func startTool(t *testing.T, cfg *e2eConfig, mode, storagePath, schema, table st
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, toolBinary, toolArgs(cfg, mode, storagePath, schema, table)...)
+	cmd.Env = toolEnv(cfg)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -179,9 +181,6 @@ func toolArgs(cfg *e2eConfig, mode, storagePath, schema, table string) []string 
 		"--tidb.user", cfg.TiDBUser,
 		"--tidb.pass", cfg.TiDBPass,
 		"--tidb.tls",
-		"--tidbcloud.cluster-id", cfg.ClusterID,
-		"--tidbcloud.public-key", cfg.PublicKey,
-		"--tidbcloud.private-key", cfg.PrivateKey,
 		"--snowflake.account-id", cfg.SFAccountID,
 		"--snowflake.user", cfg.SFUser,
 		"--snowflake.pass", cfg.SFPass,
@@ -194,10 +193,20 @@ func toolArgs(cfg *e2eConfig, mode, storagePath, schema, table string) []string 
 		"--table", table,
 		"--log.level", "info",
 	}
-	if cfg.APIHost != "" {
-		args = append(args, "--tidbcloud.host", cfg.APIHost)
-	}
 	return args
+}
+
+func toolEnv(cfg *e2eConfig) []string {
+	env := append([]string{}, os.Environ()...)
+	env = append(env,
+		"TIDBCLOUD_CLUSTER_ID="+cfg.ClusterID,
+		"TIDBCLOUD_PUBLIC_KEY="+cfg.PublicKey,
+		"TIDBCLOUD_PRIVATE_KEY="+cfg.PrivateKey,
+	)
+	if cfg.APIHost != "" {
+		env = append(env, "TIDBCLOUD_HOST="+cfg.APIHost)
+	}
+	return env
 }
 
 // ---- assertions ----

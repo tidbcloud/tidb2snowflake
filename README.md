@@ -20,18 +20,18 @@ The tool then loads the snapshot and applies the incremental changes into
 Snowflake.
 
 ```
-TiDB Cloud cluster ──(OpenAPI export)──┐
-                                       ├─► object storage (S3) ──► tidb2snowflake ──► Snowflake
-TiDB Cloud cluster ──(OpenAPI cdc)─────┘
+TiDB Cloud cluster --(OpenAPI export)---+
+                                        +-> object storage (S3) -> tidb2snowflake -> Snowflake
+TiDB Cloud cluster --(OpenAPI cdc)------+
 
-OP TiDB cluster ──(Dumpling snapshot)──┐
-                                       ├─► object storage (S3) ──► tidb2snowflake ──► Snowflake
-OP TiCDC service ──(OpenAPI cdc)───────┘
+OP TiDB cluster --(Dumpling snapshot)---+
+                                        +-> object storage (S3) -> tidb2snowflake -> Snowflake
+OP TiCDC service --(OpenAPI cdc)--------+
 ```
 
 ## Status
 
-🚧 Under active development. The CLI can orchestrate TiDB Cloud OpenAPI or OP
+Under active development. The CLI can orchestrate TiDB Cloud OpenAPI or OP
 TiDB/TiCDC sources, persist replication state in object storage, and load
 snapshot / incremental data into Snowflake.
 
@@ -77,14 +77,17 @@ make build       # produces bin/tidb2snowflake
 
 `--source.mode=tidbcloud` is the default and preserves the existing behavior.
 TiDB Cloud API parameters are only needed when the tool must create or wait on a
-managed export/changefeed:
+managed export/changefeed. Configure TiDB Cloud OpenAPI with
+`TIDBCLOUD_CLUSTER_ID`, `TIDBCLOUD_PUBLIC_KEY`, `TIDBCLOUD_PRIVATE_KEY`, and
+optionally `TIDBCLOUD_HOST`.
 
 ```bash
+export TIDBCLOUD_CLUSTER_ID="..."
+export TIDBCLOUD_PUBLIC_KEY="..."
+export TIDBCLOUD_PRIVATE_KEY="..."
+
 ./bin/tidb2snowflake snowflake \
   --source.mode=tidbcloud \
-  --tidbcloud.cluster-id "$TIDBCLOUD_CLUSTER_ID" \
-  --tidbcloud.public-key "$TIDBCLOUD_PUBLIC_KEY" \
-  --tidbcloud.private-key "$TIDBCLOUD_PRIVATE_KEY" \
   --tidb.host "$TIDB_HOST" \
   --storage "s3://bucket/path" \
   --table db1.t1
@@ -107,8 +110,8 @@ OpenAPI. The existing `--tidb.*` flags configure the TiDB SQL endpoint, and
 In full OP mode, the tool records a TiDB TSO, creates a TiCDC cloud-storage
 changefeed from that TSO, waits for the changefeed to become running, then dumps
 the snapshot with Dumpling. After Dumpling finishes, `snapshot/metadata` `Pos`
-is read back and verified as the final snapshot TSO. `--snapshot.concurrency`
-controls Dumpling snapshot dump concurrency in OP mode.
+is read back as the final snapshot TSO. `--snapshot.concurrency` controls
+Dumpling snapshot dump concurrency in OP mode.
 
 ## Reusing an existing export / changefeed
 
@@ -122,9 +125,11 @@ the initial `checkpoint_ts`. Snapshot load is all-or-nothing at the phase level:
 after all configured snapshot files have been loaded into Snowflake,
 `checkpoint_ts` and `snapshot_finished=true` are written together. On the next
 run, `snapshot_finished=true` skips snapshot loading.
+
 Snapshot export compression defaults to `none`; use `--snapshot.compression=gzip`
 to ask TiDB Cloud export for gzip CSV files and configure Snowflake `COPY` to
-read gzip input.
+read gzip input. Use `--increment.scan-interval` to tune how often the loader
+scans incremental storage; the default is `1m`.
 
 ## Type mapping
 

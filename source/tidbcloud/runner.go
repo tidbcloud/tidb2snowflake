@@ -4,6 +4,7 @@ import (
 	"context"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -15,6 +16,12 @@ import (
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 	"github.com/tidbcloud/tidb2snowflake/source/storage"
 	"go.uber.org/zap"
+)
+
+const (
+	envTiDBCloudClusterID  = "TIDBCLOUD_CLUSTER_ID"
+	envTiDBCloudPublicKey  = "TIDBCLOUD_PUBLIC_KEY"
+	envTiDBCloudPrivateKey = "TIDBCLOUD_PRIVATE_KEY"
 )
 
 type Config struct {
@@ -214,8 +221,8 @@ func (r *Runner) tidbCloudClient() (*tidbcloud.Client, error) {
 	if r.client != nil {
 		return r.client, nil
 	}
-	if r.cfg.ClusterID == "" {
-		return nil, errors.New("--tidbcloud.cluster-id is required to create or wait on an export/changefeed")
+	if err := validateTiDBCloudConfig(r.cfg); err != nil {
+		return nil, err
 	}
 	var opts []tidbcloud.Option
 	if r.cfg.Host != "" {
@@ -227,6 +234,23 @@ func (r *Runner) tidbCloudClient() (*tidbcloud.Client, error) {
 	}
 	r.client = c
 	return c, nil
+}
+
+func validateTiDBCloudConfig(cfg Config) error {
+	var missing []string
+	if cfg.ClusterID == "" {
+		missing = append(missing, envTiDBCloudClusterID)
+	}
+	if cfg.PublicKey == "" {
+		missing = append(missing, envTiDBCloudPublicKey)
+	}
+	if cfg.PrivateKey == "" {
+		missing = append(missing, envTiDBCloudPrivateKey)
+	}
+	if len(missing) > 0 {
+		return errors.Errorf("missing TiDB Cloud API environment variable(s): %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 func buildChangefeedRequest(cfg Config, cleanIncrementURI string, cred *credentials.Value, snapshotTSO string) *tidbcloud.CreateChangefeedRequest {
