@@ -808,7 +808,7 @@ func buildChangefeedRequest(cfg *Config, cleanIncrementURI string, cred *credent
 		start.Mode = tidbcloud.StartModeFromNow
 	}
 	return &tidbcloud.CreateChangefeedRequest{
-		DisplayName: "tidb2snowflake-incremental",
+		DisplayName: fmt.Sprintf("tidb2snowflake-%d", time.Now().UnixMilli()),
 		Sink: &tidbcloud.Sink{
 			Type: tidbcloud.ChangefeedTypeCloudStorage,
 			CloudStorage: &tidbcloud.CloudStorageSink{

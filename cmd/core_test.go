@@ -158,6 +158,7 @@ func TestBuildChangefeedRequest_FromTSO(t *testing.T) {
 	req := buildChangefeedRequest(cfg, "s3://bucket/path/increment/", testCred(), "449023000000000000")
 
 	require.Equal(t, tidbcloud.ChangefeedTypeCloudStorage, req.Sink.Type)
+	require.Regexp(t, `^tidb2snowflake-[0-9]{13}$`, req.DisplayName)
 	cs := req.Sink.CloudStorage
 	require.Equal(t, tidbcloud.CloudStorageTypeS3, cs.Storage.Type)
 	require.Equal(t, "s3://bucket/path/increment/", cs.Storage.S3.URI)
