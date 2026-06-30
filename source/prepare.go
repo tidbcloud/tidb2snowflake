@@ -67,10 +67,6 @@ func Prepare(ctx context.Context, request Request, store *storage.Storage, state
 			return errors.Trace(err)
 		}
 		log.Info("source prepare snapshot finished", zap.Duration("duration", time.Since(start)))
-
-		if state.Snapshot().CheckpointTS == 0 {
-			return errors.New("checkpoint_ts is required after preparing snapshot")
-		}
 	}
 	if request.PrepareChangefeed {
 		if err := runner.EnsureChangefeed(ctx); err != nil {

@@ -101,7 +101,7 @@ func TestGenDDLViaTiDBDDLTableDDL(t *testing.T) {
 
 	ddl, err = GenDDLViaTiDBDDL(nil, meta, model.ActionDropTable, "")
 	require.NoError(t, err)
-	require.Equal(t, []string{`DROP TABLE "test_schema.test_table"`}, ddl)
+	require.Equal(t, []string{`DROP TABLE IF EXISTS "test_schema.test_table"`}, ddl)
 
 	_, err = GenDDLViaTiDBDDL(
 		&table.Meta{Schema: "test_schema", Table: "old_table"},

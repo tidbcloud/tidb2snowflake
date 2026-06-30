@@ -29,8 +29,8 @@ type Manager interface {
 	// SetDMLCursors records the latest consumed DML cursor positions for a table.
 	SetDMLCursors(context.Context, string, map[string]DMLCursor) error
 
-	// MarkSnapshotFinished records that snapshot data has been loaded to Snowflake.
-	MarkSnapshotFinished(context.Context) error
+	// MarkSnapshotFinished records snapshot data and its checkpoint as loaded to Snowflake.
+	MarkSnapshotFinished(context.Context, uint64) error
 }
 
 type manager struct {
@@ -66,16 +66,10 @@ func Open(ctx context.Context, store storeapi.Storage, tables []string, snapshot
 	if err != nil {
 		return nil, errors.Annotatef(err, "decode state file %s", stateFileName)
 	}
-	changed := ensureConfiguredTables(&st, tables)
 	if err := validateState(st, tables); err != nil {
 		return nil, err
 	}
 	m.state = st
-	if changed {
-		if err := m.upload(ctx, m.state); err != nil {
-			return nil, err
-		}
-	}
 	return m, nil
 }
 
@@ -178,11 +172,15 @@ func cursorBefore(next, current DMLCursor) bool {
 	return next.FileIndex < current.FileIndex
 }
 
-func (m *manager) MarkSnapshotFinished(ctx context.Context) error {
+func (m *manager) MarkSnapshotFinished(ctx context.Context, checkpointTS uint64) error {
+	if checkpointTS == 0 {
+		return errors.New("checkpoint_ts is empty")
+	}
 	return m.update(ctx, func(st *State) error {
-		if st.CheckpointTS == 0 {
-			return errors.New("checkpoint_ts is required before marking snapshot finished")
+		if checkpointTS < st.CheckpointTS {
+			return errors.Errorf("checkpoint_ts cannot move backward: state %d, new %d", st.CheckpointTS, checkpointTS)
 		}
+		st.CheckpointTS = checkpointTS
 		st.SnapshotFinished = true
 		return nil
 	})

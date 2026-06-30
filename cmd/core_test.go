@@ -137,18 +137,17 @@ func TestValidateConfig(t *testing.T) {
 	require.Contains(t, err.Error(), "no tables specified")
 }
 
-func TestMarkSnapshotFinishedRequiresCheckpoint(t *testing.T) {
+func TestMarkSnapshotFinishedSetsCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
 	require.NoError(t, err)
 	manager := newCmdTestStateManager(t, ctx, store)
 
-	err = manager.MarkSnapshotFinished(ctx)
+	err = manager.MarkSnapshotFinished(ctx, 0)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "checkpoint_ts is required")
+	require.Contains(t, err.Error(), "checkpoint_ts is empty")
 
-	require.NoError(t, manager.SetCheckpointTS(ctx, 466924115091783691))
-	require.NoError(t, manager.MarkSnapshotFinished(ctx))
+	require.NoError(t, manager.MarkSnapshotFinished(ctx, 466924115091783691))
 	st := manager.Snapshot()
 	require.True(t, st.SnapshotFinished)
 	require.Equal(t, uint64(466924115091783691), st.CheckpointTS)

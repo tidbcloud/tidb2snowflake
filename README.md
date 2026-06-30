@@ -119,16 +119,12 @@ source creation step is skipped and the existing data is used.
 
 For snapshot data, `snapshot/metadata` `Pos` is the final source of truth for
 the initial `checkpoint_ts`. Snapshot load is all-or-nothing at the phase level:
-`snapshot_finished=true` is written only after all configured snapshot files
-have been loaded into Snowflake. On the next run, `snapshot_finished=true`
-skips snapshot loading.
+after all configured snapshot files have been loaded into Snowflake,
+`checkpoint_ts` and `snapshot_finished=true` are written together. On the next
+run, `snapshot_finished=true` skips snapshot loading.
 Snapshot export compression defaults to `none`; use `--snapshot.compression=gzip`
 to ask TiDB Cloud export for gzip CSV files and configure Snowflake `COPY` to
 read gzip input.
-
-Incremental replay no longer reads or writes legacy per-file `.checkpoint`
-markers or per-table `_consumer/progress.json`. Persistent resume is expected to
-be handled by `replication-state.json`.
 
 ## Type mapping
 

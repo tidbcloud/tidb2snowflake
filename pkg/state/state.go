@@ -82,6 +82,9 @@ func validateState(st State, tables []string) error {
 	if st.Tables == nil {
 		return errors.New("state missing required field tables")
 	}
+	if err := validateConfiguredTables(st, tables); err != nil {
+		return err
+	}
 	for _, table := range tables {
 		tableState, ok := st.Tables[table]
 		if !ok {
@@ -94,6 +97,25 @@ func validateState(st State, tables []string) error {
 	for table, tableState := range st.Tables {
 		if err := validateTableState(table, tableState); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateConfiguredTables(st State, tables []string) error {
+	if tables == nil {
+		return nil
+	}
+	configured := make(map[string]struct{}, len(tables))
+	for _, table := range tables {
+		configured[table] = struct{}{}
+	}
+	if len(st.Tables) != len(configured) {
+		return errors.Errorf("state table set does not match configured tables")
+	}
+	for table := range st.Tables {
+		if _, ok := configured[table]; !ok {
+			return errors.Errorf("state contains unconfigured table entry %q", table)
 		}
 	}
 	return nil

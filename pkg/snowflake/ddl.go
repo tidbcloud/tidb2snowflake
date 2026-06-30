@@ -43,7 +43,7 @@ func GenDDLViaTiDBDDL(prevMeta, nextMeta *table.Meta, action model.ActionType, q
 	case model.ActionTruncateTable:
 		return []string{fmt.Sprintf("TRUNCATE TABLE %s", quoteIdent(nextMeta.SnowflakeTableName()))}, nil
 	case model.ActionDropTable:
-		return []string{fmt.Sprintf("DROP TABLE %s", quoteIdent(nextMeta.SnowflakeTableName()))}, nil
+		return []string{fmt.Sprintf("DROP TABLE IF EXISTS %s", quoteIdent(nextMeta.SnowflakeTableName()))}, nil
 	case model.ActionCreateTable:
 		return nil, errors.New("Received create table ddl, which should not happen")
 	case model.ActionRenameTable:

@@ -688,6 +688,7 @@ func (loader *loader) syncExecDMLEvents(
 
 func (loader *loader) execDDL(ctx context.Context, tbl *tableState, schemaFile cloudstorage.SchemaFile) error {
 	newMeta := table.FromSchemaFile(schemaFile)
+	action := model.ActionType(schemaFile.Type)
 	if len(newMeta.PrimaryKeys) == 0 {
 		return errors.Errorf("table %s has no primary key in schema file table version %d", tbl.tableFQN, schemaFile.TableVersion)
 	}
@@ -712,7 +713,17 @@ func (loader *loader) execDDL(ctx context.Context, tbl *tableState, schemaFile c
 		return nil
 	}
 
-	ddls, err := snowflake.GenDDLViaTiDBDDL(tbl.currentMeta, newMeta, model.ActionType(schemaFile.Type), schemaFile.Query)
+	return loader.applyDDL(ctx, tbl, schemaFile, newMeta, action)
+}
+
+func (loader *loader) applyDDL(
+	ctx context.Context,
+	tbl *tableState,
+	schemaFile cloudstorage.SchemaFile,
+	newMeta *table.Meta,
+	action model.ActionType,
+) error {
+	ddls, err := snowflake.GenDDLViaTiDBDDL(tbl.currentMeta, newMeta, action, schemaFile.Query)
 	if err != nil {
 		return errors.Trace(err)
 	}

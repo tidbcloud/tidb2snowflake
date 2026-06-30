@@ -61,7 +61,7 @@ func TestEnsureSnapshotLoadsExistingMetadata(t *testing.T) {
 	runner := NewRunner(baseConfig(), store, manager)
 
 	require.NoError(t, runner.EnsureSnapshot(ctx))
-	require.Equal(t, uint64(466924115091783691), manager.Snapshot().CheckpointTS)
+	require.Zero(t, manager.Snapshot().CheckpointTS)
 }
 
 func TestEnsureSnapshotSkipsWhenCheckpointExists(t *testing.T) {
@@ -70,7 +70,7 @@ func TestEnsureSnapshotSkipsWhenCheckpointExists(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	manager := newTestStateManager(t, ctx, store)
-	require.NoError(t, manager.SetCheckpointTS(ctx, 466924115091783691))
+	require.NoError(t, manager.MarkSnapshotFinished(ctx, 466924115091783691))
 
 	runner := NewRunner(Config{}, store, manager)
 

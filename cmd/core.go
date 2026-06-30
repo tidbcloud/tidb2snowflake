@@ -7,6 +7,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/tidbcloud/tidb2snowflake/incremental"
+	"github.com/tidbcloud/tidb2snowflake/pkg/dumpling"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
@@ -64,7 +65,11 @@ func loadIntoSnowflake(
 	metrics.TableNumGauge.Add(float64(tableCount))
 	log.Info("starting Snowflake load phase", zap.Int("tableCount", tableCount))
 
-	loadSnapshot := req.LoadSnapshot && !stateManager.Snapshot().SnapshotFinished
+	stateSnapshot := stateManager.Snapshot()
+	loadSnapshot := req.LoadSnapshot && !stateSnapshot.SnapshotFinished
+	if req.LoadIncremental && !loadSnapshot && !stateSnapshot.SnapshotFinished {
+		return errors.New("snapshot is not finished; run full mode before incremental")
+	}
 	if !loadSnapshot && !req.LoadIncremental {
 		return nil
 	}
@@ -83,7 +88,11 @@ func loadIntoSnowflake(
 		if err := snapshot.Load(ctx, req.Snapshot, store, pool, conn); err != nil {
 			return errors.Trace(err)
 		}
-		if err := stateManager.MarkSnapshotFinished(ctx); err != nil {
+		snapshotTSO, err := dumpling.LoadTSOFromMetadata(ctx, store)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if err := stateManager.MarkSnapshotFinished(ctx, snapshotTSO); err != nil {
 			return errors.Trace(err)
 		}
 	}

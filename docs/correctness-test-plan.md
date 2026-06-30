@@ -14,14 +14,11 @@ For every configured table, after the tool reaches a stable checkpoint:
 - Recovery decisions come from `replication-state.json`, `snapshot/metadata`,
   TiCDC `increment/metadata`, and TiCDC `.index` files.
 
-Legacy `loadinfo`, per-file `.checkpoint`, per-table `_consumer/progress.json`,
-and old `tidb2snowflake.state.json` structures are not recovery sources.
-
 ## State Sources
 
 - `replication-state.json`: tidb2snowflake durable state.
 - `snapshot/metadata` `Pos`: final source of truth for the initial
-  `checkpoint_ts`.
+  `checkpoint_ts`, written to state after snapshot load succeeds.
 - `snapshot_finished`: phase gate. `true` means all configured snapshot files
   have reached Snowflake, so the next run skips snapshot loading.
 - `increment/metadata` `checkpoint-ts`: TiCDC checkpoint confirmed flushed to
@@ -43,14 +40,15 @@ not prove Snowflake value round-trip correctness.
 ### Snapshot TSO
 
 - Existing `snapshot/` data must contain `snapshot/metadata`.
-- The `Pos` line in `snapshot/metadata` must initialize `checkpoint_ts`.
+- The `Pos` line in `snapshot/metadata` must initialize `checkpoint_ts` after
+  snapshot load succeeds.
 - TiDB Cloud export TSO, OP pre-dump TSO, and `--snapshot.tso` are allowed to
   pin source job creation, but metadata `Pos` is the final value.
 
 ### Snapshot Completion
 
 - `snapshot_finished=false`: load snapshot files and only then write
-  `snapshot_finished=true`.
+  `checkpoint_ts` and `snapshot_finished=true` together.
 - If snapshot loading fails, `snapshot_finished` stays `false`.
 - `snapshot_finished=true`: skip snapshot loading on restart.
 - If state write fails after Snowflake COPY succeeds, the next run repeats the

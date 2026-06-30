@@ -65,7 +65,7 @@ func TestPrepareFullUsesSnapshotMetadataForChangefeedStart(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, []string{"changefeed"}, events)
-	require.Equal(t, uint64(466924115091783691), manager.Snapshot().CheckpointTS)
+	require.Zero(t, manager.Snapshot().CheckpointTS)
 	require.Equal(t, "cf-1", manager.Snapshot().TaskInfo.ChangefeedID)
 	require.Equal(t, uint64(466924115091783691), createReq.StartTS)
 }
@@ -76,24 +76,24 @@ func TestEnsureSnapshotSkipsWhenCheckpointExists(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	manager := newTestStateManager(t, ctx, store)
-	require.NoError(t, manager.SetCheckpointTS(ctx, 466924115091783691))
+	require.NoError(t, manager.MarkSnapshotFinished(ctx, 466924115091783691))
 
 	runner := NewRunner(Config{}, store, manager)
 
 	require.NoError(t, runner.EnsureSnapshot(ctx))
 }
 
-func TestCreateChangefeedRequiresSnapshotTSO(t *testing.T) {
+func TestChangefeedStartTSOUsesConfiguredSnapshotTSO(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
 	require.NoError(t, err)
 	defer store.Close()
 	manager := newTestStateManager(t, ctx, store)
 
-	runner := NewRunner(Config{}, store, manager)
-	_, err = runner.createChangefeed(ctx)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "checkpoint_ts is required")
+	runner := NewRunner(Config{SnapshotTSO: "466924115091783691"}, store, manager)
+	startTSO, err := runner.changefeedStartTSO(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(466924115091783691), startTSO)
 }
 
 func TestEnsureChangefeedOnlyChecksExistingID(t *testing.T) {

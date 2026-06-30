@@ -76,7 +76,7 @@ func TestOpenRejectsUnknownField(t *testing.T) {
 	require.Contains(t, err.Error(), "unknown field")
 }
 
-func TestOpenAddsConfiguredTableEntries(t *testing.T) {
+func TestOpenRejectsConfiguredTableSetChange(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	require.NoError(t, store.WriteFile(ctx, stateFileName, []byte(`{
@@ -95,15 +95,9 @@ func TestOpenAddsConfiguredTableEntries(t *testing.T) {
   }
 }`)))
 
-	manager, err := Open(ctx, store, []string{"db1.t1", "db2.t2"}, false)
-	require.NoError(t, err)
-
-	st := manager.Snapshot()
-	require.Equal(t, uint64(42), st.Tables["db1.t1"].DDLTableVersionWatermark)
-	require.Equal(t, TableState{
-		DDLTableVersionWatermark: 0,
-		DMLCursors:               map[string]DMLCursor{},
-	}, st.Tables["db2.t2"])
+	_, err := Open(ctx, store, []string{"db1.t1", "db2.t2"}, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "state table set does not match configured tables")
 }
 
 func TestStateMutationsPersist(t *testing.T) {
@@ -113,12 +107,11 @@ func TestStateMutationsPersist(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, manager.SetExportID(ctx, "exp-1"))
-	require.NoError(t, manager.SetCheckpointTS(ctx, 449))
 	require.NoError(t, manager.SetDDLTableVersionWatermark(ctx, "db.t", 42))
 	require.NoError(t, manager.SetDMLCursors(ctx, "db.t", map[string]DMLCursor{
 		"449/0/CDC": {Date: "2026-06-30", FileIndex: 12},
 	}))
-	require.NoError(t, manager.MarkSnapshotFinished(ctx))
+	require.NoError(t, manager.MarkSnapshotFinished(ctx, 449))
 
 	reopened, err := Open(ctx, store, []string{"db.t"}, false)
 	require.NoError(t, err)

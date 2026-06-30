@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"path"
+	"strconv"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -49,8 +50,8 @@ func NewRunner(cfg Config, store *storage.Storage, state state.Manager) *Runner 
 
 func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 	stateSnapshot := r.stateManager.Snapshot()
-	if stateSnapshot.CheckpointTS != 0 {
-		log.Info("snapshot checkpoint already exists in state, skipping OP Dumpling snapshot dump",
+	if stateSnapshot.SnapshotFinished && stateSnapshot.CheckpointTS != 0 {
+		log.Info("snapshot already finished in state, skipping OP Dumpling snapshot dump",
 			zap.Uint64("checkpointTS", stateSnapshot.CheckpointTS))
 		return nil
 	}
@@ -68,7 +69,7 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 		log.Info("snapshot metadata already exists in storage, skipping OP Dumpling snapshot dump",
 			zap.String("metadata", metadataPath),
 			zap.Uint64("snapshotTSO", snapshotTSO))
-		return r.stateManager.SetCheckpointTS(ctx, snapshotTSO)
+		return nil
 	}
 
 	exist, err := r.store.DirHasObjects(ctx, storage.SnapshotDirName)
@@ -103,7 +104,7 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 	log.Info("snapshot data already exists in storage, skipping OP Dumpling snapshot dump",
 		zap.String("dir", storage.SnapshotDirName),
 		zap.Uint64("snapshotTSO", snapshotTSO))
-	return r.stateManager.SetCheckpointTS(ctx, snapshotTSO)
+	return nil
 }
 
 func (r *Runner) EnsureChangefeed(ctx context.Context) error {
@@ -116,7 +117,7 @@ func (r *Runner) EnsureChangefeed(ctx context.Context) error {
 		return nil
 	}
 
-	changefeedID, err := r.createChangefeed(ctx)
+	changefeedID, startTSO, err := r.createChangefeed(ctx)
 	if err != nil {
 		return errors.Annotate(err, "create OP TiCDC changefeed")
 	}
@@ -125,37 +126,59 @@ func (r *Runner) EnsureChangefeed(ctx context.Context) error {
 	}
 	log.Info("OP TiCDC changefeed created",
 		zap.String("changefeedID", changefeedID),
-		zap.Uint64("checkpointTS", r.stateManager.Snapshot().CheckpointTS))
+		zap.Uint64("startTSO", startTSO))
 
 	return nil
 }
 
-func (r *Runner) createChangefeed(ctx context.Context) (string, error) {
-	snapshotTSO := r.stateManager.Snapshot().CheckpointTS
-	if snapshotTSO == 0 {
-		return "", errors.New("checkpoint_ts is required to create OP TiCDC changefeed")
+func (r *Runner) createChangefeed(ctx context.Context) (string, uint64, error) {
+	startTSO, err := r.changefeedStartTSO(ctx)
+	if err != nil {
+		return "", 0, errors.Trace(err)
 	}
 
 	client, err := r.ticdcClient()
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", 0, errors.Trace(err)
 	}
 
 	req, err := ticdc.BuildChangefeedConfig(ticdc.ChangefeedConfigOptions{
 		Tables:        r.cfg.Tables,
 		StorageURI:    r.cfg.IncrementURI,
-		StartTSO:      snapshotTSO,
+		StartTSO:      startTSO,
 		FlushInterval: r.cfg.ChangefeedFlushInterval,
 		FileSizeMiB:   r.cfg.ChangefeedFileSizeMiB,
 	})
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", 0, errors.Trace(err)
 	}
 	cf, err := client.CreateChangefeed(ctx, req)
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", 0, errors.Trace(err)
 	}
-	return cf.ID, nil
+	return cf.ID, startTSO, nil
+}
+
+func (r *Runner) changefeedStartTSO(ctx context.Context) (uint64, error) {
+	if checkpointTS := r.stateManager.Snapshot().CheckpointTS; checkpointTS != 0 {
+		return checkpointTS, nil
+	}
+	metadataPath := path.Join(storage.SnapshotDirName, "metadata")
+	metadataExists, err := r.store.FileExists(ctx, metadataPath)
+	if err != nil {
+		return 0, errors.Annotatef(err, "check snapshot metadata %s", metadataPath)
+	}
+	if metadataExists {
+		return dumpling.LoadTSOFromMetadata(ctx, r.store)
+	}
+	if r.cfg.SnapshotTSO != "" {
+		tso, err := strconv.ParseUint(r.cfg.SnapshotTSO, 10, 64)
+		if err != nil {
+			return 0, errors.Annotate(err, "parse snapshot tso")
+		}
+		return tso, nil
+	}
+	return 0, nil
 }
 
 func (r *Runner) getChangefeed(ctx context.Context, id string) error {
