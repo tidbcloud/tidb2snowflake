@@ -38,3 +38,33 @@ CREATE TABLE ` + "`bank0`" + ` (
 	require.Equal(t, "10", balance.Precision)
 	require.Equal(t, "0", balance.Scale)
 }
+
+func TestParseExtendedColumnTypes(t *testing.T) {
+	tableSchema := BuildSchema("test", "types", `
+CREATE TABLE types (
+  id bigint primary key,
+  c_mediumblob mediumblob,
+  c_longblob longblob,
+  c_bit bit(12),
+  c_json json,
+  c_set set('a','b'),
+  c_decimal_unsigned decimal(65,30) unsigned
+);`)
+
+	cols := map[string]Column{}
+	for _, col := range tableSchema.Columns {
+		cols[col.Name] = col
+	}
+
+	require.Equal(t, "mediumblob", cols["c_mediumblob"].Tp)
+	require.Equal(t, "16777215", cols["c_mediumblob"].Precision)
+	require.Equal(t, "longblob", cols["c_longblob"].Tp)
+	require.Equal(t, "67108864", cols["c_longblob"].Precision)
+	require.Equal(t, "bit", cols["c_bit"].Tp)
+	require.Equal(t, "12", cols["c_bit"].Precision)
+	require.Equal(t, "json", cols["c_json"].Tp)
+	require.Equal(t, "set", cols["c_set"].Tp)
+	require.Equal(t, "decimal unsigned", cols["c_decimal_unsigned"].Tp)
+	require.Equal(t, "65", cols["c_decimal_unsigned"].Precision)
+	require.Equal(t, "30", cols["c_decimal_unsigned"].Scale)
+}
