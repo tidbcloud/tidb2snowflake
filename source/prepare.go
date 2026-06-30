@@ -47,6 +47,12 @@ type runner interface {
 }
 
 func Prepare(ctx context.Context, request Request, store *storage.Storage, state state.Manager) error {
+	start := time.Now()
+	log.Info("starting source prepare phase",
+		zap.Bool("prepareSnapshot", request.PrepareSnapshot),
+		zap.Bool("prepareChangefeed", request.PrepareChangefeed),
+		zap.Bool("useOPSource", request.UseOPSource),
+		zap.Int("tableCount", len(request.Tables)))
 	if request.UseOPSource {
 		if request.PrepareSnapshot && request.SnapshotURI == nil {
 			return errors.New("snapshot URI is required to prepare OP snapshot")
@@ -60,8 +66,10 @@ func Prepare(ctx context.Context, request Request, store *storage.Storage, state
 		if err := runner.EnsureSnapshot(ctx); err != nil {
 			return errors.Trace(err)
 		}
-		if state.Snapshot().Snapshot.TSO == 0 {
-			return errors.New("snapshot.tso is required after preparing snapshot")
+		log.Info("source prepare snapshot finished", zap.Duration("duration", time.Since(start)))
+
+		if state.Snapshot().CheckpointTS == 0 {
+			return errors.New("checkpoint_ts is required after preparing snapshot")
 		}
 	}
 	if request.PrepareChangefeed {
@@ -69,6 +77,7 @@ func Prepare(ctx context.Context, request Request, store *storage.Storage, state
 			return errors.Trace(err)
 		}
 	}
+	log.Info("source prepare phase finished", zap.Duration("duration", time.Since(start)))
 	return nil
 }
 

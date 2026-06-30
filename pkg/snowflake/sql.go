@@ -1,29 +1,29 @@
 package snowflake
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/log"
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 	"go.uber.org/zap"
-
-	"github.com/aws/aws-sdk-go/aws/credentials"
 )
 
-func createExternalStage(db *sql.DB, stageName, s3WorkspaceURL string, cred *credentials.Value) error {
+func createExternalStage(ctx context.Context, db *sql.DB, stageName, s3WorkspaceURL string, cred *credentials.Value) error {
 	sql := fmt.Sprintf(`CREATE OR REPLACE STAGE %s URL = '%s' CREDENTIALS = (AWS_KEY_ID = '%s' AWS_SECRET_KEY = '%s' AWS_TOKEN = '%s')
-		FILE_FORMAT = (type = 'CSV' EMPTY_FIELD_AS_NULL = FALSE NULL_IF=('\\N') FIELD_OPTIONALLY_ENCLOSED_BY='"' ESCAPE='\\' BINARY_FORMAT = 'HEX');`,
+			FILE_FORMAT = (type = 'CSV' EMPTY_FIELD_AS_NULL = FALSE NULL_IF=('\\N') FIELD_OPTIONALLY_ENCLOSED_BY='"' ESCAPE='\\' BINARY_FORMAT = 'HEX');`,
 		stageName, escapeString(s3WorkspaceURL), escapeString(cred.AccessKeyID), escapeString(cred.SecretAccessKey), escapeString(cred.SessionToken))
-	_, err := db.Exec(sql)
+	_, err := db.ExecContext(ctx, sql)
 	return err
 }
 
-func dropStage(db *sql.DB, stageName string) error {
+func dropStage(ctx context.Context, db *sql.DB, stageName string) error {
 	sql := fmt.Sprintf(`DROP STAGE IF EXISTS %s;`, stageName)
-	_, err := db.Exec(sql)
+	_, err := db.ExecContext(ctx, sql)
 	return err
 }
 
@@ -126,7 +126,7 @@ func buildCreateTableSQL(tableSchema *table.Meta) string {
 	)
 }
 
-func genMergeIntoSQL(tableMeta *table.Meta, filePath string, stageName string, highWatermark uint64) string {
+func genMergeIntoSQL(tableMeta *table.Meta, filePath string, stageName string, checkpointTs uint64) string {
 	selectStat := make([]string, 0, len(tableMeta.Columns)+1)
 	selectStat = append(selectStat, `$1 AS "METADATA$FLAG"`)
 	for i, col := range tableMeta.Columns {
@@ -170,7 +170,7 @@ func genMergeIntoSQL(tableMeta *table.Meta, filePath string, stageName string, h
 			SELECT
 				%s
 			FROM '%s'
-			WHERE TO_NUMBER($4) <= %d
+			WHERE TO_NUMBER($4) > %d
 			QUALIFY row_number() over (partition by %s order by $4 desc) = 1
 		) AS S
 		ON
@@ -183,7 +183,7 @@ func genMergeIntoSQL(tableMeta *table.Meta, filePath string, stageName string, h
 		quoteIdent(tableMeta.SnowflakeTableName()),
 		strings.Join(selectStat, ",\n"),
 		stageFile,
-		highWatermark,
+		checkpointTs,
 		strings.Join(pkColumn, ", "),
 		strings.Join(onStat, " AND "),
 		strings.Join(updateStat, ", "),
@@ -191,14 +191,4 @@ func genMergeIntoSQL(tableMeta *table.Meta, filePath string, stageName string, h
 		strings.Join(valuesStat, ", "))
 
 	return mergeQuery
-}
-
-func genCountCommitTsAfter(filePath string, stageName string, highWatermark uint64) string {
-	stageFile := fmt.Sprintf("@%s/%s", stageName, escapeString(filePath))
-	return fmt.Sprintf(`SELECT COUNT(*) FROM (
-	SELECT 1
-	FROM '%s'
-	WHERE TO_NUMBER($4) > %d
-	LIMIT 1
-);`, stageFile, highWatermark)
 }

@@ -2,6 +2,7 @@ package tidbcloud
 
 import (
 	"context"
+	"path"
 	"strconv"
 	"time"
 
@@ -48,26 +49,27 @@ func NewRunner(cfg Config, store *storage.Storage, state state.Manager) *Runner 
 
 func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 	stateSnapshot := r.state.Snapshot()
-	if stateSnapshot.Snapshot.TSO != 0 {
-		log.Info("snapshot TSO already exists in state, skipping TiDB Cloud export",
-			zap.Uint64("snapshotTSO", stateSnapshot.Snapshot.TSO))
+	if stateSnapshot.CheckpointTS != 0 {
+		log.Info("snapshot checkpoint already exists in state, skipping TiDB Cloud export",
+			zap.Uint64("checkpointTS", stateSnapshot.CheckpointTS))
 		return nil
 	}
 
-	snapshotExists, err := r.store.DirHasObjects(ctx, storage.SnapshotDirName)
+	metadataPath := path.Join(storage.SnapshotDirName, "metadata")
+	metadataExists, err := r.store.FileExists(ctx, metadataPath)
 	if err != nil {
-		return errors.Annotatef(err, "check %s directory", storage.SnapshotDirName)
+		return errors.Annotatef(err, "check snapshot metadata %s", metadataPath)
 	}
-	if snapshotExists {
+	if metadataExists {
 		snapshotTSO, err := dumpling.LoadTSOFromMetadata(ctx, r.store)
 		if err != nil {
 			return errors.Trace(err)
 		}
-		if err := r.state.SetSnapshotTSO(ctx, snapshotTSO); err != nil {
+		if err := r.state.SetCheckpointTS(ctx, snapshotTSO); err != nil {
 			return errors.Trace(err)
 		}
-		log.Info("snapshot data already exists in storage, skipping TiDB Cloud export",
-			zap.String("dir", storage.SnapshotDirName),
+		log.Info("snapshot metadata already exists in storage, skipping TiDB Cloud export",
+			zap.String("metadata", metadataPath),
 			zap.Uint64("snapshotTSO", snapshotTSO))
 		return nil
 	}
@@ -75,10 +77,20 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 	var snapshotTSO string
 	exportID := r.state.Snapshot().TaskInfo.ExportID
 	if exportID == "" {
+		snapshotExists, err := r.store.DirHasObjects(ctx, storage.SnapshotDirName)
+		if err != nil {
+			return errors.Annotatef(err, "check %s directory", storage.SnapshotDirName)
+		}
+		if snapshotExists {
+			return errors.Errorf("snapshot directory is not complete, metadata missing: %s", metadataPath)
+		}
+	}
+	if exportID == "" {
 		exportID, snapshotTSO, err = r.createExport(ctx)
 		if err != nil {
 			return errors.Annotate(err, "create TiDB Cloud export")
 		}
+		log.Info("TiDB Cloud export created", zap.String("exportID", exportID), zap.String("snapshotTSO", snapshotTSO))
 	}
 
 	if err := r.state.SetExportID(ctx, exportID); err != nil {
@@ -89,12 +101,13 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 	if err != nil {
 		return errors.Annotate(err, "wait TiDB Cloud export")
 	}
+	log.Info("TiDB Cloud export ready", zap.String("exportID", exportID), zap.String("snapshotTSO", snapshotTSO))
 
-	tso, err := strconv.ParseUint(snapshotTSO, 10, 64)
+	tso, err := dumpling.LoadTSOFromMetadata(ctx, r.store)
 	if err != nil {
-		return errors.Annotate(err, "parse TiDB Cloud export snapshotTso")
+		return errors.Annotate(err, "load TiDB Cloud export snapshot metadata")
 	}
-	if err := r.state.SetSnapshotTSO(ctx, tso); err != nil {
+	if err := r.state.SetCheckpointTS(ctx, tso); err != nil {
 		return errors.Trace(err)
 	}
 	return nil
@@ -102,21 +115,11 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 
 func (r *Runner) EnsureChangefeed(ctx context.Context) error {
 	if id := r.state.Snapshot().TaskInfo.ChangefeedID; id != "" {
-		err := r.waitChangefeed(ctx, id)
+		err := r.getChangefeed(ctx, id)
 		if err != nil {
-			return errors.Annotate(err, "wait TiDB Cloud changefeed")
+			return errors.Annotate(err, "get TiDB Cloud changefeed")
 		}
-		log.Info("changefeed is running, skipping creation", zap.String("changefeedID", id))
-		return nil
-	}
-
-	exists, err := r.store.DirHasObjects(ctx, storage.IncrementDirName)
-	if err != nil {
-		return errors.Annotatef(err, "check %s directory", storage.IncrementDirName)
-	}
-	if exists {
-		log.Info("changefeed data already exists in storage, skipping TiDB Cloud changefeed creation",
-			zap.String("dir", storage.IncrementDirName))
+		log.Info("TiDB Cloud changefeed exists, skipping creation", zap.String("changefeedID", id))
 		return nil
 	}
 
@@ -129,13 +132,8 @@ func (r *Runner) EnsureChangefeed(ctx context.Context) error {
 	}
 	log.Info("TiDB Cloud changefeed created",
 		zap.String("changefeedID", changefeedID),
-		zap.Uint64("snapshotTSO", r.state.Snapshot().Snapshot.TSO))
+		zap.Uint64("checkpointTS", r.state.Snapshot().CheckpointTS))
 
-	err = r.waitChangefeed(ctx, changefeedID)
-	if err != nil {
-		return errors.Annotate(err, "wait TiDB Cloud changefeed")
-	}
-	log.Info("TiDB Cloud changefeed ready", zap.String("changefeedID", changefeedID))
 	return nil
 }
 
@@ -171,9 +169,9 @@ func (r *Runner) createChangefeed(ctx context.Context) (string, error) {
 		return "", err
 	}
 	cleanIncrementURI := r.store.CleanSubURI(storage.IncrementDirName)
-	snapshotTSO := r.state.Snapshot().Snapshot.TSO
+	snapshotTSO := r.state.Snapshot().CheckpointTS
 	if snapshotTSO == 0 {
-		return "", errors.New("snapshot.tso is required to create TiDB Cloud changefeed")
+		return "", errors.New("checkpoint_ts is required to create TiDB Cloud changefeed")
 	}
 	req := buildChangefeedRequest(r.cfg, cleanIncrementURI, r.cfg.Credential, strconv.FormatUint(snapshotTSO, 10))
 	cf, err := c.CreateChangefeed(ctx, r.cfg.ClusterID, req)
@@ -183,12 +181,12 @@ func (r *Runner) createChangefeed(ctx context.Context) (string, error) {
 	return cf.ChangefeedID, nil
 }
 
-func (r *Runner) waitChangefeed(ctx context.Context, changefeedID string) error {
+func (r *Runner) getChangefeed(ctx context.Context, changefeedID string) error {
 	c, err := r.tidbCloudClient()
 	if err != nil {
 		return err
 	}
-	err = c.WaitChangefeed(ctx, r.cfg.ClusterID, changefeedID)
+	_, err = c.GetChangefeed(ctx, r.cfg.ClusterID, changefeedID)
 	if err != nil {
 		return err
 	}

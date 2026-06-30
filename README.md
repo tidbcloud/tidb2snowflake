@@ -118,9 +118,9 @@ the storage already contains `snapshot/` or `increment/` data. If it does, that
 source creation step is skipped and the existing data is used.
 
 For snapshot data, `snapshot/metadata` `Pos` is the final source of truth for
-`snapshot.tso`. Snapshot load is all-or-nothing at the phase level:
-`snapshot.finished=true` is written only after all configured snapshot files
-have been loaded into Snowflake. On the next run, `snapshot.finished=true`
+the initial `checkpoint_ts`. Snapshot load is all-or-nothing at the phase level:
+`snapshot_finished=true` is written only after all configured snapshot files
+have been loaded into Snowflake. On the next run, `snapshot_finished=true`
 skips snapshot loading.
 Snapshot export compression defaults to `none`; use `--snapshot.compression=gzip`
 to ask TiDB Cloud export for gzip CSV files and configure Snowflake `COPY` to

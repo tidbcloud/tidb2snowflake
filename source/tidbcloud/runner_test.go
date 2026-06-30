@@ -61,16 +61,16 @@ func TestEnsureSnapshotLoadsExistingMetadata(t *testing.T) {
 	runner := NewRunner(baseConfig(), store, manager)
 
 	require.NoError(t, runner.EnsureSnapshot(ctx))
-	require.Equal(t, uint64(466924115091783691), manager.Snapshot().Snapshot.TSO)
+	require.Equal(t, uint64(466924115091783691), manager.Snapshot().CheckpointTS)
 }
 
-func TestEnsureSnapshotSkipsWhenSnapshotTSOExists(t *testing.T) {
+func TestEnsureSnapshotSkipsWhenCheckpointExists(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
 	require.NoError(t, err)
 	defer store.Close()
 	manager := newTestStateManager(t, ctx, store)
-	require.NoError(t, manager.SetSnapshotTSO(ctx, 466924115091783691))
+	require.NoError(t, manager.SetCheckpointTS(ctx, 466924115091783691))
 
 	runner := NewRunner(Config{}, store, manager)
 
@@ -115,7 +115,7 @@ func TestBuildChangefeedRequestFromTSO(t *testing.T) {
 
 func newTestStateManager(t *testing.T, ctx context.Context, store storeapi.Storage) state.Manager {
 	t.Helper()
-	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"})
+	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"}, false)
 	require.NoError(t, err)
 	return manager
 }

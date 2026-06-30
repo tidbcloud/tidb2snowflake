@@ -11,14 +11,25 @@ import (
 
 // Manager owns durable replication state and its consistency checks.
 type Manager interface {
+	// Snapshot returns a deep copy of the current durable state for recovery decisions.
 	Snapshot() State
-	SetSnapshotTSO(context.Context, uint64) error
+
+	// SetCheckpointTS records the latest upstream checkpoint confirmed by downstream progress.
+	SetCheckpointTS(context.Context, uint64) error
+
+	// SetExportID records the TiDB Cloud export job so a restarted process can resume waiting for it.
 	SetExportID(context.Context, string) error
+
+	// SetChangefeedID records the source changefeed job so a restarted process can resume waiting for it.
 	SetChangefeedID(context.Context, string) error
-	StartIncrementalScan(context.Context, uint64) error
-	FinishIncrementalScan(context.Context, uint64) error
-	SetDMLFileWatermark(context.Context, string, string, uint64) error
+
+	// SetDDLTableVersionWatermark records the latest schema table version applied to Snowflake for a table.
 	SetDDLTableVersionWatermark(context.Context, string, uint64) error
+
+	// SetDMLCursors records the latest consumed DML cursor positions for a table.
+	SetDMLCursors(context.Context, string, map[string]DMLCursor) error
+
+	// MarkSnapshotFinished records that snapshot data has been loaded to Snowflake.
 	MarkSnapshotFinished(context.Context) error
 }
 
@@ -29,7 +40,7 @@ type manager struct {
 	state  State
 }
 
-func Open(ctx context.Context, store storeapi.Storage, tables []string) (Manager, error) {
+func Open(ctx context.Context, store storeapi.Storage, tables []string, snapshotFinished bool) (Manager, error) {
 	m := &manager{
 		store:  store,
 		tables: append([]string(nil), tables...),
@@ -40,7 +51,7 @@ func Open(ctx context.Context, store storeapi.Storage, tables []string) (Manager
 		return nil, errors.Annotatef(err, "check state file %s", stateFileName)
 	}
 	if !exists {
-		m.state = newState(tables)
+		m.state = newState(tables, snapshotFinished)
 		if err := m.upload(ctx, m.state); err != nil {
 			return nil, err
 		}
@@ -92,15 +103,15 @@ func (m *manager) update(ctx context.Context, fn func(*State) error) error {
 	return nil
 }
 
-func (m *manager) SetSnapshotTSO(ctx context.Context, tso uint64) error {
-	if tso == 0 {
-		return errors.New("snapshot.tso is empty")
+func (m *manager) SetCheckpointTS(ctx context.Context, checkpointTS uint64) error {
+	if checkpointTS == 0 {
+		return errors.New("checkpoint_ts is empty")
 	}
 	return m.update(ctx, func(st *State) error {
-		if st.Snapshot.TSO != 0 && st.Snapshot.TSO != tso {
-			return errors.Errorf("snapshot.tso mismatch: state %d, new %d", st.Snapshot.TSO, tso)
+		if checkpointTS < st.CheckpointTS {
+			return errors.Errorf("checkpoint_ts cannot move backward: state %d, new %d", st.CheckpointTS, checkpointTS)
 		}
-		st.Snapshot.TSO = tso
+		st.CheckpointTS = checkpointTS
 		return nil
 	})
 }
@@ -125,62 +136,54 @@ func (m *manager) SetChangefeedID(ctx context.Context, changefeedID string) erro
 	})
 }
 
-func (m *manager) StartIncrementalScan(ctx context.Context, highWatermark uint64) error {
-	if highWatermark == 0 {
-		return errors.New("incremental scan high watermark is empty")
-	}
-	return m.update(ctx, func(st *State) error {
-		st.Incremental.Scan = &ScanState{HighWatermark: highWatermark}
-		return nil
-	})
-}
-
-func (m *manager) FinishIncrementalScan(ctx context.Context, checkpointTS uint64) error {
-	if checkpointTS == 0 {
-		return errors.New("incremental checkpoint is empty")
-	}
-	return m.update(ctx, func(st *State) error {
-		st.Incremental.CheckpointTS = checkpointTS
-		st.Incremental.Scan = nil
-		return nil
-	})
-}
-
-func (m *manager) SetDMLFileWatermark(ctx context.Context, table, scope string, fileIdx uint64) error {
-	return m.update(ctx, func(st *State) error {
-		tableState, ok := st.Incremental.Tables[table]
-		if !ok {
-			return errors.Errorf("state missing incremental table entry %q", table)
-		}
-		if fileIdx > tableState.DMLFileWatermarks[scope] {
-			tableState.DMLFileWatermarks[scope] = fileIdx
-		}
-		st.Incremental.Tables[table] = tableState
-		return nil
-	})
-}
-
 func (m *manager) SetDDLTableVersionWatermark(ctx context.Context, table string, tableVersion uint64) error {
 	return m.update(ctx, func(st *State) error {
-		tableState, ok := st.Incremental.Tables[table]
+		tableState, ok := st.Tables[table]
 		if !ok {
-			return errors.Errorf("state missing incremental table entry %q", table)
+			return errors.Errorf("state missing table entry %q", table)
 		}
 		if tableVersion > tableState.DDLTableVersionWatermark {
 			tableState.DDLTableVersionWatermark = tableVersion
 		}
-		st.Incremental.Tables[table] = tableState
+		st.Tables[table] = tableState
 		return nil
 	})
 }
 
+func (m *manager) SetDMLCursors(ctx context.Context, table string, cursors map[string]DMLCursor) error {
+	return m.update(ctx, func(st *State) error {
+		tableState, ok := st.Tables[table]
+		if !ok {
+			return errors.Errorf("state missing table entry %q", table)
+		}
+		if tableState.DMLCursors == nil {
+			tableState.DMLCursors = make(map[string]DMLCursor, len(cursors))
+		}
+		for key, cursor := range cursors {
+			current, ok := tableState.DMLCursors[key]
+			if ok && cursorBefore(cursor, current) {
+				return errors.Errorf("dml cursor cannot move backward: table %s cursor %s", table, key)
+			}
+			tableState.DMLCursors[key] = cursor
+		}
+		st.Tables[table] = tableState
+		return nil
+	})
+}
+
+func cursorBefore(next, current DMLCursor) bool {
+	if next.Date != current.Date {
+		return next.Date < current.Date
+	}
+	return next.FileIndex < current.FileIndex
+}
+
 func (m *manager) MarkSnapshotFinished(ctx context.Context) error {
 	return m.update(ctx, func(st *State) error {
-		if st.Snapshot.TSO == 0 {
-			return errors.New("snapshot.tso is required before marking snapshot finished")
+		if st.CheckpointTS == 0 {
+			return errors.New("checkpoint_ts is required before marking snapshot finished")
 		}
-		st.Snapshot.Finished = true
-		st.Incremental.CheckpointTS = st.Snapshot.TSO
+		st.SnapshotFinished = true
 		return nil
 	})
 }

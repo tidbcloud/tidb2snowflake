@@ -47,11 +47,12 @@ func GenDDLViaTiDBDDL(prevMeta, nextMeta *table.Meta, action model.ActionType, q
 	case model.ActionCreateTable:
 		return nil, errors.New("Received create table ddl, which should not happen")
 	case model.ActionRenameTable:
-		if strings.TrimSpace(query) == "" {
-			return []string{renameTableDDL(prevMeta.SnowflakeTableName(), nextMeta.SnowflakeTableName())}, nil
-		}
+		return nil, errors.New("rename table ddl is not supported")
 	case model.ActionDropSchema:
-		return []string{fmt.Sprintf("DROP SCHEMA %s", quoteIdent(nextMeta.Schema))}, nil
+		log.Warn("ignore unsupported TiDB drop schema DDL",
+			zap.String("schema", nextMeta.Schema),
+			zap.String("query", query))
+		return nil, nil
 	case model.ActionCreateSchema:
 		return nil, errors.New("Received create schema ddl, which should not happen")
 	default:
@@ -67,41 +68,54 @@ func GenDDLViaTiDBDDL(prevMeta, nextMeta *table.Meta, action model.ActionType, q
 	}
 	switch stmt := stmt.(type) {
 	case *ast.AlterTableStmt:
-		return genAlterTableDDLs(prevMeta, nextMeta, stmt), nil
-	case *ast.RenameTableStmt:
-		return genRenameTableDDLs(prevMeta, nextMeta, stmt), nil
+		return genAlterTableDDLs(prevMeta, nextMeta, stmt)
 	default:
 		return nil, errors.Errorf("unsupported TiDB DDL query %T: %s", stmt, query)
 	}
 }
 
-func genAlterTableDDLs(prevMeta, nextMeta *table.Meta, alterStmt *ast.AlterTableStmt) []string {
-	added, removed, before, after := diffColumns(prevMeta.Columns, nextMeta.Columns)
+func genAlterTableDDLs(prevMeta, nextMeta *table.Meta, alterStmt *ast.AlterTableStmt) ([]string, error) {
 	tableName := quoteIdent(nextMeta.SnowflakeTableName())
 	ddls := make([]string, 0, len(alterStmt.Specs))
 	for _, spec := range alterStmt.Specs {
 		switch spec.Tp {
 		case ast.AlterTableAddColumns:
-			for _, col := range added {
+			for _, colDef := range spec.NewColumns {
+				col, err := columnInMeta(nextMeta, colDef.Name.Name.O)
+				if err != nil {
+					return nil, errors.Trace(err)
+				}
 				ddls = append(ddls, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s;", tableName, buildColumn(col)))
 			}
 		case ast.AlterTableDropColumn:
-			for _, col := range removed {
-				ddls = append(ddls, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;", tableName, quoteIdent(col.Name)))
+			if _, err := columnInMeta(prevMeta, spec.OldColumnName.Name.O); err != nil {
+				return nil, errors.Trace(err)
 			}
+			ddls = append(ddls, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;", tableName, quoteIdent(spec.OldColumnName.Name.O)))
 		case ast.AlterTableRenameColumn:
-			oldCol := removed[0]
-			newCol := added[0]
-			ddls = append(ddls, fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s;", tableName, quoteIdent(oldCol.Name), quoteIdent(newCol.Name)))
-		case ast.AlterTableModifyColumn, ast.AlterTableAlterColumn:
-			ddls = append(ddls, modifyColumnDDLs(tableName, before, after)...)
-		case ast.AlterTableChangeColumn:
-			if len(removed) == 0 || len(added) == 0 {
-				ddls = append(ddls, modifyColumnDDLs(tableName, before, after)...)
-				continue
+			if _, err := columnInMeta(prevMeta, spec.OldColumnName.Name.O); err != nil {
+				return nil, errors.Trace(err)
 			}
-			oldCol := removed[0]
-			newCol := added[0]
+			if _, err := columnInMeta(nextMeta, spec.NewColumnName.Name.O); err != nil {
+				return nil, errors.Trace(err)
+			}
+			ddls = append(ddls, fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s;",
+				tableName,
+				quoteIdent(spec.OldColumnName.Name.O),
+				quoteIdent(spec.NewColumnName.Name.O)))
+		case ast.AlterTableModifyColumn, ast.AlterTableAlterColumn:
+			before, after, err := modifiedColumns(prevMeta, nextMeta, spec.NewColumns[0].Name.Name.O, spec.NewColumns[0].Name.Name.O)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			if modify := columnModifyString(before, after); modify != "" {
+				ddls = append(ddls, fmt.Sprintf("ALTER TABLE %s MODIFY %s;", tableName, modify))
+			}
+		case ast.AlterTableChangeColumn:
+			oldCol, newCol, err := modifiedColumns(prevMeta, nextMeta, spec.OldColumnName.Name.O, spec.NewColumns[0].Name.Name.O)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
 			if !strings.EqualFold(oldCol.Name, newCol.Name) {
 				ddls = append(ddls, fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s;", tableName, quoteIdent(oldCol.Name), quoteIdent(newCol.Name)))
 			}
@@ -109,84 +123,36 @@ func genAlterTableDDLs(prevMeta, nextMeta *table.Meta, alterStmt *ast.AlterTable
 				ddls = append(ddls, fmt.Sprintf("ALTER TABLE %s MODIFY %s;", tableName, modify))
 			}
 		case ast.AlterTableRenameTable:
-			ddls = append(ddls, renameTableDDL(
-				astTableName(alterStmt.Table, prevMeta.Schema),
-				astTableName(spec.NewTable, nextMeta.Schema),
-			))
+			return nil, errors.New("rename table ddl is not supported")
 		default:
 			continue
 		}
 	}
-	return ddls
+	return ddls, nil
 }
 
-func genRenameTableDDLs(prevMeta, nextMeta *table.Meta, stmt *ast.RenameTableStmt) []string {
-	ddls := make([]string, 0, len(stmt.TableToTables))
-	oldDefaultSchema := nextMeta.Schema
-	if prevMeta != nil {
-		oldDefaultSchema = prevMeta.Schema
+func modifiedColumns(prevMeta, nextMeta *table.Meta, prevName, nextName string) (table.Column, table.Column, error) {
+	before, err := columnInMeta(prevMeta, prevName)
+	if err != nil {
+		return table.Column{}, table.Column{}, errors.Trace(err)
 	}
-	for _, tableToTable := range stmt.TableToTables {
-		ddls = append(ddls, renameTableDDL(
-			astTableName(tableToTable.OldTable, oldDefaultSchema),
-			astTableName(tableToTable.NewTable, nextMeta.Schema),
-		))
+	after, err := columnInMeta(nextMeta, nextName)
+	if err != nil {
+		return table.Column{}, table.Column{}, errors.Trace(err)
 	}
-	return ddls
+	return before, after, nil
 }
 
-func renameTableDDL(oldTable, newTable string) string {
-	return fmt.Sprintf("ALTER TABLE %s RENAME TO %s;", quoteIdent(oldTable), quoteIdent(newTable))
-}
-
-func astTableName(tableName *ast.TableName, defaultSchema string) string {
-	schema := tableName.Schema.O
-	if schema == "" {
-		schema = defaultSchema
+func columnInMeta(meta *table.Meta, name string) (table.Column, error) {
+	if meta == nil {
+		return table.Column{}, errors.Errorf("column %s not found", name)
 	}
-	return fmt.Sprintf("%s.%s", schema, tableName.Name.O)
-}
-
-func modifyColumnDDLs(tableName string, beforeColumns, afterColumns []table.Column) []string {
-	ddls := make([]string, 0, len(beforeColumns))
-	for i, before := range beforeColumns {
-		modify := columnModifyString(before, afterColumns[i])
-		if modify != "" {
-			ddls = append(ddls, fmt.Sprintf("ALTER TABLE %s MODIFY %s;", tableName, modify))
+	for _, col := range meta.Columns {
+		if strings.EqualFold(col.Name, name) {
+			return col, nil
 		}
 	}
-	return ddls
-}
-
-func diffColumns(prevColumns, nextColumns []table.Column) (
-	added []table.Column,
-	removed []table.Column,
-	before []table.Column,
-	after []table.Column,
-) {
-	nextByName := make(map[string]table.Column, len(nextColumns))
-	for _, col := range nextColumns {
-		nextByName[strings.ToLower(col.Name)] = col
-	}
-
-	prevNames := make(map[string]struct{}, len(prevColumns))
-	for _, prev := range prevColumns {
-		name := strings.ToLower(prev.Name)
-		prevNames[name] = struct{}{}
-		if next, ok := nextByName[name]; ok {
-			before = append(before, prev)
-			after = append(after, next)
-		} else {
-			removed = append(removed, prev)
-		}
-	}
-
-	for _, next := range nextColumns {
-		if _, ok := prevNames[strings.ToLower(next.Name)]; !ok {
-			added = append(added, next)
-		}
-	}
-	return
+	return table.Column{}, errors.Errorf("column %s not found in table %s", name, meta.SnowflakeTableName())
 }
 
 // GetSnowflakeColumnString returns a string describing the column in Snowflake, e.g.

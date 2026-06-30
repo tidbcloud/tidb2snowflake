@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // ExportState is the lifecycle state of an export task.
@@ -226,6 +229,7 @@ func (c *Client) WaitExport(ctx context.Context, clusterID, exportID string) (*E
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(10 * time.Second):
+			log.Info("TiDB Cloud export not ready yet", zap.String("exportID", exportID), zap.String("clusterID", clusterID))
 		}
 	}
 }

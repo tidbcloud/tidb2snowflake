@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-const DefaultConcurrency = 8
+const DefaultConcurrency = 16
 
 type Task interface {
 	Execute(context.Context) error
@@ -54,6 +54,8 @@ func (pool *Pool) Go(ctx context.Context) {
 				select {
 				case <-ctx.Done():
 					task.future.done <- ctx.Err()
+				case <-task.ctx.Done():
+					task.future.done <- task.ctx.Err()
 				default:
 					task.future.done <- task.task.Execute(task.ctx)
 				}

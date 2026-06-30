@@ -13,24 +13,6 @@ import (
 	"github.com/tidbcloud/tidb2snowflake/source/storage"
 )
 
-func TestDiffDMLMaps(t *testing.T) {
-	key := cloudstorage.DMLPathKey{
-		SchemaPathKey: cloudstorage.SchemaPathKey{
-			Schema:       "db",
-			Table:        "tbl",
-			TableVersion: 42,
-		},
-		PartitionNum: 7,
-		Date:         "2026-06-19",
-	}
-	got := diffDMLMaps(
-		map[cloudstorage.DMLPathKey]uint64{key: 9},
-		map[cloudstorage.DMLPathKey]uint64{key: 6},
-	)
-
-	require.Equal(t, indexRange{start: 7, end: 9}, got[key])
-}
-
 func TestCountFilesInRangesSkipsSchemaKeys(t *testing.T) {
 	schemaKey := cloudstorage.SchemaPathKey{
 		Schema:       "db",
@@ -93,7 +75,7 @@ func TestGetNewFilesScansMetadataPrefixes(t *testing.T) {
 		tableFQN:                 "db.t",
 	}
 
-	scan, err := loader.getNewFiles(ctx, 110, 130, table, nil)
+	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 110, metadataCheckpointTs: 130}, table)
 	require.NoError(t, err)
 
 	require.Equal(t, indexRange{start: 2, end: 3}, scan.dmlFileMap[cloudstorage.DMLPathKey{
@@ -111,37 +93,124 @@ func TestGetNewFilesScansMetadataPrefixes(t *testing.T) {
 	}))
 }
 
-func TestGetNewFilesScansRenameSchemaFile(t *testing.T) {
+func TestGetNewFilesDoesNotScheduleSchemaAtCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
 	require.NoError(t, err)
 	defer store.Close()
 
 	writeSchemaFile(t, ctx, store, "inc", 100)
-	renameSchemaPath := writeSchemaFileForTable(t, ctx, store, "inc", "db", "tt", 120,
-		"RENAME TABLE `t` TO `tt`", model.ActionRenameTable)
 
 	loader := &loader{storage: store, storageDir: "inc"}
 	table := &tableState{
 		tableDMLIdxMap:           make(map[cloudstorage.DMLPathKey]uint64),
+		ddlTableVersionWatermark: 0,
+		sourceDatabase:           "db",
+		sourceTable:              "t",
+		tableFQN:                 "db.t",
+	}
+
+	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 100, metadataCheckpointTs: 130}, table)
+	require.NoError(t, err)
+
+	require.Contains(t, scan.schemaFilePaths, uint64(100))
+	require.NotContains(t, scan.dmlFileMap, cloudstorage.NewSchemaFileDMLPathKey(cloudstorage.SchemaPathKey{
+		Schema:       "db",
+		Table:        "t",
+		TableVersion: 100,
+	}))
+}
+
+func TestGetNewFilesSkipsDatesBeforeActiveDate(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
+	require.NoError(t, err)
+	defer store.Close()
+
+	writeSchemaFile(t, ctx, store, "inc", 100)
+	writeIndexFile(t, ctx, store, "inc", 100, "2026-06-29", 5)
+	writeIndexFile(t, ctx, store, "inc", 100, "2026-06-30", 2)
+
+	loader := &loader{storage: store, storageDir: "inc"}
+	table := &tableState{
+		tableDMLIdxMap: map[cloudstorage.DMLPathKey]uint64{
+			{
+				SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "db", Table: "t", TableVersion: 100},
+				Date:          "2026-06-29",
+			}: 1,
+			{
+				SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "db", Table: "t", TableVersion: 100},
+				Date:          "2026-06-30",
+			}: 1,
+		},
+		activeDateByDMLScope: map[dmlScope]string{
+			{tableVersion: 100}: "2026-06-30",
+		},
 		ddlTableVersionWatermark: 100,
 		sourceDatabase:           "db",
 		sourceTable:              "t",
 		tableFQN:                 "db.t",
 	}
-	loader.tables = []*tableState{table}
 
-	renameSchemaFilePaths, err := loader.findRenameSchemaFilePaths(ctx, 130)
-	require.NoError(t, err)
-	scan, err := loader.getNewFiles(ctx, 110, 130, table, renameSchemaFilePaths[table.tableFQN])
+	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 100, metadataCheckpointTs: 130}, table)
 	require.NoError(t, err)
 
-	require.Equal(t, renameSchemaPath, scan.schemaFilePaths[120])
-	require.Contains(t, scan.dmlFileMap, cloudstorage.NewSchemaFileDMLPathKey(cloudstorage.SchemaPathKey{
-		Schema:       "db",
-		Table:        "t",
-		TableVersion: 120,
-	}))
+	require.NotContains(t, scan.dmlFileMap, cloudstorage.DMLPathKey{
+		SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "db", Table: "t", TableVersion: 100},
+		Date:          "2026-06-29",
+	})
+	require.Equal(t, indexRange{start: 2, end: 2}, scan.dmlFileMap[cloudstorage.DMLPathKey{
+		SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "db", Table: "t", TableVersion: 100},
+		Date:          "2026-06-30",
+	}])
+}
+
+func TestGetNewFilesScansPartitionDateDirs(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
+	require.NoError(t, err)
+	defer store.Close()
+
+	writeSchemaFile(t, ctx, store, "inc", 100)
+	writePartitionIndexFile(t, ctx, store, "inc", 100, 55, "2026-06-29", 5)
+	writePartitionIndexFile(t, ctx, store, "inc", 100, 55, "2026-06-30", 2)
+
+	loader := &loader{storage: store, storageDir: "inc"}
+	table := &tableState{
+		tableDMLIdxMap: map[cloudstorage.DMLPathKey]uint64{
+			{
+				SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "db", Table: "t", TableVersion: 100},
+				PartitionNum:  55,
+				Date:          "2026-06-29",
+			}: 5,
+			{
+				SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "db", Table: "t", TableVersion: 100},
+				PartitionNum:  55,
+				Date:          "2026-06-30",
+			}: 1,
+		},
+		activeDateByDMLScope: map[dmlScope]string{
+			{tableVersion: 100, partitionNum: 55}: "2026-06-30",
+		},
+		ddlTableVersionWatermark: 100,
+		sourceDatabase:           "db",
+		sourceTable:              "t",
+		tableFQN:                 "db.t",
+	}
+
+	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 100, metadataCheckpointTs: 130}, table)
+	require.NoError(t, err)
+
+	require.NotContains(t, scan.dmlFileMap, cloudstorage.DMLPathKey{
+		SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "db", Table: "t", TableVersion: 100},
+		PartitionNum:  55,
+		Date:          "2026-06-29",
+	})
+	require.Equal(t, indexRange{start: 2, end: 2}, scan.dmlFileMap[cloudstorage.DMLPathKey{
+		SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "db", Table: "t", TableVersion: 100},
+		PartitionNum:  55,
+		Date:          "2026-06-30",
+	}])
 }
 
 func writeSchemaFile(t *testing.T, ctx context.Context, store *storage.Storage, storageDir string, tableVersion uint64) {
@@ -186,6 +255,34 @@ func writeIndexFile(t *testing.T, ctx context.Context, store *storage.Storage, s
 			TableVersion: tableVersion,
 		},
 		Date: date,
+	}
+	fileName := path.Base(dmlKey.GenerateDMLFilePath(
+		&cloudstorage.FileIndex{Idx: fileIndex},
+		storage.CSVFileExtension,
+		config.DefaultFileIndexWidth,
+	))
+	require.NoError(t, store.WriteFile(ctx, path.Join(storageDir, dmlKey.GenerateIndexFilePath(cloudstorage.FileIndexKey{})), []byte(fileName)))
+}
+
+func writePartitionIndexFile(
+	t *testing.T,
+	ctx context.Context,
+	store *storage.Storage,
+	storageDir string,
+	tableVersion uint64,
+	partitionNum int64,
+	date string,
+	fileIndex uint64,
+) {
+	t.Helper()
+	dmlKey := cloudstorage.DMLPathKey{
+		SchemaPathKey: cloudstorage.SchemaPathKey{
+			Schema:       "db",
+			Table:        "t",
+			TableVersion: tableVersion,
+		},
+		PartitionNum: partitionNum,
+		Date:         date,
 	}
 	fileName := path.Base(dmlKey.GenerateDMLFilePath(
 		&cloudstorage.FileIndex{Idx: fileIndex},

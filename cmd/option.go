@@ -154,6 +154,7 @@ type loadRequest struct {
 	LoadSnapshot    bool
 	LoadIncremental bool
 
+	Snowflake   *snowflake.Config
 	Snapshot    snapshot.Config
 	Incremental incremental.Config
 }
@@ -166,8 +167,8 @@ func (opt *Option) loadRequest(
 	return loadRequest{
 		LoadSnapshot:    opt.Mode != runModeIncrementalOnly,
 		LoadIncremental: opt.Mode != runModeSnapshotOnly,
+		Snowflake:       snowflakeCfg,
 		Snapshot: snapshot.Config{
-			Snowflake:   snowflakeCfg,
 			Credential:  cred,
 			Tables:      opt.Tables,
 			StorageURI:  storageURI,
@@ -175,7 +176,6 @@ func (opt *Option) loadRequest(
 			Compression: opt.SnapshotCompression,
 		},
 		Incremental: incremental.Config{
-			Snowflake:    snowflakeCfg,
 			Credential:   cred,
 			Tables:       opt.Tables,
 			StorageURI:   storageURI,

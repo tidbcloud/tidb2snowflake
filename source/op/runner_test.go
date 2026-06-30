@@ -65,18 +65,18 @@ func TestPrepareFullUsesSnapshotMetadataForChangefeedStart(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, []string{"changefeed"}, events)
-	require.Equal(t, uint64(466924115091783691), manager.Snapshot().Snapshot.TSO)
+	require.Equal(t, uint64(466924115091783691), manager.Snapshot().CheckpointTS)
 	require.Equal(t, "cf-1", manager.Snapshot().TaskInfo.ChangefeedID)
 	require.Equal(t, uint64(466924115091783691), createReq.StartTS)
 }
 
-func TestEnsureSnapshotSkipsWhenSnapshotTSOExists(t *testing.T) {
+func TestEnsureSnapshotSkipsWhenCheckpointExists(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
 	require.NoError(t, err)
 	defer store.Close()
 	manager := newTestStateManager(t, ctx, store)
-	require.NoError(t, manager.SetSnapshotTSO(ctx, 466924115091783691))
+	require.NoError(t, manager.SetCheckpointTS(ctx, 466924115091783691))
 
 	runner := NewRunner(Config{}, store, manager)
 
@@ -93,12 +93,34 @@ func TestCreateChangefeedRequiresSnapshotTSO(t *testing.T) {
 	runner := NewRunner(Config{}, store, manager)
 	_, err = runner.createChangefeed(ctx)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "snapshot.tso is required")
+	require.Contains(t, err.Error(), "checkpoint_ts is required")
+}
+
+func TestEnsureChangefeedOnlyChecksExistingID(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
+	require.NoError(t, err)
+	defer store.Close()
+	manager := newTestStateManager(t, ctx, store)
+	require.NoError(t, manager.SetChangefeedID(ctx, "cf-1"))
+
+	getCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet+" /api/v2/changefeeds/cf-1", r.Method+" "+r.URL.Path)
+		getCount++
+		_, _ = w.Write([]byte(`{"id":"cf-1","state":"stopped"}`))
+	}))
+	defer srv.Close()
+
+	runner := NewRunner(Config{TiCDCAddress: srv.URL}, store, manager)
+
+	require.NoError(t, runner.EnsureChangefeed(ctx))
+	require.Equal(t, 1, getCount)
 }
 
 func newTestStateManager(t *testing.T, ctx context.Context, store storeapi.Storage) state.Manager {
 	t.Helper()
-	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"})
+	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"}, false)
 	require.NoError(t, err)
 	return manager
 }

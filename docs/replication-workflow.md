@@ -34,11 +34,11 @@ snapshot 阶段处理的是静态历史数据。当前实现会：
 3. 基于 `table.Meta.SnowflakeTableName()` 生成 Snowflake 目标表名。
 4. 在 Snowflake 创建目标表。
 5. 扫描 `snapshot/` 下匹配配置表的 CSV 文件。
-6. 用固定 8 个 worker 并发执行 `COPY INTO`。
+6. 用默认 16 个 worker 并发执行 `COPY INTO`。
 
-当本次 snapshot 目录里需要同步的数据文件全部成功加载后，state 里的 `snapshot.finished` 会被设置为 `true`。下一次启动时，如果看到 `snapshot.finished=true`，snapshot 阶段会直接跳过。
+当本次 snapshot 目录里需要同步的数据文件全部成功加载后，state 里的 `snapshot_finished` 会被设置为 `true`。下一次启动时，如果看到 `snapshot_finished=true`，snapshot 阶段会直接跳过。
 
-如果复用已有 state 后新增 `--table`，新增表不会触发 snapshot backfill。这个行为是当前语义的一部分：`snapshot.finished=true` 表示该任务的 snapshot 阶段已经结束。
+如果复用已有 state 后新增 `--table`，新增表不会触发 snapshot backfill。这个行为是当前语义的一部分：`snapshot_finished=true` 表示该任务的 snapshot 阶段已经结束。
 
 ## 3. Incremental 数据同步到 Snowflake
 
@@ -46,16 +46,16 @@ snapshot 阶段处理的是静态历史数据。当前实现会：
 
 incremental 阶段处理的是变更数据，不能像 snapshot 一样随意并发。当前实现的核心流程是：
 
-1. 周期性读取 `increment/metadata`，拿到 source 侧已经可见的 checkpoint。
-2. 在 state 中记录本轮 scan 的 high watermark。
-3. 通过 `.index` 文件和 cloudstorage 路径规则，找出本轮严格可见的 schema 和 DML 文件。
+1. 周期性读取 `increment/metadata`，拿到 TiCDC 已确认 flush 到 storage 的 checkpoint。
+2. 通过实际存在的 `.index` 文件和 cloudstorage 路径规则，找出可消费的 schema 和 DML 文件。
+3. 通过 state 中每个 DML stream 的 cursor 计算需要消费的 file range。
 4. 按 table version、partition、date、file index 的顺序处理文件。
 5. 先处理 schema/DDL，再处理 DML。
 6. DML 通过 Snowflake `MERGE` 写入目标表。
 
-DML 文件内部用 `$4` 作为 commit-ts。MERGE 时会加上 `TO_NUMBER($4) <= highWatermark`，只消费本轮 scan 范围内的行。
+DML 文件内部用 `$4` 作为 commit-ts。MERGE 时会加上 `TO_NUMBER($4) > checkpoint_ts`。`increment/metadata` 里的 checkpoint 是确认下界，不是消费上界；`.index` 指向的 DML 文件会完整消费。
 
-如果一个 DML 文件里还存在 `commit-ts > highWatermark` 的行，当前文件不会推进 state 里的 `dml_file_watermarks`，本轮也不会继续越过它处理后续文件。这样可以避免 SQL 层截断了文件内容，但 state 却错误地认为整个文件已经完成。
+loader 会在 state 里记录每张表每个 DML stream 已经完整消费到的 date 和 file index；相邻两轮 scan 会从这个 cursor 之后继续。如果 cursor 丢失或落后，代码会重新生成当前 checkpoint 之后的候选文件范围，并依赖 MERGE 的 commit-ts 过滤和主键幂等性收敛。
 
 ## 支撑模块
 

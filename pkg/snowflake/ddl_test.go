@@ -76,6 +76,20 @@ func TestGenDDLViaTiDBDDLColumnDDL(t *testing.T) {
 	ddl, err = GenDDLViaTiDBDDL(prevMeta, prevMeta, model.ActionAddIndex, "ALTER TABLE test_schema.test_table ADD INDEX idx_name(name)")
 	require.NoError(t, err)
 	require.Empty(t, ddl)
+
+	ddl, err = GenDDLViaTiDBDDL(prevMeta, testMeta(
+		table.Column{Name: "id", Tp: "int", Precision: "11"},
+		table.Column{Name: "color", Tp: "varchar", Precision: "32"},
+		table.Column{Name: "c_default", Tp: "varchar", Precision: "16", Default: "v1"},
+		table.Column{Name: "created_at", Tp: "datetime", Precision: "0"},
+	), model.ActionMultiSchemaChange, "ALTER TABLE test_schema.test_table DROP COLUMN age, CHANGE COLUMN name color VARCHAR(32), ADD COLUMN created_at DATETIME")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		`ALTER TABLE "test_schema.test_table" DROP COLUMN "age";`,
+		`ALTER TABLE "test_schema.test_table" RENAME COLUMN "name" TO "color";`,
+		`ALTER TABLE "test_schema.test_table" MODIFY COLUMN "color" VARCHAR(32);`,
+		`ALTER TABLE "test_schema.test_table" ADD COLUMN "created_at" DATETIME(0);`,
+	}, ddl)
 }
 
 func TestGenDDLViaTiDBDDLTableDDL(t *testing.T) {
@@ -89,18 +103,18 @@ func TestGenDDLViaTiDBDDLTableDDL(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{`DROP TABLE "test_schema.test_table"`}, ddl)
 
-	ddl, err = GenDDLViaTiDBDDL(
+	_, err = GenDDLViaTiDBDDL(
 		&table.Meta{Schema: "test_schema", Table: "old_table"},
 		&table.Meta{Schema: "test_schema", Table: "new_table"},
 		model.ActionRenameTable,
 		"RENAME TABLE `old_table` TO `new_table`",
 	)
-	require.NoError(t, err)
-	require.Equal(t, []string{`ALTER TABLE "test_schema.old_table" RENAME TO "test_schema.new_table";`}, ddl)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "rename table ddl is not supported")
 
 	ddl, err = GenDDLViaTiDBDDL(nil, &table.Meta{Schema: "test_schema"}, model.ActionDropSchema, "")
 	require.NoError(t, err)
-	require.Equal(t, []string{`DROP SCHEMA "test_schema"`}, ddl)
+	require.Empty(t, ddl)
 }
 
 func testMeta(columns ...table.Column) *table.Meta {

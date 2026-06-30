@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"strconv"
-	"strings"
 
 	"github.com/pingcap/errors"
 )
@@ -18,12 +16,14 @@ const (
 type State struct {
 	// Version is the on-disk state schema version.
 	Version int `json:"version"`
+	// CheckpointTS is the latest upstream checkpoint confirmed in downstream Snowflake.
+	CheckpointTS uint64 `json:"checkpoint_ts"`
+	// SnapshotFinished means snapshot data has been loaded into downstream Snowflake.
+	SnapshotFinished bool `json:"snapshot_finished"`
 	// TaskInfo records source-side jobs created or reused by the prepare phase.
 	TaskInfo TaskInfo `json:"task_info"`
-	// Snapshot records the source snapshot artifact and downstream load progress.
-	Snapshot SnapshotState `json:"snapshot"`
-	// Incremental records the current TiCDC-to-Snowflake load progress.
-	Incremental IncrementalState `json:"incremental"`
+	// Tables records per-table incremental load state.
+	Tables map[string]TableState `json:"tables"`
 }
 
 type TaskInfo struct {
@@ -33,41 +33,25 @@ type TaskInfo struct {
 	ChangefeedID string `json:"changefeed_id"`
 }
 
-type SnapshotState struct {
-	// TSO is the snapshot artifact TSO confirmed after the source snapshot is ready.
-	TSO uint64 `json:"tso"`
-	// Finished means the snapshot data has been loaded into downstream Snowflake.
-	Finished bool `json:"finished"`
-}
-
-type IncrementalState struct {
-	// CheckpointTS is the latest commit timestamp fully loaded into Snowflake.
-	CheckpointTS uint64 `json:"checkpoint_ts"`
-	// Scan records an in-progress incremental scan, if the process stopped mid-scan.
-	Scan *ScanState `json:"scan,omitempty"`
-	// Tables records per-table incremental load watermarks.
-	Tables map[string]TableState `json:"tables"`
-}
-
-type ScanState struct {
-	// HighWatermark is the upper commit timestamp bound selected for the current scan.
-	HighWatermark uint64 `json:"high_watermark"`
-}
-
 type TableState struct {
-	// DMLFileWatermarks records the highest loaded DML file index per table-version scope.
-	DMLFileWatermarks map[string]uint64 `json:"dml_file_watermarks"`
 	// DDLTableVersionWatermark records the highest applied schema table version.
 	DDLTableVersionWatermark uint64 `json:"ddl_table_version_watermark"`
+	// DMLCursors record the last consumed date and file index for each DML stream.
+	DMLCursors map[string]DMLCursor `json:"dml_cursors"`
 }
 
-func newState(tables []string) State {
+type DMLCursor struct {
+	// Date is the last consumed date directory for a DML stream.
+	Date string `json:"date"`
+	// FileIndex is the last consumed file index within Date.
+	FileIndex uint64 `json:"file_index"`
+}
+
+func newState(tables []string, snapshotFinished bool) State {
 	st := State{
-		Version: Version,
-		Incremental: IncrementalState{
-			CheckpointTS: 0,
-			Tables:       make(map[string]TableState, len(tables)),
-		},
+		Version:          Version,
+		SnapshotFinished: snapshotFinished,
+		Tables:           make(map[string]TableState, len(tables)),
 	}
 	ensureConfiguredTables(&st, tables)
 	return st
@@ -75,15 +59,15 @@ func newState(tables []string) State {
 
 func ensureConfiguredTables(st *State, tables []string) bool {
 	changed := false
-	if st.Incremental.Tables == nil {
-		st.Incremental.Tables = make(map[string]TableState, len(tables))
+	if st.Tables == nil {
+		st.Tables = make(map[string]TableState, len(tables))
 		changed = true
 	}
 	for _, table := range tables {
-		if _, ok := st.Incremental.Tables[table]; !ok {
-			st.Incremental.Tables[table] = TableState{
-				DMLFileWatermarks:        make(map[string]uint64),
+		if _, ok := st.Tables[table]; !ok {
+			st.Tables[table] = TableState{
 				DDLTableVersionWatermark: 0,
+				DMLCursors:               map[string]DMLCursor{},
 			}
 			changed = true
 		}
@@ -95,55 +79,43 @@ func validateState(st State, tables []string) error {
 	if st.Version != Version {
 		return errors.Errorf("unsupported state version %d", st.Version)
 	}
-	if st.Incremental.Tables == nil {
-		return errors.New("state missing required field incremental.tables")
+	if st.Tables == nil {
+		return errors.New("state missing required field tables")
 	}
 	for _, table := range tables {
-		if _, ok := st.Incremental.Tables[table]; !ok {
-			return errors.Errorf("state missing incremental table entry %q", table)
+		tableState, ok := st.Tables[table]
+		if !ok {
+			return errors.Errorf("state missing table entry %q", table)
+		}
+		if err := validateTableState(table, tableState); err != nil {
+			return err
 		}
 	}
-	for table, tableState := range st.Incremental.Tables {
-		if tableState.DMLFileWatermarks == nil {
-			return errors.Errorf("state missing required field incremental.tables.%s.dml_file_watermarks", table)
-		}
-		for scope := range tableState.DMLFileWatermarks {
-			if err := validateDMLFileWatermarkScope(scope); err != nil {
-				return errors.Annotatef(err, "invalid dml_file_watermarks scope for table %s", table)
-			}
+	for table, tableState := range st.Tables {
+		if err := validateTableState(table, tableState); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func validateDMLFileWatermarkScope(scope string) error {
-	parts := strings.Split(scope, "/")
-	if len(parts) != 3 {
-		return errors.Errorf("invalid scope %q", scope)
-	}
-	if _, err := strconv.ParseUint(parts[0], 10, 64); err != nil {
-		return errors.Trace(err)
-	}
-	if _, err := strconv.ParseInt(parts[1], 10, 64); err != nil {
-		return errors.Trace(err)
+func validateTableState(table string, tableState TableState) error {
+	if tableState.DMLCursors == nil {
+		return errors.Errorf("state missing dml_cursors for table %q", table)
 	}
 	return nil
 }
 
 func cloneState(st State) State {
 	out := st
-	if st.Incremental.Scan != nil {
-		scan := *st.Incremental.Scan
-		out.Incremental.Scan = &scan
-	}
-	out.Incremental.Tables = make(map[string]TableState, len(st.Incremental.Tables))
-	for table, tableState := range st.Incremental.Tables {
-		copiedTable := tableState
-		copiedTable.DMLFileWatermarks = make(map[string]uint64, len(tableState.DMLFileWatermarks))
-		for scope, idx := range tableState.DMLFileWatermarks {
-			copiedTable.DMLFileWatermarks[scope] = idx
+	out.Tables = make(map[string]TableState, len(st.Tables))
+	for tableName, tableState := range st.Tables {
+		cloned := tableState
+		cloned.DMLCursors = make(map[string]DMLCursor, len(tableState.DMLCursors))
+		for key, cursor := range tableState.DMLCursors {
+			cloned.DMLCursors[key] = cursor
 		}
-		out.Incremental.Tables[table] = copiedTable
+		out.Tables[tableName] = cloned
 	}
 	return out
 }

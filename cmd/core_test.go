@@ -137,22 +137,26 @@ func TestValidateConfig(t *testing.T) {
 	require.Contains(t, err.Error(), "no tables specified")
 }
 
-func TestMarkSnapshotFinishedInitializesIncrementalCheckpoint(t *testing.T) {
+func TestMarkSnapshotFinishedRequiresCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
 	require.NoError(t, err)
 	manager := newCmdTestStateManager(t, ctx, store)
-	require.NoError(t, manager.SetSnapshotTSO(ctx, 466924115091783691))
 
+	err = manager.MarkSnapshotFinished(ctx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "checkpoint_ts is required")
+
+	require.NoError(t, manager.SetCheckpointTS(ctx, 466924115091783691))
 	require.NoError(t, manager.MarkSnapshotFinished(ctx))
 	st := manager.Snapshot()
-	require.True(t, st.Snapshot.Finished)
-	require.Equal(t, uint64(466924115091783691), st.Incremental.CheckpointTS)
+	require.True(t, st.SnapshotFinished)
+	require.Equal(t, uint64(466924115091783691), st.CheckpointTS)
 }
 
 func newCmdTestStateManager(t *testing.T, ctx context.Context, store storeapi.Storage) state.Manager {
 	t.Helper()
-	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"})
+	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"}, false)
 	require.NoError(t, err)
 	return manager
 }

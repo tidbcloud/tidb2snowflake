@@ -39,7 +39,7 @@ func newColumn(col cloudstorage.TableCol) Column {
 		Tp:        col.Tp,
 		Default:   col.Default,
 		Precision: col.Precision,
-		Scale:     col.Precision,
+		Scale:     col.Scale,
 		Nullable:  col.Nullable,
 		IsPK:      col.IsPK,
 		Elems:     col.Elems,

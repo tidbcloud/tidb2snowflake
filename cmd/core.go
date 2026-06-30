@@ -8,7 +8,9 @@ import (
 	"github.com/pingcap/log"
 	"github.com/tidbcloud/tidb2snowflake/incremental"
 	"github.com/tidbcloud/tidb2snowflake/pkg/metrics"
+	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
+	"github.com/tidbcloud/tidb2snowflake/pkg/workerpool"
 	"github.com/tidbcloud/tidb2snowflake/snapshot"
 	"github.com/tidbcloud/tidb2snowflake/source"
 	"github.com/tidbcloud/tidb2snowflake/source/storage"
@@ -37,7 +39,7 @@ func run(ctx context.Context, opt *Option) error {
 	}
 	defer sourceStorage.Close()
 
-	stateManager, err := state.Open(ctx, sourceStorage, opt.Tables)
+	stateManager, err := state.Open(ctx, sourceStorage, opt.Tables, opt.Mode == runModeIncrementalOnly)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -62,8 +64,23 @@ func loadIntoSnowflake(
 	metrics.TableNumGauge.Add(float64(tableCount))
 	log.Info("starting Snowflake load phase", zap.Int("tableCount", tableCount))
 
-	if req.LoadSnapshot && !stateManager.Snapshot().Snapshot.Finished {
-		if err := snapshot.Load(ctx, req.Snapshot, store); err != nil {
+	loadSnapshot := req.LoadSnapshot && !stateManager.Snapshot().SnapshotFinished
+	if !loadSnapshot && !req.LoadIncremental {
+		return nil
+	}
+
+	conn, err := snowflake.NewConnector(req.Snowflake)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	defer conn.Close()
+
+	pool := workerpool.New(workerpool.DefaultConcurrency)
+	pool.Go(ctx)
+	defer pool.Close()
+
+	if loadSnapshot {
+		if err := snapshot.Load(ctx, req.Snapshot, store, pool, conn); err != nil {
 			return errors.Trace(err)
 		}
 		if err := stateManager.MarkSnapshotFinished(ctx); err != nil {
@@ -71,7 +88,7 @@ func loadIntoSnowflake(
 		}
 	}
 	if req.LoadIncremental {
-		if err := incremental.Load(ctx, req.Incremental, store, stateManager); err != nil {
+		if err := incremental.Load(ctx, req.Incremental, store, stateManager, pool, conn); err != nil {
 			return errors.Trace(err)
 		}
 	}

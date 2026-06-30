@@ -3,6 +3,7 @@ package op
 import (
 	"context"
 	"net/url"
+	"path"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -48,34 +49,51 @@ func NewRunner(cfg Config, store *storage.Storage, state state.Manager) *Runner 
 
 func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 	stateSnapshot := r.stateManager.Snapshot()
-	if stateSnapshot.Snapshot.TSO != 0 {
-		log.Info("snapshot TSO already exists in state, skipping OP Dumpling snapshot dump",
-			zap.Uint64("snapshotTSO", stateSnapshot.Snapshot.TSO))
+	if stateSnapshot.CheckpointTS != 0 {
+		log.Info("snapshot checkpoint already exists in state, skipping OP Dumpling snapshot dump",
+			zap.Uint64("checkpointTS", stateSnapshot.CheckpointTS))
 		return nil
+	}
+
+	metadataPath := path.Join(storage.SnapshotDirName, "metadata")
+	metadataExists, err := r.store.FileExists(ctx, metadataPath)
+	if err != nil {
+		return errors.Annotatef(err, "check snapshot metadata %s", metadataPath)
+	}
+	if metadataExists {
+		snapshotTSO, err := dumpling.LoadTSOFromMetadata(ctx, r.store)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		log.Info("snapshot metadata already exists in storage, skipping OP Dumpling snapshot dump",
+			zap.String("metadata", metadataPath),
+			zap.Uint64("snapshotTSO", snapshotTSO))
+		return r.stateManager.SetCheckpointTS(ctx, snapshotTSO)
 	}
 
 	exist, err := r.store.DirHasObjects(ctx, storage.SnapshotDirName)
 	if err != nil {
 		return errors.Annotate(err, "check snapshot directory")
 	}
+	if exist {
+		return errors.Errorf("snapshot directory is not complete, metadata missing: %s", metadataPath)
+	}
 
-	if !exist {
-		log.Info("dumping OP TiDB snapshot with Dumpling")
-		if err := dumpling.Run(ctx, r.store, r.cfg.TiDB, dumpling.Config{
-			Concurrency:  r.cfg.SnapshotConcurrency,
-			StorageURI:   r.cfg.SnapshotURI,
-			SnapshotTSO:  r.cfg.SnapshotTSO,
-			Tables:       r.cfg.Tables,
-			Compression:  r.cfg.SnapshotCompression,
-			CSVNullValue: r.cfg.SnapshotCSVNullValue,
-			OnProgress: func(dumpedRows, totalRows int64) {
-				log.Info("snapshot dumpling progress",
-					zap.Int64("dumpedRows", dumpedRows),
-					zap.Int64("estimatedTotalRows", totalRows))
-			},
-		}); err != nil {
-			return errors.Trace(err)
-		}
+	log.Info("dumping OP TiDB snapshot with Dumpling")
+	if err := dumpling.Run(ctx, r.store, r.cfg.TiDB, dumpling.Config{
+		Concurrency:  r.cfg.SnapshotConcurrency,
+		StorageURI:   r.cfg.SnapshotURI,
+		SnapshotTSO:  r.cfg.SnapshotTSO,
+		Tables:       r.cfg.Tables,
+		Compression:  r.cfg.SnapshotCompression,
+		CSVNullValue: r.cfg.SnapshotCSVNullValue,
+		OnProgress: func(dumpedRows, totalRows int64) {
+			log.Info("snapshot dumpling progress",
+				zap.Int64("dumpedRows", dumpedRows),
+				zap.Int64("estimatedTotalRows", totalRows))
+		},
+	}); err != nil {
+		return errors.Trace(err)
 	}
 
 	snapshotTSO, err := dumpling.LoadTSOFromMetadata(ctx, r.store)
@@ -85,25 +103,16 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 	log.Info("snapshot data already exists in storage, skipping OP Dumpling snapshot dump",
 		zap.String("dir", storage.SnapshotDirName),
 		zap.Uint64("snapshotTSO", snapshotTSO))
-	return r.stateManager.SetSnapshotTSO(ctx, snapshotTSO)
+	return r.stateManager.SetCheckpointTS(ctx, snapshotTSO)
 }
 
 func (r *Runner) EnsureChangefeed(ctx context.Context) error {
 	if id := r.stateManager.Snapshot().TaskInfo.ChangefeedID; id != "" {
-		err := r.waitChangefeed(ctx, id)
+		err := r.getChangefeed(ctx, id)
 		if err != nil {
-			return errors.Annotate(err, "wait OP TiCDC changefeed")
+			return errors.Annotate(err, "get OP TiCDC changefeed")
 		}
-		return nil
-	}
-
-	exists, err := r.store.DirHasObjects(ctx, storage.IncrementDirName)
-	if err != nil {
-		return errors.Annotatef(err, "check %s directory", storage.IncrementDirName)
-	}
-	if exists {
-		log.Info("changefeed data already exists in storage, skipping OP TiCDC changefeed creation",
-			zap.String("dir", storage.IncrementDirName))
+		log.Info("OP TiCDC changefeed exists, skipping creation", zap.String("changefeedID", id))
 		return nil
 	}
 
@@ -116,20 +125,15 @@ func (r *Runner) EnsureChangefeed(ctx context.Context) error {
 	}
 	log.Info("OP TiCDC changefeed created",
 		zap.String("changefeedID", changefeedID),
-		zap.Uint64("snapshotTSO", r.stateManager.Snapshot().Snapshot.TSO))
+		zap.Uint64("checkpointTS", r.stateManager.Snapshot().CheckpointTS))
 
-	err = r.waitChangefeed(ctx, changefeedID)
-	if err != nil {
-		return errors.Annotate(err, "wait OP TiCDC changefeed")
-	}
-	log.Info("OP TiCDC changefeed ready", zap.String("changefeedID", changefeedID))
 	return nil
 }
 
 func (r *Runner) createChangefeed(ctx context.Context) (string, error) {
-	snapshotTSO := r.stateManager.Snapshot().Snapshot.TSO
+	snapshotTSO := r.stateManager.Snapshot().CheckpointTS
 	if snapshotTSO == 0 {
-		return "", errors.New("snapshot.tso is required to create OP TiCDC changefeed")
+		return "", errors.New("checkpoint_ts is required to create OP TiCDC changefeed")
 	}
 
 	client, err := r.ticdcClient()
@@ -154,12 +158,12 @@ func (r *Runner) createChangefeed(ctx context.Context) (string, error) {
 	return cf.ID, nil
 }
 
-func (r *Runner) waitChangefeed(ctx context.Context, id string) error {
+func (r *Runner) getChangefeed(ctx context.Context, id string) error {
 	client, err := r.ticdcClient()
 	if err != nil {
 		return err
 	}
-	_, err = client.WaitChangefeed(ctx, id)
+	_, err = client.GetChangefeed(ctx, id)
 	if err != nil {
 		return err
 	}
