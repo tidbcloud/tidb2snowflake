@@ -10,6 +10,10 @@ func TestSchemaFilePath(t *testing.T) {
 	require.Equal(t, "test.bank0-schema.sql", SchemaFilePath("test", "bank0"))
 }
 
+func TestSnowflakeTableName(t *testing.T) {
+	require.Equal(t, "test.bank0", (&Meta{Schema: "test", Table: "bank0"}).SnowflakeTableName())
+}
+
 func TestParseTableSchema(t *testing.T) {
 	schemaSQL := `
 /*!40014 SET FOREIGN_KEY_CHECKS=0*/;

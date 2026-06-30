@@ -1,168 +1,95 @@
 package snowflake
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/url"
-	"strings"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 	"go.uber.org/zap"
 )
 
-// A Wrapper of snowflake connection.
-// It implements the coreinterfaces.Connector interface.
+const (
+	SnapshotStageName  = "snapshot_external"
+	IncrementStageName = "increment_external"
+)
+
 type Connector struct {
 	// db is the connection to snowflake.
 	db *sql.DB
-
-	stageName            string
-	stageFileCompression string
-
-	s3Credentials *credentials.Value
-
-	columns []cloudstorage.TableCol
 }
 
-type Option func(*Connector)
-
-func WithStageFileCompression(compression string) Option {
-	return func(sc *Connector) {
-		sc.stageFileCompression = compression
-	}
-}
-
-func NewConnector(sfConfig *Config, stageName string, storageURI *url.URL, credentials *credentials.Value, opts ...Option) (*Connector, error) {
+func NewConnector(sfConfig *Config) (*Connector, error) {
 	db, err := OpenDB(sfConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	// create stage
+
+	return &Connector{db: db}, nil
+}
+
+func (sc *Connector) CreateStage(ctx context.Context, stageName string, storageURI *url.URL, cred *credentials.Value) error {
 	stageUrl := fmt.Sprintf("%s://%s%s", storageURI.Scheme, storageURI.Host, storageURI.Path)
-	log.Info("creating Snowflake external stage",
+	if err := createExternalStage(ctx, sc.db, stageName, stageUrl, cred); err != nil {
+		log.Error("Snowflake external stage creation failed",
+			zap.String("stage", stageName),
+			zap.String("stageUrl", stageUrl),
+			zap.Error(err))
+		return errors.Annotate(err, "Failed to create stage")
+	}
+	log.Info("Snowflake external stage created",
 		zap.String("stage", stageName),
-		zap.String("url", stageUrl))
-	if err := CreateExternalStage(db, stageName, stageUrl, credentials); err != nil {
-		return nil, errors.Annotate(err, "Failed to create stage")
-	}
-
-	sc := &Connector{
-		db:            db,
-		stageName:     stageName,
-		s3Credentials: credentials,
-		columns:       nil,
-	}
-	for _, opt := range opts {
-		opt(sc)
-	}
-	log.Info("Snowflake connector initialized",
-		zap.String("stage", stageName),
-		zap.String("stageFileCompression", sc.stageFileCompression))
-	return sc, nil
-}
-
-func (sc *Connector) InitSchema(columns []cloudstorage.TableCol) error {
-	if len(sc.columns) != 0 {
-		return nil
-	}
-	if len(columns) == 0 {
-		return errors.New("Columns in schema is empty")
-	}
-	sc.columns = columns
-	log.Info("table columns initialized",
-		zap.Int("columnCount", len(columns)),
-		zap.Strings("columns", tableColumnNames(columns)))
+		zap.String("stageUrl", stageUrl))
 	return nil
 }
 
-func (sc *Connector) ExecDDL(schemaFile cloudstorage.SchemaFile) error {
-	if len(sc.columns) == 0 {
-		return errors.New("Columns not initialized. Maybe you execute a DDL before all DMLs, which is not supported now.")
+func (sc *Connector) DropStage(ctx context.Context, stageName string) {
+	if err := dropStage(ctx, sc.db, stageName); err != nil {
+		log.Error("snowflake drop external stage failed", zap.String("stage", stageName), zap.Error(err))
+		return
 	}
-	ddls, err := GenDDLViaColumnsDiff(sc.columns, schemaFile)
+	log.Info("snowflake external stage dropped", zap.String("stage", stageName))
+}
+
+func (sc *Connector) ExecDDL(ctx context.Context, ddl string) error {
+	_, err := sc.db.ExecContext(ctx, ddl)
+	return errors.Trace(err)
+}
+
+func (sc *Connector) CreateTable(ctx context.Context, tableSchema *table.Meta) error {
+	createTableSQL := buildCreateTableSQL(tableSchema)
+	_, err := sc.db.ExecContext(ctx, createTableSQL)
 	if err != nil {
-		return errors.Trace(err)
+		log.Error("snowflake create table failed", zap.String("query", createTableSQL), zap.Error(err))
 	}
-	if len(ddls) == 0 {
-		log.Info("No need to execute this DDL in Snowflake",
-			zap.String("ddl", schemaFile.Query),
-			zap.Uint64("tableVersion", schemaFile.TableVersion))
-		return nil
-	}
-	// One DDL may be rewritten to multiple DDLs
-	for _, ddl := range ddls {
-		_, err := sc.db.Exec(ddl)
-		if err != nil {
-			log.Error("Failed to executed DDL",
-				zap.String("received", schemaFile.Query),
-				zap.String("rewritten", strings.Join(ddls, "\n")),
-				zap.Uint64("tableVersion", schemaFile.TableVersion))
-			return errors.Annotate(err, fmt.Sprint("failed to execute", ddl))
-		}
-	}
-	// update columns
-	sc.columns = schemaFile.Columns
-	log.Info("Successfully executed DDL",
-		zap.String("received", schemaFile.Query),
-		zap.String("rewritten", strings.Join(ddls, "\n")),
-		zap.Uint64("tableVersion", schemaFile.TableVersion))
-	return nil
+	return errors.Trace(err)
 }
 
-func (sc *Connector) CopyTableSchema(tableSchema *table.Meta) error {
-	createTableQuery := buildCreateSchemaSQL(tableSchema)
-	_, err := sc.db.Exec(createTableQuery)
-	if err != nil {
-		log.Error("table in Snowflake failed", zap.String("query", createTableQuery), zap.Error(err))
-		return errors.Trace(err)
-	}
-
-	log.Info("Snowflake table schema is ready",
-		zap.String("sourceDatabase", tableSchema.Schema),
-		zap.String("sourceTable", tableSchema.Table))
-	return nil
+func (sc *Connector) LoadSnapshot(ctx context.Context, targetTable, filePath, compression string) error {
+	fileFormat := snapshotFileFormat(compression)
+	query := fmt.Sprintf(`COPY INTO %s FROM @%s FILES = ('%s') FILE_FORMAT = (%s);`,
+		quoteIdent(targetTable), SnapshotStageName, escapeString(filePath), fileFormat)
+	_, err := sc.db.ExecContext(ctx, query)
+	return errors.Trace(err)
 }
 
-func (sc *Connector) LoadSnapshot(targetTable, filePath string) error {
-	if err := LoadSnapshotFromStage(sc.db, targetTable, sc.stageName, filePath, sc.stageFileCompression); err != nil {
-		return errors.Trace(err)
+func (sc *Connector) LoadIncrement(ctx context.Context, tableMeta *table.Meta, filePath string, checkpointTs uint64) error {
+	if len(tableMeta.PrimaryKeys) == 0 {
+		return errors.Errorf("table %s has no primary key", tableMeta.Table)
 	}
-	log.Info("Successfully loaded snapshot file",
-		zap.String("table", targetTable),
-		zap.String("file", filePath),
-		zap.String("stage", sc.stageName))
-	return nil
-}
-
-func (sc *Connector) LoadIncrement(schemaFile cloudstorage.SchemaFile, filePath string) error {
 	// merge staged file into table
-	mergeQuery := GenMergeInto(schemaFile, filePath, sc.stageName)
-	_, err := sc.db.Exec(mergeQuery)
+	mergeQuery := genMergeIntoSQL(tableMeta, filePath, IncrementStageName, checkpointTs)
+	_, err := sc.db.ExecContext(ctx, mergeQuery)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	log.Info("Successfully merge file", zap.String("file", filePath))
 	return nil
 }
 
 func (sc *Connector) Close() {
-	// drop stage
-	if err := DropStage(sc.db, sc.stageName); err != nil {
-		log.Error("fail to drop stage", zap.Error(err))
-	} else {
-		log.Info("Snowflake external stage dropped", zap.String("stage", sc.stageName))
-	}
 	sc.db.Close()
-}
-
-func tableColumnNames(columns []cloudstorage.TableCol) []string {
-	names := make([]string, 0, len(columns))
-	for _, col := range columns {
-		names = append(names, col.Name)
-	}
-	return names
 }

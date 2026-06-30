@@ -20,21 +20,20 @@ The tool then loads the snapshot and applies the incremental changes into
 Snowflake.
 
 ```
-TiDB Cloud cluster ──(OpenAPI export)──┐
-                                       ├─► object storage (S3) ──► tidb2snowflake ──► Snowflake
-TiDB Cloud cluster ──(OpenAPI cdc)─────┘
+TiDB Cloud cluster --(OpenAPI export)---+
+                                        +-> object storage (S3) -> tidb2snowflake -> Snowflake
+TiDB Cloud cluster --(OpenAPI cdc)------+
 
-OP TiDB cluster ──(Dumpling snapshot)──┐
-                                       ├─► object storage (S3) ──► tidb2snowflake ──► Snowflake
-OP TiCDC service ──(OpenAPI cdc)───────┘
+OP TiDB cluster --(Dumpling snapshot)---+
+                                        +-> object storage (S3) -> tidb2snowflake -> Snowflake
+OP TiCDC service --(OpenAPI cdc)--------+
 ```
 
 ## Status
 
-🚧 Under active development. This repository currently contains the migrated,
-reusable building blocks (Snowflake loader, TiDB schema utilities, incremental /
-snapshot replication logic, metrics). The OpenAPI-driven orchestration CLI is
-being built — see the planning doc and task board.
+Under active development. The CLI can orchestrate TiDB Cloud OpenAPI or OP
+TiDB/TiCDC sources, persist replication state in object storage, and load
+snapshot / incremental data into Snowflake.
 
 ## Build from source
 
@@ -60,7 +59,9 @@ make build       # produces bin/tidb2snowflake
 | `pkg/tidbcloud` | TiDB Cloud OpenAPI client |
 | `pkg/ticdc` | Direct TiCDC OpenAPI v2 client |
 | `pkg/dumpling` | Dumpling snapshot wrapper for OP deployments |
-| `replicate` | Snapshot loading and incremental apply into the warehouse |
+| `pkg/state` | Replication state file manager |
+| `snapshot` | Snapshot loading into Snowflake |
+| `incremental` | Incremental CDC apply into Snowflake |
 | `version` | Build/version info |
 
 ## Requirements
@@ -108,30 +109,27 @@ OpenAPI. The existing `--tidb.*` flags configure the TiDB SQL endpoint, and
 
 In full OP mode, the tool records a TiDB TSO, creates a TiCDC cloud-storage
 changefeed from that TSO, waits for the changefeed to become running, then dumps
-the snapshot with Dumpling. `--snapshot.concurrency` controls Dumpling snapshot
-dump concurrency in OP mode.
+the snapshot with Dumpling. After Dumpling finishes, `snapshot/metadata` `Pos`
+is read back as the final snapshot TSO. `--snapshot.concurrency` controls
+Dumpling snapshot dump concurrency in OP mode.
 
 ## Reusing an existing export / changefeed
 
-Before creating an export or changefeed, the tool checks whether the storage
-already contains `snapshot/` or `increment/` data. If it does — because a
-previous run created it, or because you created the export/changefeed yourself
-(handy for testing) — that step is skipped and the existing data is loaded as
-is. If both already exist, the run loads without contacting the TiDB Cloud API
-in TiDB Cloud mode or the TiCDC API in OP mode.
+If state contains an existing export or changefeed id, the tool waits for that
+same source job on restart. If no source job id exists, the tool checks whether
+the storage already contains `snapshot/` or `increment/` data. If it does, that
+source creation step is skipped and the existing data is used.
 
-Snapshot files are loaded with one bulk `COPY` statement using a Snowflake
-`PATTERN`. The legacy per-table `loadinfo` marker is no longer read or written
-for recovery.
+For snapshot data, `snapshot/metadata` `Pos` is the final source of truth for
+the initial `checkpoint_ts`. Snapshot load is all-or-nothing at the phase level:
+after all configured snapshot files have been loaded into Snowflake,
+`checkpoint_ts` and `snapshot_finished=true` are written together. On the next
+run, `snapshot_finished=true` skips snapshot loading.
+
 Snapshot export compression defaults to `none`; use `--snapshot.compression=gzip`
 to ask TiDB Cloud export for gzip CSV files and configure Snowflake `COPY` to
-read gzip input.
-
-Incremental replay writes a per-table `_consumer/progress.json` under the
-incremental storage prefix after each successfully applied CDC file. On restart,
-the loader restores that applied-file cursor before scanning object storage. Use
-`--increment.scan-interval` to tune how often the loader scans the incremental
-storage prefix; the default is `1m`.
+read gzip input. Use `--increment.scan-interval` to tune how often the loader
+scans incremental storage; the default is `1m`.
 
 ## Type mapping
 
