@@ -23,8 +23,6 @@ func SchemaFilePath(database, table string) string {
 }
 
 type Column struct {
-	// todo: ID should be removed.
-	ID        string
 	Name      string
 	Tp        string
 	Default   any
@@ -37,7 +35,6 @@ type Column struct {
 
 func newColumn(col cloudstorage.TableCol) Column {
 	return Column{
-		ID:        col.ID,
 		Name:      col.Name,
 		Tp:        col.Tp,
 		Default:   col.Default,

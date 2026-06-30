@@ -25,26 +25,11 @@ type Config struct {
 	Tables       []string
 	Compression  string
 	ReadTimeout  time.Duration
-	FileSize     string
 	CSVNullValue string
 	OnProgress   func(dumpedRows, totalRows int64)
 }
 
 func buildConfig(store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) (*export.Config, error) {
-	concurrency := cfg.Concurrency
-	if concurrency <= 0 {
-		concurrency = 8
-	}
-
-	csvNullValue := cfg.CSVNullValue
-	if csvNullValue == "" {
-		csvNullValue = "\\N"
-	}
-	compression := cfg.Compression
-	if compression == "" || compression == "none" {
-		compression = "no-compression"
-	}
-
 	conf := export.DefaultConfig()
 	conf.Logger = log.L()
 	conf.User = tidbCfg.User
@@ -53,12 +38,12 @@ func buildConfig(store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) (*exp
 	conf.Port = tidbCfg.Port
 	conf.Security.CAPath = tidbCfg.SSLCA
 
-	conf.Threads = concurrency
+	conf.Threads = cfg.Concurrency
 	conf.NoHeader = true
 	conf.FileType = "csv"
 	conf.CsvSeparator = ","
 	conf.CsvDelimiter = "\""
-	conf.CsvNullValue = csvNullValue
+	conf.CsvNullValue = cfg.CSVNullValue
 	conf.EscapeBackslash = false
 	conf.TransactionalConsistency = true
 	conf.CsvOutputDialect = export.CSVDialectSnowflake
@@ -73,21 +58,11 @@ func buildConfig(store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) (*exp
 		conf.Snapshot = cfg.SnapshotTSO
 	}
 
-	compressType, err := compressedio.ParseCompressType(compression)
+	compressType, err := compressedio.ParseCompressType(dumplingCompression(cfg.Compression))
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	conf.CompressType = compressType
-
-	fileSize := cfg.FileSize
-	if fileSize == "" {
-		fileSize = "5GiB"
-	}
-	parsedFileSize, err := export.ParseFileSize(fileSize)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	conf.FileSize = parsedFileSize
 
 	conf.SpecifiedTables = true
 	tables, err := export.GetConfTables(cfg.Tables)
@@ -97,6 +72,18 @@ func buildConfig(store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) (*exp
 	conf.Tables = tables
 	conf.ExtStorage = store
 	return conf, nil
+}
+
+func dumplingCompression(compression string) string {
+	switch compression {
+	case "none":
+		return "no-compression"
+	case "gzip":
+		return "gzip"
+	default:
+		log.Panic("unknown snapshot compression", zap.String("compression", compression))
+		return ""
+	}
 }
 
 func Run(ctx context.Context, store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) error {

@@ -28,9 +28,10 @@ Incremental 阶段读取对象存储里的 `increment/` 目录。
 ```go
 snowflake.NewConnector(
     cfg.Snowflake,
-    "increment_external",
+    snowflake.IncrementStageName,
     cfg.StorageURI,
     cfg.Credential,
+    "",
 )
 ```
 
@@ -70,9 +71,8 @@ ScanInterval: cfg.ChangefeedFlushInterval / 5
 每轮循环按这个顺序执行：
 
 1. `beginScan`
-2. `scanVisibleFiles`
-3. `consumeVisibleFiles`
-4. `finishScan`
+2. `processTables`
+3. `FinishIncrementalScan`
 
 如果 context 被取消，循环退出。
 
@@ -95,13 +95,36 @@ ScanInterval: cfg.ChangefeedFlushInterval / 5
 
 ## 扫描可见文件
 
-`scanVisibleFiles` 会逐表调用 `getNewFiles`。
+`processTables` 会先发现 rename table schema file，再逐表调用 `getNewFiles`。
 
 对每张表，`getNewFiles` 会扫描：
 
 ```text
 increment/<db>/<table>/
 ```
+
+有一个例外：`RENAME TABLE old TO new` 的 schema file 会落在新表目录下。
+例如 `--table db.old` 时，TiCDC 可能写出：
+
+```text
+increment/db/new/meta/schema_<table-version>_<checksum>.json
+```
+
+所以每轮 scan 开始时，loader 会先列出同一个 database 下的表目录，只读取这些
+目录里的 `meta/schema_*`，找出 `RENAME TABLE old TO new` 这类 schema file。
+如果 rename 的 source table 是当前配置表 `db.old`，这个 schema file 会被挂回
+`db.old` 的处理队列，按 `db.old` 的 table version 顺序执行 DDL。
+
+这个逻辑只用于发现 rename table 的 schema file。DML 仍然只按配置表路径扫描：
+
+```text
+increment/db/old/<table-version>/<date>/meta/CDC.index
+```
+
+也就是说，当前语义是：精确配置 `--table db.old` 时，rename DDL 会同步到
+Snowflake，把目标表从 `db.old` 改名为 `db.new`；但 loader 不会自动切换到
+`db.new` 继续消费 DML。这个行为和 TiCDC 精确 table filter 下的输出一致：rename
+DDL 会出现，rename 后新表名下的后续 DML 不会继续写出给这条同步任务。
 
 扫描时处理两类文件：
 
@@ -111,10 +134,10 @@ increment/<db>/<table>/
 
 - 解析出 schema、table 和 table version。
 - 跳过 `tableVersion > highWatermark` 的 schema。
-- 只接受当前配置表对应的 schema。
-- 读取 schema 文件内容并反序列化成 `cloudstorage.SchemaFile`。
-- 校验路径里的 table version、schema、table 和文件内容一致。
-- 保存到 `table.tableDefMap`。
+- 普通 schema file 必须属于当前配置表；rename table schema file 可以来自新表目录，
+  但它的 source table 必须是当前配置表。
+- 保存 schema file 路径；真正执行 DDL 或加载 DML 前再读取文件内容并反序列化成
+  `cloudstorage.SchemaFile`。
 - 同时为这个 schema version 添加一个特殊 DML key，用于后续按顺序执行 DDL。
 
 ### `.index` 文件
@@ -139,7 +162,7 @@ end   = index 文件指向的最新文件序号
 
 ## 并发模型
 
-`consumeVisibleFiles` 以表为单位并发处理。
+`processTables` 以表为单位并发处理。
 
 - 最大并发数是固定的 `tableConcurrency = 8`。
 - 不同表可以并发。
@@ -150,27 +173,62 @@ end   = index 文件指向的最新文件序号
 1. 先按 `cloudstorage.CompareDMLPathKey` 排序 DML path key。
 2. 对每个 table version，先处理 schema/DDL key。
 3. 再处理该 version 下的 DML 文件。
-4. DML 再按 dispatcher scope 排序。
+4. DML 再按 file index 顺序执行。
 5. 同一个 scope 内按文件序号从小到大处理。
 
 如果某个 DML 文件没有被完整消费，当前表本轮处理会停止，不会越过这个文件继续处理后续文件。
 
 ## DDL 同步
 
-DDL 处理入口是 `syncExecDDLEvents`。
+DDL 处理入口是 `execDDL`。
 
 每个 schema file 会转换成 `table.Meta`。处理规则：
 
 - schema file 里必须有 primary key，否则报错。
 - 如果 `tableDef.Query` 为空，表示初始化表结构，只更新内存里的 `currentMeta`，不执行 DDL。
 - 如果 `tableVersion <= ddl_table_version_watermark`，表示 DDL 已应用，跳过执行。
-- 否则调用 `snowflake.GenDDLViaMetaDiff`，基于前后两版表结构生成 Snowflake DDL。
+- 否则调用 `snowflake.GenDDLViaTiDBDDL`，基于 schema file 里的 `query` 生成 Snowflake DDL。
 - 逐条执行生成的 DDL。
 - DDL 成功后，把 `ddl_table_version_watermark` 更新到当前 table version。
 
 支持的 DDL 由 `pkg/snowflake/ddl.go` 决定。常见列变更会转成
-`ALTER TABLE ADD COLUMN`、`DROP COLUMN`、`MODIFY`、`RENAME COLUMN`。部分 DDL
-会直接返回错误，例如 create table、rename table、create schema 等。
+`ALTER TABLE ADD COLUMN`、`DROP COLUMN`、`MODIFY`、`RENAME COLUMN`。`RENAME TABLE`
+会转成 Snowflake 的 `ALTER TABLE ... RENAME TO ...`。部分 DDL 会直接返回错误，
+例如 create table、create schema 等。
+
+## DDL Query 驱动的实现
+
+TiCDC 写出的 schema file 里同时有两类信息：
+
+- `query`：上游实际执行的 DDL 语句，表达这次变更的意图。
+- `columns`：DDL 执行后的表结构，表达变更后的结果。
+
+调整前的实现会把 schema file 转成表结构，再基于前后两版表结构生成 Snowflake DDL。
+这条路径的问题不在于某个具体场景无法判断，而在于 schema file 已经带了 `query`：
+每个 schema file 本来就对应一次 DDL 事件，没有必要再维护一套 column diff 翻译逻辑。
+`table.Column.ID` 也不应该为了这条路径留在通用的 `table.Column` 里。
+
+现在的处理规则是：
+
+- `query` 用来判断这一个 schema file 对应的 DDL 动作。
+- `columns` 只用来提供 DDL 执行后的标准列定义，例如类型、nullable、default。
+- `snowflake.GenDDLViaTiDBDDL(prevMeta, nextMeta, actionType, query)` 是唯一的
+  Snowflake DDL 生成入口。
+- `tableDef.Query == ""` 表示初始化 schema file，不执行 Snowflake DDL；处理成功后
+  更新内存里的 `currentMeta`，并推进 `ddl_table_version_watermark`。
+- 列级 `ALTER TABLE` 用 TiDB parser 解析 AST，支持 `ADD COLUMN`、`DROP COLUMN`、
+  `RENAME COLUMN`、`MODIFY COLUMN`、`CHANGE COLUMN`、`ALTER COLUMN ... DROP DEFAULT`。
+- `ADD`、`MODIFY`、`CHANGE` 需要列定义时，从 `nextMeta` 查找变更后的列；`DROP` 和
+  `RENAME` 直接使用 DDL AST 里的列名。
+- `RENAME TABLE` 支持执行 Snowflake 表改名；它不改变当前任务的配置表名，也不让
+  DML 扫描路径从旧表名切换到新表名。
+- 非列级变更保持保守策略：不需要同步到 Snowflake 的 index、constraint、table option
+  变更会跳过；需要但暂不支持的表级 DDL 继续返回明确错误。
+- `table.Column.ID`、旧的 column diff 路径，以及 source 侧请求 column ID 的配置都已经删除。
+
+调整后的接口关系会更直接：incremental 只负责按 table version 顺序拿到 schema
+file；Snowflake DDL 生成模块负责把 TiDB DDL 语义翻译成 Snowflake DDL；schema file
+里的 `columns` 作为变更后的表结构事实存在，不承担“推断这次做了什么”的职责。
 
 ## DML 同步
 
@@ -217,7 +275,7 @@ SELECT COUNT(*) FROM (
     "tables": {
       "db.table": {
         "dml_file_watermarks": {
-          "<tableVersion>/<partition>/<date>/<dispatcherID>": <fileIndex>
+          "<tableVersion>/<partition>/<date>": <fileIndex>
         }
       }
     }
@@ -227,7 +285,7 @@ SELECT COUNT(*) FROM (
 
 ## 完成一轮 Scan
 
-当 `consumeVisibleFiles` 成功返回后，`finishScan` 会更新全局 checkpoint：
+当 `processTables` 成功返回后，`FinishIncrementalScan` 会更新全局 checkpoint：
 
 ```json
 {

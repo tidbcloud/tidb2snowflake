@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
@@ -53,7 +52,7 @@ func TestBuildExportRequest(t *testing.T) {
 
 func TestEnsureSnapshotLoadsExistingMetadata(t *testing.T) {
 	ctx := context.Background()
-	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
 	require.NoError(t, err)
 	defer store.Close()
 	manager := newTestStateManager(t, ctx, store)
@@ -67,7 +66,7 @@ func TestEnsureSnapshotLoadsExistingMetadata(t *testing.T) {
 
 func TestEnsureSnapshotSkipsWhenSnapshotTSOExists(t *testing.T) {
 	ctx := context.Background()
-	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
 	require.NoError(t, err)
 	defer store.Close()
 	manager := newTestStateManager(t, ctx, store)
@@ -107,7 +106,6 @@ func TestBuildChangefeedRequestFromTSO(t *testing.T) {
 	require.Equal(t, cloudapi.DateSeparatorDay, cs.DateSeparator)
 	require.Equal(t, 60, cs.IntervalInSeconds)
 	require.Equal(t, 64, cs.SizeInMiB)
-	require.True(t, cs.OutputColumnID)
 
 	require.Equal(t, []string{"db1.t1", "db2.t2"}, req.Filter.FilterRule)
 	require.Equal(t, cloudapi.TableModeForceSync, req.Filter.Mode)

@@ -41,10 +41,10 @@ func TestBuildChangefeedConfigCloudStorageCSV(t *testing.T) {
 	require.Equal(t, []string{"db1.t1", "db2.t2"}, cfg.ReplicaConfig.Filter.Rules)
 	require.True(t, cfg.ReplicaConfig.Sink.CSVConfig.IncludeCommitTs)
 	require.Equal(t, "hex", cfg.ReplicaConfig.Sink.CSVConfig.BinaryEncodingMethod)
+	require.Equal(t, config.DateSeparatorDay.String(), *cfg.ReplicaConfig.Sink.DateSeparator)
 	require.NotNil(t, cfg.ReplicaConfig.Sink.CloudStorageConfig)
 	require.Equal(t, "1m0s", *cfg.ReplicaConfig.Sink.CloudStorageConfig.FlushInterval)
 	require.Equal(t, 64*1024*1024, *cfg.ReplicaConfig.Sink.CloudStorageConfig.FileSize)
-	require.True(t, *cfg.ReplicaConfig.Sink.CloudStorageConfig.OutputColumnID)
 	require.NotSame(t, storageURI, sinkURI)
 	require.Empty(t, storageURI.Query().Get("protocol"))
 }

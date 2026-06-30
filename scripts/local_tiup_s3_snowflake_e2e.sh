@@ -172,7 +172,7 @@ rules = ['$SOURCE_DB.*']
 [sink]
 protocol = 'csv'
 date-separator = 'day'
-enable-partition-separator = true
+enable-partition-separator = false
 
 [sink.csv]
 include-commit-ts = true

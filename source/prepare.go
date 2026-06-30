@@ -7,13 +7,14 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+	"github.com/pingcap/log"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	cloudapi "github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 	"github.com/tidbcloud/tidb2snowflake/source/op"
 	"github.com/tidbcloud/tidb2snowflake/source/storage"
 	"github.com/tidbcloud/tidb2snowflake/source/tidbcloud"
+	"go.uber.org/zap"
 )
 
 type Request struct {
@@ -29,14 +30,15 @@ type Request struct {
 	TiDBCloudHost           string
 	TiCDCAddress            string
 	SnapshotConcurrency     int
+	SnapshotCSVNullValue    string
 	Tables                  []string
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int
 	SnapshotCompression     string
 
-	Credential  *credentials.Value
-	StoragePath string
-	StorageURI  *url.URL
+	Credential   *credentials.Value
+	SnapshotURI  *url.URL
+	IncrementURI *url.URL
 }
 
 type runner interface {
@@ -44,10 +46,13 @@ type runner interface {
 	EnsureChangefeed(context.Context) error
 }
 
-func Prepare(ctx context.Context, request Request, store storeapi.Storage, state state.Manager) error {
-	if request.PrepareSnapshot || request.PrepareChangefeed {
-		if request.StorageURI == nil {
-			return errors.New("storage URI is required to prepare source")
+func Prepare(ctx context.Context, request Request, store *storage.Storage, state state.Manager) error {
+	if request.UseOPSource {
+		if request.PrepareSnapshot && request.SnapshotURI == nil {
+			return errors.New("snapshot URI is required to prepare OP snapshot")
+		}
+		if request.PrepareChangefeed && request.IncrementURI == nil {
+			return errors.New("increment URI is required to prepare OP changefeed")
 		}
 	}
 	runner := newRunner(request, store, state)
@@ -67,7 +72,7 @@ func Prepare(ctx context.Context, request Request, store storeapi.Storage, state
 	return nil
 }
 
-func newRunner(request Request, store storeapi.Storage, state state.Manager) runner {
+func newRunner(request Request, store *storage.Storage, state state.Manager) runner {
 	if request.UseOPSource {
 		return op.NewRunner(request.opConfig(), store, state)
 	}
@@ -79,23 +84,26 @@ func (request Request) opConfig() op.Config {
 		TiDB:                    request.TiDB,
 		TiCDCAddress:            request.TiCDCAddress,
 		SnapshotConcurrency:     request.SnapshotConcurrency,
+		SnapshotCSVNullValue:    request.SnapshotCSVNullValue,
 		Tables:                  request.Tables,
 		ChangefeedFlushInterval: request.ChangefeedFlushInterval,
 		ChangefeedFileSizeMiB:   request.ChangefeedFileSizeMiB,
 		SnapshotCompression:     request.SnapshotCompression,
 		SnapshotTSO:             request.SnapshotTSO,
-		SnapshotURI:             request.StorageURI.JoinPath(storage.SnapshotDirName),
-		IncrementURI:            request.StorageURI.JoinPath(storage.IncrementDirName),
+		SnapshotURI:             request.SnapshotURI,
+		IncrementURI:            request.IncrementURI,
 	}
 }
 
 func (request Request) tidbCloudConfig() tidbcloud.Config {
 	var compression cloudapi.ExportCompression
 	switch request.SnapshotCompression {
+	case "none":
+		compression = cloudapi.ExportCompressionNone
 	case "gzip":
 		compression = cloudapi.ExportCompressionGzip
 	default:
-		compression = cloudapi.ExportCompressionNone
+		log.Panic("unknown snapshot compression", zap.String("compression", request.SnapshotCompression))
 	}
 	return tidbcloud.Config{
 		ClusterID:               request.TiDBCloudClusterID,
@@ -108,6 +116,5 @@ func (request Request) tidbCloudConfig() tidbcloud.Config {
 		SnapshotCompression:     compression,
 		SnapshotTSO:             request.SnapshotTSO,
 		Credential:              request.Credential,
-		StoragePath:             request.StoragePath,
 	}
 }

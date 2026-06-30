@@ -91,26 +91,25 @@ func checkLiveDDL(db *sql.DB) {
 		(1, 'drop', 'rename', 1, 'v', 1.23, 'filled', 'v1')`)
 
 	tableName := `"` + dbName + "." + ddlTable + `"`
-	aliases := map[string]string{}
-	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" ADD COLUMN c_added_nullable VARCHAR(64) NULL",
+	expectDDL(db, "ALTER TABLE "+dbName+"."+ddlTable+" ADD COLUMN c_added_nullable VARCHAR(64) NULL",
 		"ALTER TABLE "+tableName+" ADD COLUMN \"c_added_nullable\" VARCHAR(64);")
-	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" ADD COLUMN c_added_not_null_default INT NOT NULL DEFAULT 7",
+	expectDDL(db, "ALTER TABLE "+dbName+"."+ddlTable+" ADD COLUMN c_added_not_null_default INT NOT NULL DEFAULT 7",
 		"ALTER TABLE "+tableName+" ADD COLUMN \"c_added_not_null_default\" NUMBER NOT NULL DEFAULT 7;")
-	expectDDL(db, aliases, map[string]string{"c_renamed": "c_rename_me"}, "ALTER TABLE "+dbName+"."+ddlTable+" RENAME COLUMN c_rename_me TO c_renamed",
+	expectDDL(db, "ALTER TABLE "+dbName+"."+ddlTable+" RENAME COLUMN c_rename_me TO c_renamed",
 		"ALTER TABLE "+tableName+" RENAME COLUMN \"c_rename_me\" TO \"c_renamed\";")
-	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_widen_int BIGINT NULL",
+	expectDDL(db, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_widen_int BIGINT NULL",
 		"ALTER TABLE "+tableName+" MODIFY COLUMN \"c_widen_int\" NUMBER;")
-	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_widen_varchar VARCHAR(128) NULL",
+	expectDDL(db, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_widen_varchar VARCHAR(128) NULL",
 		"ALTER TABLE "+tableName+" MODIFY COLUMN \"c_widen_varchar\" VARCHAR(128);")
-	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_widen_decimal DECIMAL(20, 6) NULL",
+	expectDDL(db, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_widen_decimal DECIMAL(20, 6) NULL",
 		"ALTER TABLE "+tableName+" MODIFY COLUMN \"c_widen_decimal\" NUMBER(20, 6);")
-	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_nullable VARCHAR(64) NOT NULL",
+	expectDDL(db, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_nullable VARCHAR(64) NOT NULL",
 		"ALTER TABLE "+tableName+" MODIFY COLUMN \"c_nullable\" SET NOT NULL;")
-	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_nullable VARCHAR(64) NULL",
+	expectDDL(db, "ALTER TABLE "+dbName+"."+ddlTable+" MODIFY COLUMN c_nullable VARCHAR(64) NULL",
 		"ALTER TABLE "+tableName+" MODIFY COLUMN \"c_nullable\" DROP NOT NULL;")
-	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" ALTER COLUMN c_default DROP DEFAULT",
+	expectDDL(db, "ALTER TABLE "+dbName+"."+ddlTable+" ALTER COLUMN c_default DROP DEFAULT",
 		"ALTER TABLE "+tableName+" MODIFY COLUMN \"c_default\" DROP DEFAULT;")
-	expectDDL(db, aliases, nil, "ALTER TABLE "+dbName+"."+ddlTable+" DROP COLUMN c_drop_me",
+	expectDDL(db, "ALTER TABLE "+dbName+"."+ddlTable+" DROP COLUMN c_drop_me",
 		"ALTER TABLE "+tableName+" DROP COLUMN \"c_drop_me\";")
 }
 
@@ -120,28 +119,13 @@ func exec(db *sql.DB, query string) {
 	}
 }
 
-func expectDDL(db *sql.DB, aliases map[string]string, newAliases map[string]string, query string, expected ...string) {
-	prev := tableSchemaWithIDs(db, aliases)
+func expectDDL(db *sql.DB, query string, expected ...string) {
+	prev := tableSchema(db, ddlTable)
 	exec(db, query)
-	for name, id := range newAliases {
-		aliases[name] = id
-	}
-	next := tableSchemaWithIDs(db, aliases)
-	got, err := snowflake.GenDDLViaMetaDiff(prev, next, model.ActionNone)
+	next := tableSchema(db, ddlTable)
+	got, err := snowflake.GenDDLViaTiDBDDL(prev, next, model.ActionNone, query)
 	must(err)
 	assertElements(got, expected)
-}
-
-func tableSchemaWithIDs(db *sql.DB, aliases map[string]string) *table.Meta {
-	meta := tableSchema(db, ddlTable)
-	for i := range meta.Columns {
-		if id, ok := aliases[meta.Columns[i].Name]; ok {
-			meta.Columns[i].ID = id
-		} else {
-			meta.Columns[i].ID = meta.Columns[i].Name
-		}
-	}
-	return meta
 }
 
 func tableSchema(db *sql.DB, tableName string) *table.Meta {
@@ -177,7 +161,7 @@ func checkSyntheticTableDDL() {
 			want: []string{"DROP SCHEMA \"s_drop\""},
 		},
 	} {
-		got, err := snowflake.GenDDLViaMetaDiff(nil, table.FromSchemaFile(tc.def), model.ActionType(tc.def.Type))
+		got, err := snowflake.GenDDLViaTiDBDDL(nil, table.FromSchemaFile(tc.def), model.ActionType(tc.def.Type), "")
 		must(err)
 		assertElements(got, tc.want)
 	}

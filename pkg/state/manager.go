@@ -30,17 +30,14 @@ type manager struct {
 }
 
 func Open(ctx context.Context, store storeapi.Storage, tables []string) (Manager, error) {
-	if store == nil {
-		return nil, errors.New("state storage is nil")
-	}
 	m := &manager{
 		store:  store,
 		tables: append([]string(nil), tables...),
 	}
 
-	exists, err := store.FileExists(ctx, FileName)
+	exists, err := store.FileExists(ctx, stateFileName)
 	if err != nil {
-		return nil, errors.Annotatef(err, "check state file %s", FileName)
+		return nil, errors.Annotatef(err, "check state file %s", stateFileName)
 	}
 	if !exists {
 		m.state = newState(tables)
@@ -50,13 +47,13 @@ func Open(ctx context.Context, store storeapi.Storage, tables []string) (Manager
 		return m, nil
 	}
 
-	data, err := store.ReadFile(ctx, FileName)
+	data, err := store.ReadFile(ctx, stateFileName)
 	if err != nil {
-		return nil, errors.Annotatef(err, "read state file %s", FileName)
+		return nil, errors.Annotatef(err, "read state file %s", stateFileName)
 	}
 	st, err := decodeState(data)
 	if err != nil {
-		return nil, errors.Annotatef(err, "decode state file %s", FileName)
+		return nil, errors.Annotatef(err, "decode state file %s", stateFileName)
 	}
 	changed := ensureConfiguredTables(&st, tables)
 	if err := validateState(st, tables); err != nil {
@@ -193,8 +190,8 @@ func (m *manager) upload(ctx context.Context, st State) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	if err := m.store.WriteFile(ctx, FileName, data); err != nil {
-		return errors.Annotatef(err, "write state file %s", FileName)
+	if err := m.store.WriteFile(ctx, stateFileName, data); err != nil {
+		return errors.Annotatef(err, "write state file %s", stateFileName)
 	}
 	return nil
 }

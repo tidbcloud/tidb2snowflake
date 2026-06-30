@@ -32,6 +32,7 @@ func TestNewOptionDefaults(t *testing.T) {
 	require.Equal(t, 60*time.Second, opt.ChangefeedFlushInterval)
 	require.Equal(t, 64, opt.ChangefeedFileSizeMiB)
 	require.Equal(t, snapshotCompressionNone, opt.SnapshotCompression)
+	require.Equal(t, snapshotCSVNullValue, opt.SnapshotCSVNullValue)
 	require.Equal(t, sourceModeTiDBCloud, opt.SourceMode)
 	require.Equal(t, runModeFull, opt.Mode)
 	require.Empty(t, opt.SnapshotTSO)
@@ -63,6 +64,7 @@ func TestValidateConfig(t *testing.T) {
 	require.Equal(t, sourceModeOP, opt.SourceMode)
 	require.Equal(t, snapshotCompressionGzip, opt.SnapshotCompression)
 	require.Equal(t, 8, opt.SnapshotConcurrency)
+	require.Equal(t, snapshotCSVNullValue, opt.SnapshotCSVNullValue)
 
 	opt = &Option{
 		SourceMode:          sourceModeTiDBCloud,

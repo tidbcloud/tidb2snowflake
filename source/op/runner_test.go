@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
@@ -20,7 +19,7 @@ import (
 func TestPrepareFullUsesSnapshotMetadataForChangefeedStart(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: root}).String())
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: root})
 	require.NoError(t, err)
 	defer store.Close()
 	manager := newTestStateManager(t, ctx, store)
@@ -73,7 +72,7 @@ func TestPrepareFullUsesSnapshotMetadataForChangefeedStart(t *testing.T) {
 
 func TestEnsureSnapshotSkipsWhenSnapshotTSOExists(t *testing.T) {
 	ctx := context.Background()
-	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
 	require.NoError(t, err)
 	defer store.Close()
 	manager := newTestStateManager(t, ctx, store)
@@ -86,7 +85,7 @@ func TestEnsureSnapshotSkipsWhenSnapshotTSOExists(t *testing.T) {
 
 func TestCreateChangefeedRequiresSnapshotTSO(t *testing.T) {
 	ctx := context.Background()
-	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
 	require.NoError(t, err)
 	defer store.Close()
 	manager := newTestStateManager(t, ctx, store)

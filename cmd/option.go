@@ -9,9 +9,12 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/tidbcloud/tidb2snowflake/incremental"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
+	"github.com/tidbcloud/tidb2snowflake/snapshot"
 	"github.com/tidbcloud/tidb2snowflake/source"
+	"github.com/tidbcloud/tidb2snowflake/source/storage"
 	"go.uber.org/zap"
 )
 
@@ -29,6 +32,7 @@ const (
 const (
 	snapshotCompressionNone = "none"
 	snapshotCompressionGzip = "gzip"
+	snapshotCSVNullValue    = "\\N"
 )
 
 // Option contains the raw values accepted from the command line.
@@ -53,9 +57,9 @@ type Option struct {
 	SnapshotConcurrency int
 
 	SnowflakeAccountID string
-	SnowflakeWarehouse string
 	SnowflakeUser      string
 	SnowflakePass      string
+	SnowflakeWarehouse string
 	SnowflakeDatabase  string
 	SnowflakeSchema    string
 
@@ -66,6 +70,7 @@ type Option struct {
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int
 	SnapshotCompression     string
+	SnapshotCSVNullValue    string
 
 	SourceMode string
 
@@ -83,6 +88,7 @@ func NewOption() *Option {
 		ChangefeedFlushInterval: 60 * time.Second,
 		ChangefeedFileSizeMiB:   64,
 		SnapshotCompression:     snapshotCompressionNone,
+		SnapshotCSVNullValue:    snapshotCSVNullValue,
 		SourceMode:              sourceModeTiDBCloud,
 		Mode:                    runModeFull,
 	}
@@ -110,9 +116,10 @@ func (opt *Option) snowflakeConfig() *snowflake.Config {
 	}
 }
 
-func (opt *Option) PrepareRequest(
+func (opt *Option) prepareRequest(
 	cred *credentials.Value,
-	storageURI *url.URL,
+	snapshotURI *url.URL,
+	incrementURI *url.URL,
 ) source.Request {
 	return source.Request{
 		PrepareSnapshot:   opt.Mode != runModeIncrementalOnly,
@@ -126,8 +133,9 @@ func (opt *Option) PrepareRequest(
 		TiDBCloudPrivateKey: opt.TiDBCloudPrivateKey,
 		TiDBCloudHost:       opt.TiDBCloudHost,
 
-		TiCDCAddress:        opt.TiCDCAddress,
-		SnapshotConcurrency: opt.SnapshotConcurrency,
+		TiCDCAddress:         opt.TiCDCAddress,
+		SnapshotConcurrency:  opt.SnapshotConcurrency,
+		SnapshotCSVNullValue: opt.SnapshotCSVNullValue,
 
 		Tables: opt.Tables,
 
@@ -136,10 +144,52 @@ func (opt *Option) PrepareRequest(
 
 		SnapshotCompression: opt.SnapshotCompression,
 
-		Credential:  cred,
-		StoragePath: opt.StoragePath,
-		StorageURI:  storageURI,
+		Credential:   cred,
+		SnapshotURI:  snapshotURI,
+		IncrementURI: incrementURI,
 	}
+}
+
+type loadRequest struct {
+	LoadSnapshot    bool
+	LoadIncremental bool
+
+	Snapshot    snapshot.Config
+	Incremental incremental.Config
+}
+
+func (opt *Option) loadRequest(
+	cred *credentials.Value,
+	storageURI *url.URL,
+) loadRequest {
+	snowflakeCfg := opt.snowflakeConfig()
+	return loadRequest{
+		LoadSnapshot:    opt.Mode != runModeIncrementalOnly,
+		LoadIncremental: opt.Mode != runModeSnapshotOnly,
+		Snapshot: snapshot.Config{
+			Snowflake:   snowflakeCfg,
+			Credential:  cred,
+			Tables:      opt.Tables,
+			StorageURI:  storageURI,
+			StorageDir:  storage.SnapshotDirName,
+			Compression: opt.SnapshotCompression,
+		},
+		Incremental: incremental.Config{
+			Snowflake:    snowflakeCfg,
+			Credential:   cred,
+			Tables:       opt.Tables,
+			StorageURI:   storageURI,
+			StorageDir:   storage.IncrementDirName,
+			ScanInterval: opt.ChangefeedFlushInterval / 5,
+		},
+	}
+}
+
+func (req loadRequest) tableCount() int {
+	if req.LoadSnapshot {
+		return len(req.Snapshot.Tables)
+	}
+	return len(req.Incremental.Tables)
 }
 
 func (opt *Option) adjust() {
@@ -182,6 +232,9 @@ func (opt *Option) adjust() {
 	case sourceModeOP:
 		if opt.SnapshotConcurrency <= 0 {
 			opt.SnapshotConcurrency = defaults.SnapshotConcurrency
+		}
+		if opt.SnapshotCSVNullValue == "" {
+			opt.SnapshotCSVNullValue = defaults.SnapshotCSVNullValue
 		}
 	}
 

@@ -6,47 +6,25 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pingcap/log"
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
+	"go.uber.org/zap"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 )
 
-func CreateExternalStage(db *sql.DB, stageName, s3WorkspaceURL string, cred *credentials.Value) error {
-	sql := fmt.Sprintf(`
-CREATE OR REPLACE STAGE %s
-URL = '%s'
-CREDENTIALS = (AWS_KEY_ID = '%s' AWS_SECRET_KEY = '%s' AWS_TOKEN = '%s')
-FILE_FORMAT = (type = 'CSV' EMPTY_FIELD_AS_NULL = FALSE NULL_IF=('\\N') FIELD_OPTIONALLY_ENCLOSED_BY='"' ESCAPE='\\' BINARY_FORMAT = 'HEX');
-	`, quoteIdent(stageName), escapeString(s3WorkspaceURL), escapeString(cred.AccessKeyID), escapeString(cred.SecretAccessKey), escapeString(cred.SessionToken))
+func createExternalStage(db *sql.DB, stageName, s3WorkspaceURL string, cred *credentials.Value) error {
+	sql := fmt.Sprintf(`CREATE OR REPLACE STAGE %s URL = '%s' CREDENTIALS = (AWS_KEY_ID = '%s' AWS_SECRET_KEY = '%s' AWS_TOKEN = '%s')
+		FILE_FORMAT = (type = 'CSV' EMPTY_FIELD_AS_NULL = FALSE NULL_IF=('\\N') FIELD_OPTIONALLY_ENCLOSED_BY='"' ESCAPE='\\' BINARY_FORMAT = 'HEX');`,
+		stageName, escapeString(s3WorkspaceURL), escapeString(cred.AccessKeyID), escapeString(cred.SecretAccessKey), escapeString(cred.SessionToken))
 	_, err := db.Exec(sql)
 	return err
 }
 
-func DropStage(db *sql.DB, stageName string) error {
-	sql := fmt.Sprintf(`
-DROP STAGE IF EXISTS %s;
-`, quoteIdent(stageName))
+func dropStage(db *sql.DB, stageName string) error {
+	sql := fmt.Sprintf(`DROP STAGE IF EXISTS %s;`, stageName)
 	_, err := db.Exec(sql)
 	return err
-}
-
-func LoadSnapshotFromStage(db *sql.DB, targetTable, stageName, filePath string, compression ...string) error {
-	fileFormat := snapshotFileFormat(compressionValue(compression))
-	sql := fmt.Sprintf(`
-COPY INTO %s
-FROM @%s
-FILES = ('%s')
-FILE_FORMAT = (%s);
-`, quoteIdent(targetTable), quoteIdent(stageName), escapeString(filePath), fileFormat)
-	_, err := db.Exec(sql)
-	return err
-}
-
-func compressionValue(compression []string) string {
-	if len(compression) == 0 || compression[0] == "" {
-		return "none"
-	}
-	return compression[0]
 }
 
 func snapshotFileFormat(compression string) string {
@@ -58,11 +36,13 @@ func snapshotFileFormat(compression string) string {
 		`ESCAPE='\\'`,
 		"BINARY_FORMAT = 'UTF8'",
 	}
-	switch strings.ToLower(compression) {
+	switch compression {
+	case "none":
+		parts = append(parts, "COMPRESSION = 'NONE'")
 	case "gzip":
 		parts = append(parts, "COMPRESSION = 'GZIP'")
 	default:
-		parts = append(parts, "COMPRESSION = 'NONE'")
+		log.Panic("unknown snapshot compression", zap.String("compression", compression))
 	}
 	return strings.Join(parts, " ")
 }
@@ -119,7 +99,7 @@ func escapeString(s string) string {
 	return sb.String()
 }
 
-func GetDefaultString(val any) string {
+func defaultString(val any) string {
 	if expr, ok := val.(defaultSQLExpression); ok {
 		return expr.SQLExpression()
 	}
@@ -130,31 +110,23 @@ func GetDefaultString(val any) string {
 	return fmt.Sprintf("%v", val)
 }
 
-func buildCreateSchemaSQL(tableSchema *table.Meta) string {
-	columns := make([]string, 0, len(tableSchema.Columns))
+func buildCreateTableSQL(tableSchema *table.Meta) string {
+	defs := make([]string, 0, len(tableSchema.Columns)+1)
 	for _, column := range tableSchema.Columns {
-		columns = append(columns, buildColumn(column))
+		defs = append(defs, buildColumn(column))
 	}
-
-	sqlRows := make([]string, 0, len(columns)+1)
-	sqlRows = append(sqlRows, columns...)
 	if len(tableSchema.PrimaryKeys) > 0 {
-		sqlRows = append(sqlRows, fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(quoteIdents(tableSchema.PrimaryKeys), ", ")))
-	}
-	// Add idents
-	for i := 0; i < len(sqlRows); i++ {
-		sqlRows[i] = fmt.Sprintf("    %s", sqlRows[i])
+		defs = append(defs, fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(quoteIdents(tableSchema.PrimaryKeys), ", ")))
 	}
 
-	sql := []string{}
-	sql = append(sql, fmt.Sprintf(`CREATE OR REPLACE TABLE %s (`, quoteIdent(tableSchema.SnowflakeTableName())))
-	sql = append(sql, strings.Join(sqlRows, ",\n"))
-	sql = append(sql, ")")
-
-	return strings.Join(sql, "\n")
+	return fmt.Sprintf(
+		"CREATE OR REPLACE TABLE %s (%s)",
+		quoteIdent(tableSchema.SnowflakeTableName()),
+		strings.Join(defs, ", "),
+	)
 }
 
-func GenMergeInto(tableMeta *table.Meta, filePath string, stageName string, highWatermark uint64) string {
+func genMergeIntoSQL(tableMeta *table.Meta, filePath string, stageName string, highWatermark uint64) string {
 	selectStat := make([]string, 0, len(tableMeta.Columns)+1)
 	selectStat = append(selectStat, `$1 AS "METADATA$FLAG"`)
 	for i, col := range tableMeta.Columns {
@@ -191,7 +163,7 @@ func GenMergeInto(tableMeta *table.Meta, filePath string, stageName string, high
 	}
 
 	// TODO: Remove QUALIFY row_number() after cdc support merge dml or snowflake support deterministic merge
-	stageFile := fmt.Sprintf("@%s/%s", quoteIdent(stageName), escapeString(filePath))
+	stageFile := fmt.Sprintf("@%s/%s", stageName, escapeString(filePath))
 	mergeQuery := fmt.Sprintf(
 		`MERGE INTO %s AS T USING
 		(
@@ -221,8 +193,8 @@ func GenMergeInto(tableMeta *table.Meta, filePath string, stageName string, high
 	return mergeQuery
 }
 
-func GenCountCommitTSAfter(filePath string, stageName string, highWatermark uint64) string {
-	stageFile := fmt.Sprintf("@%s/%s", quoteIdent(stageName), escapeString(filePath))
+func genCountCommitTsAfter(filePath string, stageName string, highWatermark uint64) string {
+	stageFile := fmt.Sprintf("@%s/%s", stageName, escapeString(filePath))
 	return fmt.Sprintf(`SELECT COUNT(*) FROM (
 	SELECT 1
 	FROM '%s'

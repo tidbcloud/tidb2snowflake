@@ -12,6 +12,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	SnapshotStageName  = "snapshot_external"
+	IncrementStageName = "increment_external"
+)
+
 type Connector struct {
 	// db is the connection to snowflake.
 	db *sql.DB
@@ -25,13 +30,16 @@ func NewConnector(sfConfig *Config, stageName string, storageURI *url.URL, crede
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	defer func() {
+		if err != nil {
+			_ = db.Close()
+		}
+	}()
+
 	// create stage
 	stageUrl := fmt.Sprintf("%s://%s%s", storageURI.Scheme, storageURI.Host, storageURI.Path)
-	log.Info("creating Snowflake external stage",
-		zap.String("stage", stageName),
-		zap.String("url", stageUrl))
-	if err := CreateExternalStage(db, stageName, stageUrl, credentials); err != nil {
-		db.Close()
+	if err := createExternalStage(db, stageName, stageUrl, credentials); err != nil {
+		log.Error("snowflake connector failed on create external stage", zap.String("stageUrl", stageUrl), zap.Error(err))
 		return nil, errors.Annotate(err, "Failed to create stage")
 	}
 
@@ -40,9 +48,8 @@ func NewConnector(sfConfig *Config, stageName string, storageURI *url.URL, crede
 		stageName:            stageName,
 		stageFileCompression: stageFileCompression,
 	}
-	log.Info("Snowflake connector initialized",
-		zap.String("stage", stageName),
-		zap.String("stageFileCompression", sc.stageFileCompression))
+	log.Info("Snowflake connector initialized", zap.String("stage", stageName),
+		zap.String("stageUrl", stageUrl), zap.String("compression", sc.stageFileCompression))
 	return sc, nil
 }
 
@@ -51,11 +58,11 @@ func (sc *Connector) ExecDDL(ddl string) error {
 	return errors.Trace(err)
 }
 
-func (sc *Connector) CopyTableSchema(tableSchema *table.Meta) error {
-	createTableQuery := buildCreateSchemaSQL(tableSchema)
-	_, err := sc.db.Exec(createTableQuery)
+func (sc *Connector) CreateTable(tableSchema *table.Meta) error {
+	createTableSQL := buildCreateTableSQL(tableSchema)
+	_, err := sc.db.Exec(createTableSQL)
 	if err != nil {
-		log.Error("table in Snowflake failed", zap.String("query", createTableQuery), zap.Error(err))
+		log.Error("table in Snowflake failed", zap.String("query", createTableSQL), zap.Error(err))
 		return errors.Trace(err)
 	}
 
@@ -66,13 +73,13 @@ func (sc *Connector) CopyTableSchema(tableSchema *table.Meta) error {
 }
 
 func (sc *Connector) LoadSnapshot(targetTable, filePath string) error {
-	if err := LoadSnapshotFromStage(sc.db, targetTable, sc.stageName, filePath, sc.stageFileCompression); err != nil {
+	fileFormat := snapshotFileFormat(sc.stageFileCompression)
+	query := fmt.Sprintf(`COPY INTO %s FROM @%s FILES = ('%s') FILE_FORMAT = (%s);`,
+		quoteIdent(targetTable), sc.stageName, escapeString(filePath), fileFormat)
+	_, err := sc.db.Exec(query)
+	if err != nil {
 		return errors.Trace(err)
 	}
-	log.Info("Successfully loaded snapshot file",
-		zap.String("table", targetTable),
-		zap.String("file", filePath),
-		zap.String("stage", sc.stageName))
 	return nil
 }
 
@@ -81,22 +88,21 @@ func (sc *Connector) LoadIncrement(tableMeta *table.Meta, filePath string, highW
 		return false, errors.Errorf("table %s has no primary key", tableMeta.Table)
 	}
 	// merge staged file into table
-	mergeQuery := GenMergeInto(tableMeta, filePath, sc.stageName, highWatermark)
+	mergeQuery := genMergeIntoSQL(tableMeta, filePath, sc.stageName, highWatermark)
 	_, err := sc.db.Exec(mergeQuery)
 	if err != nil {
 		return false, errors.Trace(err)
 	}
-	fullyConsumed, err := sc.incrementFileFullyConsumed(filePath, highWatermark)
+	fullyConsumed, err := sc.isFullyConsumed(filePath, highWatermark)
 	if err != nil {
 		return false, errors.Trace(err)
 	}
-	log.Info("Successfully merge file", zap.String("file", filePath))
 	return fullyConsumed, nil
 }
 
-func (sc *Connector) incrementFileFullyConsumed(filePath string, highWatermark uint64) (bool, error) {
+func (sc *Connector) isFullyConsumed(filePath string, highWatermark uint64) (bool, error) {
 	var count int
-	query := GenCountCommitTSAfter(filePath, sc.stageName, highWatermark)
+	query := genCountCommitTsAfter(filePath, sc.stageName, highWatermark)
 	if err := sc.db.QueryRow(query).Scan(&count); err != nil {
 		return false, errors.Trace(err)
 	}
@@ -105,7 +111,7 @@ func (sc *Connector) incrementFileFullyConsumed(filePath string, highWatermark u
 
 func (sc *Connector) Close() {
 	// drop stage
-	if err := DropStage(sc.db, sc.stageName); err != nil {
+	if err := dropStage(sc.db, sc.stageName); err != nil {
 		log.Error("fail to drop stage", zap.Error(err))
 	} else {
 		log.Info("Snowflake external stage dropped", zap.String("stage", sc.stageName))

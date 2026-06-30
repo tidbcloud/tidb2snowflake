@@ -26,7 +26,7 @@ func NewSnowflakeCmd() *cobra.Command {
 				return errors.Trace(err)
 			}
 			ctx := context.Background()
-			if err := Run(ctx, opt); err != nil {
+			if err := run(ctx, opt); err != nil {
 				log.Error("replication failed", zap.Error(err))
 				return err
 			}
@@ -60,9 +60,9 @@ func NewSnowflakeCmd() *cobra.Command {
 
 	// Snowflake
 	f.StringVar(&opt.SnowflakeAccountID, "snowflake.account-id", opt.SnowflakeAccountID, "Snowflake account id: <organization>-<account>")
-	f.StringVar(&opt.SnowflakeWarehouse, "snowflake.warehouse", opt.SnowflakeWarehouse, "Snowflake warehouse")
 	f.StringVar(&opt.SnowflakeUser, "snowflake.user", opt.SnowflakeUser, "Snowflake user")
 	f.StringVar(&opt.SnowflakePass, "snowflake.pass", opt.SnowflakePass, "Snowflake password")
+	f.StringVar(&opt.SnowflakeWarehouse, "snowflake.warehouse", opt.SnowflakeWarehouse, "Snowflake warehouse")
 	f.StringVar(&opt.SnowflakeDatabase, "snowflake.database", opt.SnowflakeDatabase, "Snowflake database")
 	f.StringVar(&opt.SnowflakeSchema, "snowflake.schema", opt.SnowflakeSchema, "Snowflake schema")
 

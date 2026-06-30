@@ -90,17 +90,14 @@ func BuildChangefeedConfig(opts ChangefeedConfigOptions) (*ChangefeedConfig, err
 	sinkURI.RawQuery = values.Encode()
 
 	protocol := "csv"
-	dateSeparator := config.DateSeparatorDay.String()
 	replicaCfg := apiv2.GetDefaultReplicaConfig()
 	replicaCfg.Filter = &apiv2.FilterConfig{Rules: opts.Tables}
 	replicaCfg.Sink.Protocol = &protocol
 	replicaCfg.Sink.CSVConfig.IncludeCommitTs = true
 	replicaCfg.Sink.CSVConfig.BinaryEncodingMethod = config.BinaryEncodingHex
-	replicaCfg.Sink.DateSeparator = &dateSeparator
 	replicaCfg.Sink.CloudStorageConfig = &apiv2.CloudStorageConfig{
-		FlushInterval:  putil.AddressOf(flushInterval.String()),
-		FileSize:       putil.AddressOf(fileSizeBytes),
-		OutputColumnID: putil.AddressOf(true),
+		FlushInterval: putil.AddressOf(flushInterval.String()),
+		FileSize:      putil.AddressOf(fileSizeBytes),
 	}
 
 	return &ChangefeedConfig{

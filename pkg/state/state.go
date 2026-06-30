@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	Version  = 1
-	FileName = "replication-state.json"
+	Version       = 1
+	stateFileName = "replication-state.json"
 )
 
 type State struct {
@@ -118,7 +118,7 @@ func validateState(st State, tables []string) error {
 
 func validateDMLFileWatermarkScope(scope string) error {
 	parts := strings.Split(scope, "/")
-	if len(parts) != 4 {
+	if len(parts) != 3 {
 		return errors.Errorf("invalid scope %q", scope)
 	}
 	if _, err := strconv.ParseUint(parts[0], 10, 64); err != nil {

@@ -24,15 +24,16 @@ func TestEscapeString(t *testing.T) {
 	require.Equal(t, `a\'b\\c\"d\n`, escapeString("a'b\\c\"d\n"))
 }
 
-func TestLoadSnapshotFromStageEscapesFilePath(t *testing.T) {
+func TestLoadSnapshotEscapesFilePath(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
 
+	conn := &Connector{db: db, stageName: SnapshotStageName, stageFileCompression: "none"}
 	mock.ExpectExec(regexp.QuoteMeta(`FILES = ('dir/a\'b.csv')`)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	require.NoError(t, LoadSnapshotFromStage(db, "target", "stage", "dir/a'b.csv"))
+	require.NoError(t, conn.LoadSnapshot("target", "dir/a'b.csv"))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -46,18 +47,18 @@ func TestGenMergeIntoEscapesIdentifiersAndFilePath(t *testing.T) {
 		PrimaryKeys: []string{"id"},
 	}
 
-	got := GenMergeInto(meta, "dir/a'b.csv", `"stage`, 123)
+	got := genMergeIntoSQL(meta, "dir/a'b.csv", IncrementStageName, 123)
 
 	require.Contains(t, got, `MERGE INTO "db.""target" AS T`)
-	require.Contains(t, got, `FROM '@"""stage"/dir/a\'b.csv'`)
+	require.Contains(t, got, `FROM '@increment_external/dir/a\'b.csv'`)
 	require.Contains(t, got, `WHERE TO_NUMBER($4) <= 123`)
 	require.Contains(t, got, `T."id" = S."id"`)
 }
 
 func TestGenCountCommitTSAfter(t *testing.T) {
-	got := GenCountCommitTSAfter("dir/a'b.csv", `"stage`, 123)
+	got := genCountCommitTsAfter("dir/a'b.csv", IncrementStageName, 123)
 
-	require.Contains(t, got, `FROM '@"""stage"/dir/a\'b.csv'`)
+	require.Contains(t, got, `FROM '@increment_external/dir/a\'b.csv'`)
 	require.Contains(t, got, `WHERE TO_NUMBER($4) > 123`)
 	require.Contains(t, got, `LIMIT 1`)
 }
@@ -88,7 +89,7 @@ func TestLoadIncrementReturnsWhetherFileFullyConsumed(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGenCreateSchemaFromSnapshotSchema(t *testing.T) {
+func TestBuildCreateTableSQLFromSnapshotSchema(t *testing.T) {
 	tableSchema := table.BuildSchema("test", "bank0", `
 CREATE TABLE `+"`bank0`"+` (
   `+"`id`"+` bigint NOT NULL,
@@ -96,13 +97,7 @@ CREATE TABLE `+"`bank0`"+` (
   `+"`name`"+` varchar(30) DEFAULT 'Z',
   `+"`created_at`"+` datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`+"`id`"+`)
-);`)
-	got := buildCreateSchemaSQL(tableSchema)
-	require.Equal(t, `CREATE OR REPLACE TABLE "test.bank0" (
-    "id" NUMBER NOT NULL,
-    "balance" NUMBER(10, 0),
-    "name" VARCHAR(30) DEFAULT 'Z',
-    "created_at" DATETIME(0) DEFAULT CURRENT_TIMESTAMP(),
-    PRIMARY KEY ("id")
-)`, got)
+	);`)
+	got := buildCreateTableSQL(tableSchema)
+	require.Equal(t, `CREATE OR REPLACE TABLE "test.bank0" ("id" NUMBER NOT NULL, "balance" NUMBER(10, 0), "name" VARCHAR(30) DEFAULT 'Z', "created_at" DATETIME(0) DEFAULT CURRENT_TIMESTAMP(), PRIMARY KEY ("id"))`, got)
 }

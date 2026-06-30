@@ -9,7 +9,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tidbcloud/tidb2snowflake/pkg/dumpling"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
@@ -28,19 +27,18 @@ type Config struct {
 	SnapshotCompression     tidbcloud.ExportCompression
 	SnapshotTSO             string
 
-	Credential  *credentials.Value
-	StoragePath string
+	Credential *credentials.Value
 }
 
 type Runner struct {
 	cfg    Config
 	client *tidbcloud.Client
 
-	store storeapi.Storage
+	store *storage.Storage
 	state state.Manager
 }
 
-func NewRunner(cfg Config, store storeapi.Storage, state state.Manager) *Runner {
+func NewRunner(cfg Config, store *storage.Storage, state state.Manager) *Runner {
 	return &Runner{
 		cfg:   cfg,
 		store: store,
@@ -56,7 +54,7 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 		return nil
 	}
 
-	snapshotExists, err := storage.DirHasObjects(ctx, r.store, storage.SnapshotDirName)
+	snapshotExists, err := r.store.DirHasObjects(ctx, storage.SnapshotDirName)
 	if err != nil {
 		return errors.Annotatef(err, "check %s directory", storage.SnapshotDirName)
 	}
@@ -112,7 +110,7 @@ func (r *Runner) EnsureChangefeed(ctx context.Context) error {
 		return nil
 	}
 
-	exists, err := storage.DirHasObjects(ctx, r.store, storage.IncrementDirName)
+	exists, err := r.store.DirHasObjects(ctx, storage.IncrementDirName)
 	if err != nil {
 		return errors.Annotatef(err, "check %s directory", storage.IncrementDirName)
 	}
@@ -146,10 +144,7 @@ func (r *Runner) createExport(ctx context.Context) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	cleanSnapshotURI, err := storage.CleanSubURI(r.cfg.StoragePath, storage.SnapshotDirName)
-	if err != nil {
-		return "", "", errors.Trace(err)
-	}
+	cleanSnapshotURI := r.store.CleanSubURI(storage.SnapshotDirName)
 	req := buildExportRequest(r.cfg, cleanSnapshotURI, r.cfg.Credential, r.cfg.SnapshotTSO)
 	export, err := client.CreateExport(ctx, r.cfg.ClusterID, req)
 	if err != nil {
@@ -175,10 +170,7 @@ func (r *Runner) createChangefeed(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cleanIncrementURI, err := storage.CleanSubURI(r.cfg.StoragePath, storage.IncrementDirName)
-	if err != nil {
-		return "", errors.Trace(err)
-	}
+	cleanIncrementURI := r.store.CleanSubURI(storage.IncrementDirName)
 	snapshotTSO := r.state.Snapshot().Snapshot.TSO
 	if snapshotTSO == 0 {
 		return "", errors.New("snapshot.tso is required to create TiDB Cloud changefeed")
@@ -246,7 +238,6 @@ func buildChangefeedRequest(cfg Config, cleanIncrementURI string, cred *credenti
 				DateSeparator:     tidbcloud.DateSeparatorDay,
 				IntervalInSeconds: int(cfg.ChangefeedFlushInterval.Seconds()),
 				SizeInMiB:         cfg.ChangefeedFileSizeMiB,
-				OutputColumnID:    true,
 			},
 		},
 		Filter:        &tidbcloud.ChangefeedFilter{FilterRule: cfg.Tables, Mode: tidbcloud.TableModeForceSync},

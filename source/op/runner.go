@@ -7,7 +7,6 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tidbcloud/tidb2snowflake/pkg/dumpling"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
 	"github.com/tidbcloud/tidb2snowflake/pkg/ticdc"
@@ -20,6 +19,7 @@ type Config struct {
 	TiDB                    *tidb.Config
 	TiCDCAddress            string
 	SnapshotConcurrency     int
+	SnapshotCSVNullValue    string
 	Tables                  []string
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int
@@ -34,11 +34,11 @@ type Runner struct {
 	cfg    Config
 	client *ticdc.Client
 
-	store        storeapi.Storage
+	store        *storage.Storage
 	stateManager state.Manager
 }
 
-func NewRunner(cfg Config, store storeapi.Storage, state state.Manager) *Runner {
+func NewRunner(cfg Config, store *storage.Storage, state state.Manager) *Runner {
 	return &Runner{
 		cfg:          cfg,
 		store:        store,
@@ -54,7 +54,7 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 		return nil
 	}
 
-	exist, err := storage.DirHasObjects(ctx, r.store, storage.SnapshotDirName)
+	exist, err := r.store.DirHasObjects(ctx, storage.SnapshotDirName)
 	if err != nil {
 		return errors.Annotate(err, "check snapshot directory")
 	}
@@ -67,7 +67,7 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 			SnapshotTSO:  r.cfg.SnapshotTSO,
 			Tables:       r.cfg.Tables,
 			Compression:  r.cfg.SnapshotCompression,
-			CSVNullValue: "\\N",
+			CSVNullValue: r.cfg.SnapshotCSVNullValue,
 			OnProgress: func(dumpedRows, totalRows int64) {
 				log.Info("snapshot dumpling progress",
 					zap.Int64("dumpedRows", dumpedRows),
@@ -97,7 +97,7 @@ func (r *Runner) EnsureChangefeed(ctx context.Context) error {
 		return nil
 	}
 
-	exists, err := storage.DirHasObjects(ctx, r.store, storage.IncrementDirName)
+	exists, err := r.store.DirHasObjects(ctx, storage.IncrementDirName)
 	if err != nil {
 		return errors.Annotatef(err, "check %s directory", storage.IncrementDirName)
 	}

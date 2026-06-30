@@ -35,7 +35,7 @@ func TestOpenCreatesStateFile(t *testing.T) {
 		DDLTableVersionWatermark: 0,
 	}, st.Incremental.Tables["db2.t2"])
 
-	data, err := store.ReadFile(ctx, FileName)
+	data, err := store.ReadFile(ctx, stateFileName)
 	require.NoError(t, err)
 	require.True(t, json.Valid(data))
 }
@@ -43,7 +43,7 @@ func TestOpenCreatesStateFile(t *testing.T) {
 func TestOpenRejectsMissingRequiredField(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	require.NoError(t, store.WriteFile(ctx, FileName, []byte(`{
+	require.NoError(t, store.WriteFile(ctx, stateFileName, []byte(`{
   "version": 1,
   "task_info": {
     "export_id": "",
@@ -66,7 +66,7 @@ func TestOpenRejectsMissingRequiredField(t *testing.T) {
 func TestOpenRejectsUnknownField(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	require.NoError(t, store.WriteFile(ctx, FileName, []byte(`{
+	require.NoError(t, store.WriteFile(ctx, stateFileName, []byte(`{
   "version": 1,
   "task_info": {
     "export_id": "",
@@ -91,7 +91,7 @@ func TestOpenRejectsUnknownField(t *testing.T) {
 func TestOpenAddsConfiguredTableEntries(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	require.NoError(t, store.WriteFile(ctx, FileName, []byte(`{
+	require.NoError(t, store.WriteFile(ctx, stateFileName, []byte(`{
   "version": 1,
   "task_info": {
     "export_id": "exp-1",
@@ -106,7 +106,7 @@ func TestOpenAddsConfiguredTableEntries(t *testing.T) {
     "tables": {
       "db1.t1": {
         "dml_file_watermarks": {
-          "42/0/2026-06-25/": 9
+          "42/0/2026-06-25": 9
         },
         "ddl_table_version_watermark": 42
       }
@@ -118,7 +118,7 @@ func TestOpenAddsConfiguredTableEntries(t *testing.T) {
 	require.NoError(t, err)
 
 	st := manager.Snapshot()
-	require.Equal(t, uint64(9), st.Incremental.Tables["db1.t1"].DMLFileWatermarks["42/0/2026-06-25/"])
+	require.Equal(t, uint64(9), st.Incremental.Tables["db1.t1"].DMLFileWatermarks["42/0/2026-06-25"])
 	require.Equal(t, uint64(42), st.Incremental.Tables["db1.t1"].DDLTableVersionWatermark)
 	require.Equal(t, TableState{
 		DMLFileWatermarks:        map[string]uint64{},
@@ -135,7 +135,7 @@ func TestStateMutationsPersist(t *testing.T) {
 	require.NoError(t, manager.SetExportID(ctx, "exp-1"))
 	require.NoError(t, manager.SetSnapshotTSO(ctx, 449))
 	require.NoError(t, manager.StartIncrementalScan(ctx, 500))
-	require.NoError(t, manager.SetDMLFileWatermark(ctx, "db.t", "42/0/2026-06-25/", 9))
+	require.NoError(t, manager.SetDMLFileWatermark(ctx, "db.t", "42/0/2026-06-25", 9))
 	require.NoError(t, manager.SetDDLTableVersionWatermark(ctx, "db.t", 42))
 	require.NoError(t, manager.MarkSnapshotFinished(ctx))
 	require.NoError(t, manager.FinishIncrementalScan(ctx, 500))
@@ -148,7 +148,7 @@ func TestStateMutationsPersist(t *testing.T) {
 	require.True(t, st.Snapshot.Finished)
 	require.Equal(t, uint64(500), st.Incremental.CheckpointTS)
 	require.Nil(t, st.Incremental.Scan)
-	require.Equal(t, uint64(9), st.Incremental.Tables["db.t"].DMLFileWatermarks["42/0/2026-06-25/"])
+	require.Equal(t, uint64(9), st.Incremental.Tables["db.t"].DMLFileWatermarks["42/0/2026-06-25"])
 	require.Equal(t, uint64(42), st.Incremental.Tables["db.t"].DDLTableVersionWatermark)
 }
 
@@ -162,7 +162,7 @@ func TestSnapshotReturnsDeepCopy(t *testing.T) {
 	snapshot.Snapshot.Finished = true
 	snapshot.Incremental.Scan = &ScanState{HighWatermark: 500}
 	tableState := snapshot.Incremental.Tables["db.t"]
-	tableState.DMLFileWatermarks["42/0/2026-06-25/"] = 9
+	tableState.DMLFileWatermarks["42/0/2026-06-25"] = 9
 	snapshot.Incremental.Tables["db.t"] = tableState
 
 	st := manager.Snapshot()
@@ -189,7 +189,7 @@ func TestWrittenStateContainsOnlyV1Fields(t *testing.T) {
 	_, err := Open(ctx, store, []string{"db.t"})
 	require.NoError(t, err)
 
-	data, err := store.ReadFile(ctx, FileName)
+	data, err := store.ReadFile(ctx, stateFileName)
 	require.NoError(t, err)
 
 	var doc map[string]any

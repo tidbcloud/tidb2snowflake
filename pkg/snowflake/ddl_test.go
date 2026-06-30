@@ -3,79 +3,112 @@ package snowflake
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 )
 
-func TestGenDDLViaMetaDiff(t *testing.T) {
-	prevMeta := &table.Meta{
-		Table:  "test_table",
-		Schema: "test_schema",
-		Columns: []table.Column{
-			{
-				ID:        "1",
-				Name:      "id",
-				Tp:        "int",
-				Precision: "11",
-			},
-			{
-				ID:   "2",
-				Name: "name",
-				Tp:   "varchar",
-			},
-			{
-				ID:   "3",
-				Name: "age",
-				Tp:   "int",
-			},
-			{
-				ID:   "4",
-				Name: "birth",
-				Tp:   "date",
-			},
-		},
-	}
-	nextMeta := table.FromSchemaFile(cloudstorage.SchemaFile{
-		Table:  "test_table",
-		Schema: "test_schema",
-		Columns: []cloudstorage.TableCol{
-			{
-				ID:        "5",
-				Name:      "id",
-				Tp:        "char",
-				Precision: "10",
-			},
-			{
-				ID:   "2",
-				Name: "color",
-				Tp:   "varchar",
-			},
-			{
-				ID:   "4",
-				Name: "birth",
-				Tp:   "date",
-			},
-			{
-				ID:        "6",
-				Name:      "gender",
-				Tp:        "varchar",
-				Precision: "10",
-			},
-		},
-	})
+func TestGenDDLViaTiDBDDLColumnDDL(t *testing.T) {
+	prevMeta := testMeta(
+		table.Column{Name: "id", Tp: "int", Precision: "11"},
+		table.Column{Name: "name", Tp: "varchar", Precision: "16"},
+		table.Column{Name: "age", Tp: "int", Precision: "11"},
+		table.Column{Name: "c_default", Tp: "varchar", Precision: "16", Default: "v1"},
+	)
 
-	expectedDDLs := []string{
-		`ALTER TABLE "test_schema.test_table" MODIFY COLUMN "id" CHAR(10);`,
-		`ALTER TABLE "test_schema.test_table" RENAME COLUMN "name" TO "color";`,
-		`ALTER TABLE "test_schema.test_table" DROP COLUMN "age";`,
-		`ALTER TABLE "test_schema.test_table" ADD COLUMN "gender" VARCHAR(10);`,
-	}
-
-	ddl, err := GenDDLViaMetaDiff(prevMeta, nextMeta, model.ActionNone)
+	ddl, err := GenDDLViaTiDBDDL(prevMeta, testMeta(
+		table.Column{Name: "id", Tp: "int", Precision: "11"},
+		table.Column{Name: "name", Tp: "varchar", Precision: "16"},
+		table.Column{Name: "age", Tp: "int", Precision: "11"},
+		table.Column{Name: "c_default", Tp: "varchar", Precision: "16", Default: "v1"},
+		table.Column{Name: "gender", Tp: "varchar", Precision: "10", Nullable: "false", Default: 7},
+	), model.ActionAddColumn, "ALTER TABLE test_schema.test_table ADD COLUMN gender VARCHAR(10) NOT NULL DEFAULT 7")
 	require.NoError(t, err)
-	require.ElementsMatch(t, expectedDDLs, ddl)
+	require.Equal(t, []string{`ALTER TABLE "test_schema.test_table" ADD COLUMN "gender" VARCHAR(10) NOT NULL DEFAULT 7;`}, ddl)
+
+	ddl, err = GenDDLViaTiDBDDL(prevMeta, testMeta(
+		table.Column{Name: "id", Tp: "int", Precision: "11"},
+		table.Column{Name: "name", Tp: "varchar", Precision: "16"},
+		table.Column{Name: "c_default", Tp: "varchar", Precision: "16", Default: "v1"},
+	), model.ActionDropColumn, "ALTER TABLE test_schema.test_table DROP COLUMN age")
+	require.NoError(t, err)
+	require.Equal(t, []string{`ALTER TABLE "test_schema.test_table" DROP COLUMN "age";`}, ddl)
+
+	ddl, err = GenDDLViaTiDBDDL(prevMeta, testMeta(
+		table.Column{Name: "id", Tp: "int", Precision: "11"},
+		table.Column{Name: "color", Tp: "varchar", Precision: "16"},
+		table.Column{Name: "age", Tp: "int", Precision: "11"},
+		table.Column{Name: "c_default", Tp: "varchar", Precision: "16", Default: "v1"},
+	), model.ActionModifyColumn, "ALTER TABLE test_schema.test_table RENAME COLUMN name TO color")
+	require.NoError(t, err)
+	require.Equal(t, []string{`ALTER TABLE "test_schema.test_table" RENAME COLUMN "name" TO "color";`}, ddl)
+
+	ddl, err = GenDDLViaTiDBDDL(prevMeta, testMeta(
+		table.Column{Name: "id", Tp: "char", Precision: "10"},
+		table.Column{Name: "name", Tp: "varchar", Precision: "16"},
+		table.Column{Name: "age", Tp: "int", Precision: "11"},
+		table.Column{Name: "c_default", Tp: "varchar", Precision: "16", Default: "v1"},
+	), model.ActionModifyColumn, "ALTER TABLE test_schema.test_table MODIFY COLUMN id CHAR(10)")
+	require.NoError(t, err)
+	require.Equal(t, []string{`ALTER TABLE "test_schema.test_table" MODIFY COLUMN "id" CHAR(10);`}, ddl)
+
+	ddl, err = GenDDLViaTiDBDDL(prevMeta, testMeta(
+		table.Column{Name: "id", Tp: "int", Precision: "11"},
+		table.Column{Name: "color", Tp: "varchar", Precision: "32"},
+		table.Column{Name: "age", Tp: "int", Precision: "11"},
+		table.Column{Name: "c_default", Tp: "varchar", Precision: "16", Default: "v1"},
+	), model.ActionModifyColumn, "ALTER TABLE test_schema.test_table CHANGE COLUMN name color VARCHAR(32)")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		`ALTER TABLE "test_schema.test_table" RENAME COLUMN "name" TO "color";`,
+		`ALTER TABLE "test_schema.test_table" MODIFY COLUMN "color" VARCHAR(32);`,
+	}, ddl)
+
+	ddl, err = GenDDLViaTiDBDDL(prevMeta, testMeta(
+		table.Column{Name: "id", Tp: "int", Precision: "11"},
+		table.Column{Name: "name", Tp: "varchar", Precision: "16"},
+		table.Column{Name: "age", Tp: "int", Precision: "11"},
+		table.Column{Name: "c_default", Tp: "varchar", Precision: "16"},
+	), model.ActionSetDefaultValue, "ALTER TABLE test_schema.test_table ALTER COLUMN c_default DROP DEFAULT")
+	require.NoError(t, err)
+	require.Equal(t, []string{`ALTER TABLE "test_schema.test_table" MODIFY COLUMN "c_default" DROP DEFAULT;`}, ddl)
+
+	ddl, err = GenDDLViaTiDBDDL(prevMeta, prevMeta, model.ActionAddIndex, "ALTER TABLE test_schema.test_table ADD INDEX idx_name(name)")
+	require.NoError(t, err)
+	require.Empty(t, ddl)
+}
+
+func TestGenDDLViaTiDBDDLTableDDL(t *testing.T) {
+	meta := testMeta()
+
+	ddl, err := GenDDLViaTiDBDDL(nil, meta, model.ActionTruncateTable, "")
+	require.NoError(t, err)
+	require.Equal(t, []string{`TRUNCATE TABLE "test_schema.test_table"`}, ddl)
+
+	ddl, err = GenDDLViaTiDBDDL(nil, meta, model.ActionDropTable, "")
+	require.NoError(t, err)
+	require.Equal(t, []string{`DROP TABLE "test_schema.test_table"`}, ddl)
+
+	ddl, err = GenDDLViaTiDBDDL(
+		&table.Meta{Schema: "test_schema", Table: "old_table"},
+		&table.Meta{Schema: "test_schema", Table: "new_table"},
+		model.ActionRenameTable,
+		"RENAME TABLE `old_table` TO `new_table`",
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{`ALTER TABLE "test_schema.old_table" RENAME TO "test_schema.new_table";`}, ddl)
+
+	ddl, err = GenDDLViaTiDBDDL(nil, &table.Meta{Schema: "test_schema"}, model.ActionDropSchema, "")
+	require.NoError(t, err)
+	require.Equal(t, []string{`DROP SCHEMA "test_schema"`}, ddl)
+}
+
+func testMeta(columns ...table.Column) *table.Meta {
+	return &table.Meta{
+		Schema:  "test_schema",
+		Table:   "test_table",
+		Columns: columns,
+	}
 }
 
 func TestGetSnowflakeTypeString_NewScalarMappings(t *testing.T) {

@@ -39,10 +39,10 @@ Snapshot 阶段读取对象存储里的 `snapshot/` 目录。
 ```go
 snowflake.NewConnector(
     cfg.Snowflake,
-    "snapshot_external",
+    snowflake.SnapshotStageName,
     cfg.StorageURI,
     cfg.Credential,
-    snowflake.WithStageFileCompression(cfg.Compression),
+    cfg.Compression,
 )
 ```
 
@@ -62,7 +62,7 @@ Snapshot load 自己执行 `COPY INTO` 时会再指定 file format。这里会�
 
 ## 建表流程
 
-`snapshot.Load` 先调用 `prepareSnapshotTables`。
+`snapshot.Load` 先调用 `createTables`。
 
 对每个 `--table db.table`：
 
@@ -71,7 +71,7 @@ Snapshot load 自己执行 `COPY INTO` 时会再指定 file format。这里会�
 3. 用 TiDB parser 解析 `CREATE TABLE`。
 4. 生成 `table.Meta`。
 5. 检查表必须有 primary key。
-6. 调用 `conn.CopyTableSchema` 在 Snowflake 建表。
+6. 调用 `conn.CreateTable` 在 Snowflake 建表。
 
 Snowflake 目标表名来自 `table.Meta.SnowflakeTableName()`，当前实现是
 `<source_schema>.<source_table>`。
@@ -95,15 +95,16 @@ snapshot load 可以重新加载整张表。
 2. 启动固定 8 个 worker。
 3. 调用 `store.WalkDir` 扫描 `snapshot/`。
 4. 对每个对象路径调用 `snapshotTaskForFile`。
-5. 匹配到目标表的数据文件后，把任务发给 worker。
+5. 如果文件名能解析出 `<db>.<table>`，把任务发给 worker。
 
 `snapshotTaskForFile` 的匹配规则很简单：
 
 - 取文件 basename。
-- 文件名必须包含 `.csv`。
-- 文件名必须以 `<db>.<table>.` 开头。
+- 文件名必须是 `.csv` 或 `.csv.gz`。
+- 文件名前两段必须是 `<db>.<table>`。
+- 目标 Snowflake 表名直接使用这两段拼出的 `<db>.<table>`。
 
-不匹配的文件会被忽略，比如其他表的数据文件、说明文件，或不是 CSV 的文件。
+不匹配的文件会被忽略，比如说明文件，或不是 CSV 的文件。
 
 ## 数据加载
 
@@ -117,7 +118,7 @@ conn.LoadSnapshot(targetTable, filePath)
 
 ```sql
 COPY INTO "<target_table>"
-FROM @"snapshot_external"
+FROM @snapshot_external
 FILES = ('<filePath>')
 FILE_FORMAT = (...);
 ```

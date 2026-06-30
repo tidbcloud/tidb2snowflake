@@ -74,8 +74,7 @@ not prove Snowflake value round-trip correctness.
 - While a scan is active, keep using the stored high watermark even if TiCDC
   metadata advances.
 - Consume only files visible through `.index`.
-- Process each table in order by table version, partition, date, dispatcher, and
-  file index.
+- Process each table in order by table version, partition, date, and file index.
 - Different tables may run concurrently; the same table must remain ordered.
 - After all table work in the scan succeeds, set
   `incremental.checkpoint_ts = scan.high_watermark` and clear `scan`.
