@@ -90,17 +90,14 @@ func BuildChangefeedConfig(opts ChangefeedConfigOptions) (*ChangefeedConfig, err
 	sinkURI.RawQuery = values.Encode()
 
 	protocol := "csv"
-	dateSeparator := config.DateSeparatorDay.String()
 	replicaCfg := apiv2.GetDefaultReplicaConfig()
 	replicaCfg.Filter = &apiv2.FilterConfig{Rules: opts.Tables}
 	replicaCfg.Sink.Protocol = &protocol
 	replicaCfg.Sink.CSVConfig.IncludeCommitTs = true
 	replicaCfg.Sink.CSVConfig.BinaryEncodingMethod = config.BinaryEncodingHex
-	replicaCfg.Sink.DateSeparator = &dateSeparator
 	replicaCfg.Sink.CloudStorageConfig = &apiv2.CloudStorageConfig{
-		FlushInterval:  putil.AddressOf(flushInterval.String()),
-		FileSize:       putil.AddressOf(fileSizeBytes),
-		OutputColumnID: putil.AddressOf(true),
+		FlushInterval: putil.AddressOf(flushInterval.String()),
+		FileSize:      putil.AddressOf(fileSizeBytes),
 	}
 
 	return &ChangefeedConfig{
@@ -108,13 +105,6 @@ func BuildChangefeedConfig(opts ChangefeedConfigOptions) (*ChangefeedConfig, err
 		StartTs:       opts.StartTSO,
 		ReplicaConfig: replicaCfg,
 	}, nil
-}
-
-func ChangefeedID(cf *Changefeed) string {
-	if cf == nil {
-		return ""
-	}
-	return cf.ID
 }
 
 func (c *Client) CreateChangefeed(ctx context.Context, cfg *ChangefeedConfig) (*Changefeed, error) {
@@ -135,12 +125,9 @@ func (c *Client) GetChangefeed(ctx context.Context, changefeedID string) (*Chang
 	return &out, nil
 }
 
-func (c *Client) WaitChangefeed(ctx context.Context, changefeedID string, interval time.Duration) (*Changefeed, error) {
+func (c *Client) WaitChangefeed(ctx context.Context, changefeedID string) (*Changefeed, error) {
 	if changefeedID == "" {
 		return nil, errors.New("changefeed id is required")
-	}
-	if interval <= 0 {
-		interval = 5 * time.Second
 	}
 	for {
 		cf, err := c.GetChangefeed(ctx, changefeedID)
@@ -156,7 +143,7 @@ func (c *Client) WaitChangefeed(ctx context.Context, changefeedID string, interv
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(interval):
+		case <-time.After(3 * time.Second):
 		}
 	}
 }

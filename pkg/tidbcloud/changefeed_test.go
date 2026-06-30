@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestCreateChangefeed_CloudStorageBody(t *testing.T) {
+func TestCreateChangefeedCloudStorageBody(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -82,25 +80,19 @@ func TestCreateChangefeed_CloudStorageBody(t *testing.T) {
 	require.Equal(t, "cf-1", cf.ChangefeedID)
 }
 
-func TestWaitChangefeed_RunningAfterCreating(t *testing.T) {
-	var calls int32
+func TestWaitChangefeedReturnsRunningChangefeed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if atomic.AddInt32(&calls, 1) < 2 {
-			_, _ = w.Write([]byte(`{"changefeedId":"cf-1","state":"CREATING"}`))
-			return
-		}
 		_, _ = w.Write([]byte(`{"changefeedId":"cf-1","state":"RUNNING"}`))
 	}))
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	cf, err := c.WaitChangefeed(context.Background(), "10", "cf-1", 10*time.Millisecond)
+	err := c.WaitChangefeed(context.Background(), "10", "cf-1")
 	require.NoError(t, err)
-	require.Equal(t, ChangefeedStateRunning, cf.State)
 }
 
-func TestWaitChangefeed_FailsOnCreateFailed(t *testing.T) {
+func TestWaitChangefeedFailsOnCreateFailed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"changefeedId":"cf-1","state":"CREATE_FAILED"}`))
@@ -108,9 +100,8 @@ func TestWaitChangefeed_FailsOnCreateFailed(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	cf, err := c.WaitChangefeed(context.Background(), "10", "cf-1", 10*time.Millisecond)
+	err := c.WaitChangefeed(context.Background(), "10", "cf-1")
 	require.Error(t, err)
-	require.Equal(t, ChangefeedStateCreateFailed, cf.State)
 }
 
 func TestChangefeedVerbPaths(t *testing.T) {

@@ -2,48 +2,35 @@ package cmd
 
 import (
 	"context"
-	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/spf13/cobra"
-	"github.com/thediveo/enumflag"
-	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
-	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
 	"go.uber.org/zap"
 )
 
 // NewSnowflakeCmd builds the `snowflake` subcommand.
 func NewSnowflakeCmd() *cobra.Command {
-	return newSnowflakeCmdWithRun(Replicate)
+	return newSnowflakeCmdWithRun(run)
 }
 
-func newSnowflakeCmdWithRun(run func(context.Context, *Config) error) *cobra.Command {
-	cfg := &Config{
-		TiDB:      &tidb.Config{},
-		Snowflake: &snowflake.Config{},
-	}
+func newSnowflakeCmdWithRun(run func(context.Context, *Option) error) *cobra.Command {
 	var (
 		logFile  string
 		logLevel string
 	)
 
+	opt := NewOption()
 	cmd := &cobra.Command{
 		Use:   "snowflake",
 		Short: "Replicate snapshot and incremental data from TiDB to Snowflake",
-		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			if err := logger.InitLogger(&logger.Config{Level: logLevel, File: logFile}); err != nil {
 				return errors.Trace(err)
 			}
-			applyTiDBCloudEnvDefaults(cfg)
-			logTiDBCloudInputStatus(cfg)
-			if err := validateConfig(cfg); err != nil {
-				return err
-			}
 			ctx := context.Background()
-			if err := run(ctx, cfg); err != nil {
+			if err := run(ctx, opt); err != nil {
 				log.Error("replication failed", zap.Error(err))
 				return err
 			}
@@ -54,44 +41,41 @@ func newSnowflakeCmdWithRun(run func(context.Context, *Config) error) *cobra.Com
 
 	f := cmd.Flags()
 	// run mode
-	f.Var(enumflag.New(&cfg.Mode, "mode", RunModeIds, enumflag.EnumCaseInsensitive), "mode",
-		"replication mode: full, snapshot-only, incremental-only")
-	f.Var(enumflag.New(&cfg.SourceMode, "source.mode", SourceModeIds, enumflag.EnumCaseInsensitive), "source.mode",
-		"source deployment mode: tidbcloud or op")
+	f.StringVar(&opt.Mode, "mode", opt.Mode, "replication mode: full, snapshot-only, incremental-only")
+	f.StringVar(&opt.SourceMode, "source.mode", opt.SourceMode, "source deployment mode: tidbcloud or op")
 
 	// TiDB connection (used to read source table schema)
-	f.StringVar(&cfg.TiDB.Host, "tidb.host", "127.0.0.1", "TiDB host")
-	f.IntVarP(&cfg.TiDB.Port, "tidb.port", "P", 4000, "TiDB port")
-	f.StringVarP(&cfg.TiDB.User, "tidb.user", "u", "root", "TiDB user")
-	f.StringVarP(&cfg.TiDB.Pass, "tidb.pass", "p", "", "TiDB password")
-	f.BoolVar(&cfg.TiDB.TLS, "tidb.tls", false, "enable TLS for TiDB connection")
-	f.StringVar(&cfg.TiDB.SSLCA, "tidb.ssl-ca", "", "TiDB SSL CA path")
+	f.StringVar(&opt.TiDBHost, "tidb.host", opt.TiDBHost, "TiDB host")
+	f.IntVarP(&opt.TiDBPort, "tidb.port", "P", opt.TiDBPort, "TiDB port")
+	f.StringVarP(&opt.TiDBUser, "tidb.user", "u", opt.TiDBUser, "TiDB user")
+	f.StringVarP(&opt.TiDBPass, "tidb.pass", "p", opt.TiDBPass, "TiDB password")
+	f.BoolVar(&opt.TiDBTLS, "tidb.tls", opt.TiDBTLS, "enable TLS for TiDB connection")
+	f.StringVar(&opt.TiDBSSLCA, "tidb.ssl-ca", opt.TiDBSSLCA, "TiDB SSL CA path")
 
 	// OP deployment services
-	f.StringVar(&cfg.OP.TiCDCAddress, "ticdc.address", "", "TiCDC OpenAPI base address for --source.mode=op, e.g. http://127.0.0.1:8300")
-	f.IntVar(&cfg.OP.SnapshotConcurrency, "snapshot.concurrency", 8, "Dumpling snapshot dump concurrency for --source.mode=op")
+	f.StringVar(&opt.TiCDCAddress, "ticdc.address", opt.TiCDCAddress, "TiCDC OpenAPI base address for --source.mode=op, e.g. http://127.0.0.1:8300")
+	f.IntVar(&opt.SnapshotConcurrency, "snapshot.concurrency", opt.SnapshotConcurrency, "Dumpling snapshot dump concurrency for --source.mode=op")
 
 	// Snowflake
-	f.StringVar(&cfg.Snowflake.AccountId, "snowflake.account-id", "", "Snowflake account id: <organization>-<account>")
-	f.StringVar(&cfg.Snowflake.Warehouse, "snowflake.warehouse", "COMPUTE_WH", "Snowflake warehouse")
-	f.StringVar(&cfg.Snowflake.User, "snowflake.user", "", "Snowflake user")
-	f.StringVar(&cfg.Snowflake.Pass, "snowflake.pass", "", "Snowflake password")
-	f.StringVar(&cfg.Snowflake.Database, "snowflake.database", "", "Snowflake database")
-	f.StringVar(&cfg.Snowflake.Schema, "snowflake.schema", "", "Snowflake schema")
+	f.StringVar(&opt.SnowflakeAccountID, "snowflake.account-id", opt.SnowflakeAccountID, "Snowflake account id: <organization>-<account>")
+	f.StringVar(&opt.SnowflakeUser, "snowflake.user", opt.SnowflakeUser, "Snowflake user")
+	f.StringVar(&opt.SnowflakePass, "snowflake.pass", opt.SnowflakePass, "Snowflake password")
+	f.StringVar(&opt.SnowflakeWarehouse, "snowflake.warehouse", opt.SnowflakeWarehouse, "Snowflake warehouse")
+	f.StringVar(&opt.SnowflakeDatabase, "snowflake.database", opt.SnowflakeDatabase, "Snowflake database")
+	f.StringVar(&opt.SnowflakeSchema, "snowflake.schema", opt.SnowflakeSchema, "Snowflake schema")
 
 	// tables and storage
-	f.StringArrayVarP(&cfg.Tables, "table", "t", nil, "fully qualified table name, repeatable, e.g. -t db1.t1 -t db2.t2")
-	f.StringVarP(&cfg.StoragePath, "storage", "s", "", "object storage path, e.g. s3://<bucket>/<path>")
-	f.StringVar(&cfg.AWSAccessKey, "aws.access-key", "", "AWS access key for the storage bucket")
-	f.StringVar(&cfg.AWSSecretKey, "aws.secret-key", "", "AWS secret key for the storage bucket")
+	f.StringArrayVarP(&opt.Tables, "table", "t", opt.Tables, "fully qualified table name, repeatable, e.g. -t db1.t1 -t db2.t2")
+	f.StringVarP(&opt.StoragePath, "storage", "s", opt.StoragePath, "object storage path, e.g. s3://<bucket>/<path>")
+	f.StringVar(&opt.AWSAccessKey, "aws.access-key", opt.AWSAccessKey, "AWS access key for the storage bucket")
+	f.StringVar(&opt.AWSSecretKey, "aws.secret-key", opt.AWSSecretKey, "AWS secret key for the storage bucket")
 
 	// consistency / changefeed tuning
-	f.StringVar(&cfg.SnapshotTSO, "snapshot-tso", "", "pin the snapshot to a specific TiDB TSO (optional; default: chosen at export time)")
-	f.StringVar(&cfg.SnapshotCompression, "snapshot.compression", SnapshotCompressionNone, "snapshot export compression: none or gzip")
-	f.DurationVar(&cfg.ChangefeedFlushInterval, "changefeed.flush-interval", 60*time.Second, "changefeed flush interval")
-	f.IntVar(&cfg.ChangefeedFileSizeMiB, "changefeed.file-size", 64, "changefeed file size in MiB")
-	f.DurationVar(&cfg.IncrementScanInterval, "increment.scan-interval", defaultIncrementScanInterval, "incremental storage scan interval")
-	f.DurationVar(&cfg.PollInterval, "poll-interval", 10*time.Second, "interval to poll export/changefeed status")
+	f.StringVar(&opt.SnapshotTSO, "snapshot-tso", opt.SnapshotTSO, "pin the snapshot to a specific TiDB TSO (optional; default: chosen at export time)")
+	f.StringVar(&opt.SnapshotCompression, "snapshot.compression", opt.SnapshotCompression, "snapshot export compression: none or gzip")
+	f.DurationVar(&opt.ChangefeedFlushInterval, "changefeed.flush-interval", opt.ChangefeedFlushInterval, "changefeed flush interval")
+	f.IntVar(&opt.ChangefeedFileSizeMiB, "changefeed.file-size", opt.ChangefeedFileSizeMiB, "changefeed file size in MiB")
+	f.DurationVar(&opt.IncrementScanInterval, "increment.scan-interval", opt.IncrementScanInterval, "incremental storage scan interval")
 
 	// logging
 	f.StringVar(&logFile, "log.file", "", "log file path")
@@ -101,44 +85,4 @@ func newSnowflakeCmdWithRun(run func(context.Context, *Config) error) *cobra.Com
 	_ = cmd.MarkFlagRequired("table")
 
 	return cmd
-}
-
-func logTiDBCloudInputStatus(cfg *Config) {
-	if cfg == nil {
-		return
-	}
-	log.Info("TiDB Cloud input status",
-		zap.Bool("clusterIDConfigured", cfg.TiDBCloud.ClusterID != ""),
-		zap.Bool("publicKeyConfigured", cfg.TiDBCloud.PublicKey != ""),
-		zap.Bool("privateKeyConfigured", cfg.TiDBCloud.PrivateKey != ""),
-		zap.Bool("hostConfigured", cfg.TiDBCloud.Host != ""))
-}
-
-func validateConfig(cfg *Config) error {
-	if cfg.AWSAccessKey == "" || cfg.AWSSecretKey == "" {
-		return errors.New("--aws.access-key and --aws.secret-key are required")
-	}
-	switch sourceMode(cfg) {
-	case SourceModeTiDBCloud, SourceModeOP:
-	default:
-		return errors.Errorf("--source.mode must be %q or %q", sourceModeString(SourceModeTiDBCloud), sourceModeString(SourceModeOP))
-	}
-	if sourceMode(cfg) == SourceModeOP && cfg.Mode != RunModeSnapshotOnly && cfg.OP.TiCDCAddress == "" {
-		return errors.New("--ticdc.address is required when --source.mode=op")
-	}
-	switch snapshotCompression(cfg) {
-	case SnapshotCompressionNone, SnapshotCompressionGzip:
-	default:
-		return errors.Errorf("--snapshot.compression must be %q or %q", SnapshotCompressionNone, SnapshotCompressionGzip)
-	}
-	// TiDB Cloud API credentials are only required when an export/changefeed has
-	// to be created (i.e. the snapshot/increment data does not already exist), so
-	// they are validated lazily during the run rather than here. This lets a user
-	// load a pre-created snapshot/changefeed without API keys.
-	if cfg.Mode != RunModeIncrementalOnly {
-		if cfg.Snowflake.Database == "" || cfg.Snowflake.Schema == "" {
-			return errors.New("--snowflake.database and --snowflake.schema are required")
-		}
-	}
-	return nil
 }

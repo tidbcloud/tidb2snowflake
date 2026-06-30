@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // ExportState is the lifecycle state of an export task.
@@ -209,12 +212,8 @@ func (c *Client) DeleteExport(ctx context.Context, clusterID, exportID string) (
 }
 
 // WaitExport polls GetExport until the task reaches a terminal state. It returns
-// the export on SUCCEEDED, and an error for any failure/terminal state. A
-// non-positive interval defaults to 5s.
-func (c *Client) WaitExport(ctx context.Context, clusterID, exportID string, interval time.Duration) (*Export, error) {
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
+// the export on SUCCEEDED, and an error for any failure/terminal state.
+func (c *Client) WaitExport(ctx context.Context, clusterID, exportID string) (*Export, error) {
 	for {
 		exp, err := c.GetExport(ctx, clusterID, exportID)
 		if err != nil {
@@ -229,7 +228,8 @@ func (c *Client) WaitExport(ctx context.Context, clusterID, exportID string, int
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(interval):
+		case <-time.After(10 * time.Second):
+			log.Info("TiDB Cloud export not ready yet", zap.String("exportID", exportID), zap.String("clusterID", clusterID))
 		}
 	}
 }

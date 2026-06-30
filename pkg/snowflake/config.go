@@ -30,6 +30,7 @@ func OpenDB(config *Config) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer db.Close()
 	// make sure database exists, if not then create
 	_, err = db.Exec("CREATE DATABASE IF NOT EXISTS IDENTIFIER(?)", config.Database)
 	if err != nil {
@@ -67,6 +68,7 @@ func establishSnowflakeConnection(sfConfig *gosnowflake.Config) (*sql.DB, error)
 	}
 	// make sure the connection is available
 	if err = db.Ping(); err != nil {
+		db.Close()
 		return nil, errors.Annotate(err, "Failed to open Snowflake connection")
 	}
 	return db, nil

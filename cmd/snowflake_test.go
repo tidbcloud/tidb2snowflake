@@ -13,7 +13,7 @@ func TestSnowflakeCmdExposesSourceModeAndOPFlags(t *testing.T) {
 
 	sourceModeFlag := cmd.Flags().Lookup("source.mode")
 	require.NotNil(t, sourceModeFlag)
-	require.Equal(t, "tidbcloud", sourceModeFlag.DefValue)
+	require.Equal(t, sourceModeTiDBCloud, sourceModeFlag.DefValue)
 
 	ticdcAddressFlag := cmd.Flags().Lookup("ticdc.address")
 	require.NotNil(t, ticdcAddressFlag)
@@ -38,14 +38,15 @@ func TestSnowflakeCmdDoesNotExposeTiDBCloudCredentialFlags(t *testing.T) {
 }
 
 func TestSnowflakeCmdReadsTiDBCloudEnvironment(t *testing.T) {
-	t.Setenv("TIDBCLOUD_CLUSTER_ID", "cluster-from-env")
-	t.Setenv("TIDBCLOUD_PUBLIC_KEY", "public-from-env")
-	t.Setenv("TIDBCLOUD_PRIVATE_KEY", "private-from-env")
-	t.Setenv("TIDBCLOUD_HOST", " api.env.example.com ")
+	t.Setenv(envTiDBCloudClusterID, "cluster-from-env")
+	t.Setenv(envTiDBCloudPublicKey, "public-from-env")
+	t.Setenv(envTiDBCloudPrivateKey, "private-from-env")
+	t.Setenv(envTiDBCloudHost, " api.env.example.com ")
 
-	var captured *Config
-	cmd := newSnowflakeCmdWithRun(func(_ context.Context, cfg *Config) error {
-		captured = cfg
+	var captured *Option
+	cmd := newSnowflakeCmdWithRun(func(_ context.Context, opt *Option) error {
+		require.NoError(t, opt.validate())
+		captured = opt
 		return nil
 	})
 	cmd.SetOut(io.Discard)
@@ -61,14 +62,14 @@ func TestSnowflakeCmdReadsTiDBCloudEnvironment(t *testing.T) {
 
 	require.NoError(t, cmd.Execute())
 	require.NotNil(t, captured)
-	require.Equal(t, "cluster-from-env", captured.TiDBCloud.ClusterID)
-	require.Equal(t, "public-from-env", captured.TiDBCloud.PublicKey)
-	require.Equal(t, "private-from-env", captured.TiDBCloud.PrivateKey)
-	require.Equal(t, "api.env.example.com", captured.TiDBCloud.Host)
+	require.Equal(t, "cluster-from-env", captured.TiDBCloudClusterID)
+	require.Equal(t, "public-from-env", captured.TiDBCloudPublicKey)
+	require.Equal(t, "private-from-env", captured.TiDBCloudPrivateKey)
+	require.Equal(t, "api.env.example.com", captured.TiDBCloudHost)
 }
 
 func TestSnowflakeCmdRejectsTiDBCloudCredentialFlags(t *testing.T) {
-	cmd := newSnowflakeCmdWithRun(func(context.Context, *Config) error {
+	cmd := newSnowflakeCmdWithRun(func(context.Context, *Option) error {
 		t.Fatal("run should not be called when TiDB Cloud flags are passed")
 		return nil
 	})
