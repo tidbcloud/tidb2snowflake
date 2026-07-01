@@ -110,20 +110,26 @@ user = "..."
 pass = "..."
 database = "ODS_DB"
 warehouse = "COMPUTE_WH"
+
+[tidbcloud]
+cluster-id = "..."
+public-key = "..."
+private-key = "..."
+host = ""
 ```
 
 ## Source deployment modes
 
 `source = "tidbcloud"` is the default.
 TiDB Cloud API parameters are only needed when the tool must create or wait on a
-managed export/changefeed. Configure TiDB Cloud OpenAPI with
-`TIDBCLOUD_CLUSTER_ID`, `TIDBCLOUD_PUBLIC_KEY`, `TIDBCLOUD_PRIVATE_KEY`, and
-optionally `TIDBCLOUD_HOST`.
+managed export/changefeed. Configure TiDB Cloud OpenAPI in the config file:
 
-```bash
-export TIDBCLOUD_CLUSTER_ID="..."
-export TIDBCLOUD_PUBLIC_KEY="..."
-export TIDBCLOUD_PRIVATE_KEY="..."
+```toml
+[tidbcloud]
+cluster-id = "..."
+public-key = "..."
+private-key = "..."
+host = ""
 ```
 
 `source = "op"` uses the direct TiDB and TiCDC services instead of TiDB Cloud

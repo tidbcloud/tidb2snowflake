@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -38,14 +37,7 @@ const (
 
 const defaultIncrementScanInterval = time.Minute
 
-const (
-	envTiDBCloudClusterID  = "TIDBCLOUD_CLUSTER_ID"
-	envTiDBCloudPublicKey  = "TIDBCLOUD_PUBLIC_KEY"
-	envTiDBCloudPrivateKey = "TIDBCLOUD_PRIVATE_KEY"
-	envTiDBCloudHost       = "TIDBCLOUD_HOST"
-)
-
-// Option contains the raw values accepted from the config file and environment.
+// Option contains the raw values accepted from the config file.
 type Option struct {
 	StoragePath  string
 	AWSAccessKey string
@@ -204,10 +196,10 @@ func (req loadRequest) tableCount() int {
 func (opt *Option) adjust() {
 	defaults := NewOption()
 
-	opt.TiDBCloudClusterID = firstNonEmpty(strings.TrimSpace(opt.TiDBCloudClusterID), envDefault(envTiDBCloudClusterID))
-	opt.TiDBCloudPublicKey = firstNonEmpty(strings.TrimSpace(opt.TiDBCloudPublicKey), envDefault(envTiDBCloudPublicKey))
-	opt.TiDBCloudPrivateKey = firstNonEmpty(strings.TrimSpace(opt.TiDBCloudPrivateKey), envDefault(envTiDBCloudPrivateKey))
-	opt.TiDBCloudHost = firstNonEmpty(strings.TrimSpace(opt.TiDBCloudHost), envDefault(envTiDBCloudHost))
+	opt.TiDBCloudClusterID = strings.TrimSpace(opt.TiDBCloudClusterID)
+	opt.TiDBCloudPublicKey = strings.TrimSpace(opt.TiDBCloudPublicKey)
+	opt.TiDBCloudPrivateKey = strings.TrimSpace(opt.TiDBCloudPrivateKey)
+	opt.TiDBCloudHost = strings.TrimSpace(opt.TiDBCloudHost)
 
 	opt.SourceMode = strings.ToLower(strings.TrimSpace(opt.SourceMode))
 	switch opt.SourceMode {
@@ -332,17 +324,4 @@ func (opt *Option) logSummary() {
 		zap.Bool("tidbCloudConfigured", opt.TiDBCloudClusterID != ""),
 		zap.String("ticdcAddress", opt.TiCDCAddress),
 		zap.String("snowflakeDatabase", opt.SnowflakeDatabase))
-}
-
-func envDefault(name string) string {
-	return strings.TrimSpace(os.Getenv(name))
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

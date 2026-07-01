@@ -28,6 +28,9 @@ Baseline rows have ids `1,2,3`. The incremental step inserts `4,5`, updates
 
 ## Environment variables
 
+These variables configure the e2e harness. The harness writes TiDB Cloud API
+settings into the generated tool TOML config.
+
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `E2E_TIDB_HOST` | yes | Source cluster SQL endpoint host |
