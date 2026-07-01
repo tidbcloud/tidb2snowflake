@@ -16,17 +16,24 @@ func NewSnowflakeCmd() *cobra.Command {
 }
 
 func newSnowflakeCmdWithRun(run func(context.Context, *Option) error) *cobra.Command {
-	var (
-		logFile  string
-		logLevel string
-	)
+	var configPath string
 
-	opt := NewOption()
 	cmd := &cobra.Command{
-		Use:   "snowflake",
+		Use:   "snowflake --config config.toml",
 		Short: "Replicate snapshot and incremental data from TiDB to Snowflake",
 		RunE: func(c *cobra.Command, _ []string) error {
-			if err := logger.InitLogger(&logger.Config{Level: logLevel, File: logFile}); err != nil {
+			if configPath == "" {
+				err := errors.New("--config is required")
+				c.PrintErrf("config error: %v\n", err)
+				return err
+			}
+			opt, logConfig, err := loadConfig(configPath)
+			if err != nil {
+				c.PrintErrf("load config failed: %v\n", err)
+				return err
+			}
+			if err := logger.InitLogger(logConfig); err != nil {
+				c.PrintErrf("init logger failed: %v\n", err)
 				return errors.Trace(err)
 			}
 			ctx := context.Background()
@@ -40,48 +47,7 @@ func newSnowflakeCmdWithRun(run func(context.Context, *Option) error) *cobra.Com
 	}
 
 	f := cmd.Flags()
-	// run mode
-	f.StringVar(&opt.Mode, "mode", opt.Mode, "replication mode: full, snapshot-only, incremental-only")
-	f.StringVar(&opt.SourceMode, "source.mode", opt.SourceMode, "source deployment mode: tidbcloud or op")
-
-	// TiDB connection (used to read source table schema)
-	f.StringVar(&opt.TiDBHost, "tidb.host", opt.TiDBHost, "TiDB host")
-	f.IntVarP(&opt.TiDBPort, "tidb.port", "P", opt.TiDBPort, "TiDB port")
-	f.StringVarP(&opt.TiDBUser, "tidb.user", "u", opt.TiDBUser, "TiDB user")
-	f.StringVarP(&opt.TiDBPass, "tidb.pass", "p", opt.TiDBPass, "TiDB password")
-	f.BoolVar(&opt.TiDBTLS, "tidb.tls", opt.TiDBTLS, "enable TLS for TiDB connection")
-	f.StringVar(&opt.TiDBSSLCA, "tidb.ssl-ca", opt.TiDBSSLCA, "TiDB SSL CA path")
-
-	// OP deployment services
-	f.StringVar(&opt.TiCDCAddress, "ticdc.address", opt.TiCDCAddress, "TiCDC OpenAPI base address for --source.mode=op, e.g. http://127.0.0.1:8300")
-	f.IntVar(&opt.SnapshotConcurrency, "snapshot.concurrency", opt.SnapshotConcurrency, "Dumpling snapshot dump concurrency for --source.mode=op")
-
-	// Snowflake
-	f.StringVar(&opt.SnowflakeAccountID, "snowflake.account-id", opt.SnowflakeAccountID, "Snowflake account id: <organization>-<account>")
-	f.StringVar(&opt.SnowflakeUser, "snowflake.user", opt.SnowflakeUser, "Snowflake user")
-	f.StringVar(&opt.SnowflakePass, "snowflake.pass", opt.SnowflakePass, "Snowflake password")
-	f.StringVar(&opt.SnowflakeWarehouse, "snowflake.warehouse", opt.SnowflakeWarehouse, "Snowflake warehouse")
-	f.StringVar(&opt.SnowflakeDatabase, "snowflake.database", opt.SnowflakeDatabase, "Snowflake database")
-
-	// tables and storage
-	f.StringArrayVarP(&opt.Tables, "table", "t", opt.Tables, "fully qualified table name, repeatable, e.g. -t db1.t1 -t db2.t2")
-	f.StringVarP(&opt.StoragePath, "storage", "s", opt.StoragePath, "object storage path, e.g. s3://<bucket>/<path>")
-	f.StringVar(&opt.AWSAccessKey, "aws.access-key", opt.AWSAccessKey, "AWS access key for the storage bucket")
-	f.StringVar(&opt.AWSSecretKey, "aws.secret-key", opt.AWSSecretKey, "AWS secret key for the storage bucket")
-
-	// consistency / changefeed tuning
-	f.StringVar(&opt.SnapshotTSO, "snapshot-tso", opt.SnapshotTSO, "pin the snapshot to a specific TiDB TSO (optional; default: chosen at export time)")
-	f.StringVar(&opt.SnapshotCompression, "snapshot.compression", opt.SnapshotCompression, "snapshot export compression: none or gzip")
-	f.DurationVar(&opt.ChangefeedFlushInterval, "changefeed.flush-interval", opt.ChangefeedFlushInterval, "changefeed flush interval")
-	f.IntVar(&opt.ChangefeedFileSizeMiB, "changefeed.file-size", opt.ChangefeedFileSizeMiB, "changefeed file size in MiB")
-	f.DurationVar(&opt.IncrementScanInterval, "increment.scan-interval", opt.IncrementScanInterval, "incremental storage scan interval")
-
-	// logging
-	f.StringVar(&logFile, "log.file", "", "log file path")
-	f.StringVar(&logLevel, "log.level", "info", "log level")
-
-	_ = cmd.MarkFlagRequired("storage")
-	_ = cmd.MarkFlagRequired("table")
+	f.StringVar(&configPath, "config", "", "TOML config file path")
 
 	return cmd
 }
