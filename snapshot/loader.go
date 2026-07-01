@@ -62,14 +62,12 @@ func prepareTables(
 	conn *snowflake.Connector,
 	pool *workerpool.Pool,
 ) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	start := time.Now()
-	futures := make([]*workerpool.Future, 0, len(cfg.Tables))
 	var first error
+
+	group := pool.NewGroup(ctx, 0)
 	for _, tableFQN := range cfg.Tables {
-		future, err := pool.Submit(ctx, workerpool.TaskFunc(func(ctx context.Context) error {
+		if err := group.Submit(workerpool.TaskFunc(func(ctx context.Context) error {
 			sourceDatabase, sourceTable, ok := strings.Cut(tableFQN, ".")
 			if !ok {
 				return errors.Errorf("invalid source database and table name, %s", tableFQN)
@@ -87,41 +85,38 @@ func prepareTables(
 				return errors.Trace(err)
 			}
 			return nil
-		}))
-		if err != nil {
+		})); err != nil {
 			first = err
-			cancel()
 			break
 		}
-		futures = append(futures, future)
 	}
 
-	for _, future := range futures {
-		if err := future.Wait(); err != nil && first == nil {
-			first = err
-			cancel()
-		}
+	if err := group.Wait(); err != nil && first == nil {
+		first = err
 	}
 	if first != nil {
 		log.Error("snapshot prepare tables failed", zap.Duration("duration", time.Since(start)), zap.Error(first))
 		return errors.Trace(first)
 	}
+
 	log.Info("snapshot prepare tables finished", zap.Duration("duration", time.Since(start)))
 	return nil
 }
 
 func loadFiles(ctx context.Context, cfg Config, store *storage.Storage, conn *snowflake.Connector, pool *workerpool.Pool) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	start := time.Now()
-	futures := make([]*workerpool.Future, 0, maxInFlightSnapshotFiles)
+
 	configuredTables := make(map[string]struct{}, len(cfg.Tables))
 	for _, table := range cfg.Tables {
 		configuredTables[table] = struct{}{}
 	}
-	var first error
-	fileCount := 0
+
+	var (
+		first     error
+		fileCount int
+	)
+
+	group := pool.NewGroup(ctx, maxInFlightSnapshotFiles)
 	err := store.WalkDir(ctx, &storeapi.WalkOption{SubDir: cfg.StorageDir}, func(filePath string, _ int64) error {
 		task, ok := snapshotTaskForFile(filePath)
 		if !ok {
@@ -130,7 +125,7 @@ func loadFiles(ctx context.Context, cfg Config, store *storage.Storage, conn *sn
 		if _, ok := configuredTables[task.targetTable]; !ok {
 			return nil
 		}
-		future, err := pool.Submit(ctx, workerpool.TaskFunc(func(ctx context.Context) error {
+		if err := group.Submit(workerpool.TaskFunc(func(ctx context.Context) error {
 			if err := conn.LoadSnapshot(ctx, task.targetTable, task.filePath, cfg.Compression); err != nil {
 				metrics.AddCounter(metrics.ErrorCounter, 1, task.targetTable)
 				log.Error("snapshot load failed",
@@ -140,36 +135,19 @@ func loadFiles(ctx context.Context, cfg Config, store *storage.Storage, conn *sn
 				return errors.Trace(err)
 			}
 			return nil
-		}))
-		if err != nil {
+		})); err != nil {
 			return errors.Trace(err)
 		}
-		futures = append(futures, future)
 		fileCount++
-		if len(futures) >= maxInFlightSnapshotFiles {
-			for _, future := range futures {
-				if err := future.Wait(); err != nil && first == nil {
-					first = err
-					cancel()
-				}
-			}
-			futures = futures[:0]
-			if first != nil {
-				return errors.Trace(first)
-			}
-		}
 		return nil
 	})
 	if err != nil && first == nil {
 		first = err
-		cancel()
+		group.Cancel()
 	}
 
-	for _, future := range futures {
-		if err := future.Wait(); err != nil && first == nil {
-			first = err
-			cancel()
-		}
+	if err := group.Wait(); err != nil && first == nil {
+		first = err
 	}
 	if first != nil {
 		log.Error("snapshot load files failed", zap.Duration("duration", time.Since(start)), zap.Error(first))

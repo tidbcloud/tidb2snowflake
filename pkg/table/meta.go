@@ -213,6 +213,10 @@ func columnType(ft *types.FieldType) (string, string, string) {
 		return baseType, "255", ""
 	case "blob":
 		return baseType, "65535", ""
+	case "mediumblob":
+		return baseType, "16777215", ""
+	case "longblob":
+		return baseType, "67108864", ""
 	default:
 		return baseType, intString(defaultedFlen(ft)), intString(defaultedDecimal(ft))
 	}

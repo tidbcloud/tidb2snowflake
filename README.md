@@ -142,7 +142,7 @@ documents the intended mapping for the supported scalar type families.
 | `TINYINT`, `SMALLINT`, `MEDIUMINT`, `INT`, `BIGINT` | `NUMBER` | Signed and unsigned integer variants map to `NUMBER`. |
 | `YEAR` | `NUMBER` | Preserves the numeric year value. |
 | `FLOAT`, `DOUBLE` | `FLOAT` | Approximate numeric values. |
-| `DECIMAL`, `NUMERIC` | `NUMBER(p, s)` | Must fit Snowflake precision/scale limits. |
+| `DECIMAL`, `NUMERIC` | `NUMBER(p, s)` | Must fit Snowflake precision/scale limits. Unsigned decimals with precision greater than 38 are stored as `VARCHAR`. |
 | `DATE` | `DATE` | Date values. |
 | `DATETIME` | `DATETIME(p)` | Precision follows TiDB metadata. |
 | `TIMESTAMP` | `TIMESTAMP(p)` | Precision follows TiDB metadata. |
@@ -150,14 +150,18 @@ documents the intended mapping for the supported scalar type families.
 | `CHAR`, `VARCHAR` | `CHAR(n)`, `VARCHAR(n)` | Length follows TiDB metadata. |
 | `TINYTEXT`, `TEXT`, `MEDIUMTEXT`, `LONGTEXT` | `TEXT` | Text values. |
 | `ENUM` | `VARCHAR` | Stores the selected enum label as text. |
+| `SET` | `VARCHAR` | Stores the selected set labels as text. |
+| `JSON` | `VARCHAR` | Stores the JSON text. It is not loaded as Snowflake `VARIANT`. |
 | `VECTOR` | `VARCHAR` | Stores the textual vector representation. |
-| `BINARY`, `VARBINARY`, `TINYBLOB`, `BLOB` | `BINARY(n)` | Binary values are loaded with hex decoding for incremental files. |
+| `BIT` | `NUMBER` | TiCDC CSV encodes bit values as integers. |
+| `BINARY`, `VARBINARY`, `TINYBLOB`, `BLOB`, `MEDIUMBLOB`, `LONGBLOB` | `BINARY(n)` | Binary values are loaded with hex decoding for incremental files. `LONGBLOB` is capped at Snowflake's 64 MB `BINARY` limit. |
 
 ## Known limitations
 
 - Only Snowflake is supported as the target.
 - Only tables with a primary key are supported.
 - Not all DDLs are supported (TiDB and Snowflake are not fully type-compatible).
+- Binary values larger than Snowflake's `BINARY` limit fail during load. The tool does not truncate, skip, or ignore those columns.
 
 ## License
 

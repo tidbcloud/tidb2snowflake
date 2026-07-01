@@ -142,9 +142,44 @@ func TestGetSnowflakeTypeString_NewScalarMappings(t *testing.T) {
 			want: `"c_enum" VARCHAR`,
 		},
 		{
+			name: "set",
+			col:  table.Column{Name: "c_set", Tp: "set"},
+			want: `"c_set" VARCHAR`,
+		},
+		{
+			name: "json",
+			col:  table.Column{Name: "c_json", Tp: "json"},
+			want: `"c_json" VARCHAR`,
+		},
+		{
 			name: "vector",
 			col:  table.Column{Name: "c_vector", Tp: "vector"},
 			want: `"c_vector" VARCHAR`,
+		},
+		{
+			name: "bit",
+			col:  table.Column{Name: "c_bit", Tp: "bit"},
+			want: `"c_bit" NUMBER`,
+		},
+		{
+			name: "mediumblob",
+			col:  table.Column{Name: "c_mediumblob", Tp: "mediumblob", Precision: "16777215"},
+			want: `"c_mediumblob" BINARY(16777215)`,
+		},
+		{
+			name: "longblob",
+			col:  table.Column{Name: "c_longblob", Tp: "longblob", Precision: "67108864"},
+			want: `"c_longblob" BINARY(67108864)`,
+		},
+		{
+			name: "decimal unsigned",
+			col:  table.Column{Name: "c_decimal_unsigned", Tp: "decimal unsigned", Precision: "38", Scale: "10"},
+			want: `"c_decimal_unsigned" NUMBER(38, 10)`,
+		},
+		{
+			name: "decimal unsigned overflow",
+			col:  table.Column{Name: "c_decimal_unsigned", Tp: "decimal unsigned", Precision: "65", Scale: "30"},
+			want: `"c_decimal_unsigned" VARCHAR`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
