@@ -80,6 +80,11 @@ func loadIntoSnowflake(
 	}
 	defer conn.Close()
 
+	if err := conn.CreateStage(ctx, req.StorageURI, req.Credential); err != nil {
+		return errors.Trace(err)
+	}
+	defer conn.DropStage(ctx)
+
 	pool := workerpool.New(workerpool.DefaultConcurrency)
 	pool.Go(ctx)
 	defer pool.Close()

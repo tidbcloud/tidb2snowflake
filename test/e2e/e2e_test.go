@@ -87,24 +87,24 @@ func TestSnapshotOnly(t *testing.T) {
 	id := runID()
 	table := "t_snap_" + id
 	dbTable := sourceDB + "." + table
-	schema := "E2E_SNAP_" + id
+	sfTable := targetTable(cfg, sourceDB, table)
 	storagePath := cfg.StoragePath + "/snap_" + id + "/"
 
 	tidb := cfg.tidbDB(t)
 	defer tidb.Close()
 	seedSource(t, tidb, dbTable)
-	defer cleanup(t, cfg, storagePath, schema, dbTable)
+	defer cleanup(t, cfg, sfTable, dbTable)
 
 	ctx, cancel := context.WithTimeout(context.Background(), snapshotTimeout)
 	defer cancel()
-	if err := runTool(ctx, t, cfg, "snapshot-only", storagePath, schema, dbTable); err != nil {
+	if err := runTool(ctx, t, cfg, "snapshot-only", storagePath, dbTable); err != nil {
 		t.Fatalf("snapshot-only run failed: %v", err)
 	}
 
-	sf := cfg.snowflakeDB(t, schema)
+	sf := cfg.snowflakeDB(t)
 	defer sf.Close()
-	waitForRowCount(t, sf, table, 3, 2*time.Minute)
-	waitForColValue(t, sf, table, "amount", 2, 200, time.Minute)
+	waitForRowCount(t, sf, sfTable, 3, 2*time.Minute)
+	waitForColValue(t, sf, sfTable, "amount", 2, 200, time.Minute)
 }
 
 // TestFullReplication runs the full pipeline (snapshot + streaming increment),
@@ -114,28 +114,28 @@ func TestFullReplication(t *testing.T) {
 	id := runID()
 	table := "t_full_" + id
 	dbTable := sourceDB + "." + table
-	schema := "E2E_FULL_" + id
+	sfTable := targetTable(cfg, sourceDB, table)
 	storagePath := cfg.StoragePath + "/full_" + id + "/"
 
 	tidb := cfg.tidbDB(t)
 	defer tidb.Close()
 	seedSource(t, tidb, dbTable)
-	defer cleanup(t, cfg, storagePath, schema, dbTable)
+	defer cleanup(t, cfg, sfTable, dbTable)
 
-	stop := startTool(t, cfg, "full", storagePath, schema, dbTable)
+	stop := startTool(t, cfg, "full", storagePath, dbTable)
 	defer stop()
 
-	sf := cfg.snowflakeDB(t, schema)
+	sf := cfg.snowflakeDB(t)
 	defer sf.Close()
 
 	// snapshot should land first
-	waitForRowCount(t, sf, table, 3, snapshotTimeout)
+	waitForRowCount(t, sf, sfTable, 3, snapshotTimeout)
 
 	// then apply incremental changes and verify they replicate
 	applyIncrementDMLs(t, tidb, dbTable)
-	waitForRowCount(t, sf, table, 4, incrementTimeout) // {1,2,4,5}
-	waitForColValue(t, sf, table, "amount", 2, 222, incrementTimeout)
-	waitForColValue(t, sf, table, "amount", 3, -1, incrementTimeout) // id 3 deleted
+	waitForRowCount(t, sf, sfTable, 4, incrementTimeout) // {1,2,4,5}
+	waitForColValue(t, sf, sfTable, "amount", 2, 222, incrementTimeout)
+	waitForColValue(t, sf, sfTable, "amount", 3, -1, incrementTimeout) // id 3 deleted
 }
 
 // TestIncrementalOnly first establishes a snapshot (snapshot-only), then runs
@@ -145,32 +145,32 @@ func TestIncrementalOnly(t *testing.T) {
 	id := runID()
 	table := "t_incr_" + id
 	dbTable := sourceDB + "." + table
-	schema := "E2E_INCR_" + id
+	sfTable := targetTable(cfg, sourceDB, table)
 	storagePath := cfg.StoragePath + "/incr_" + id + "/"
 
 	tidb := cfg.tidbDB(t)
 	defer tidb.Close()
 	seedSource(t, tidb, dbTable)
-	defer cleanup(t, cfg, storagePath, schema, dbTable)
+	defer cleanup(t, cfg, sfTable, dbTable)
 
 	// establish the snapshot first
 	ctx, cancel := context.WithTimeout(context.Background(), snapshotTimeout)
-	if err := runTool(ctx, t, cfg, "snapshot-only", storagePath, schema, dbTable); err != nil {
+	if err := runTool(ctx, t, cfg, "snapshot-only", storagePath, dbTable); err != nil {
 		cancel()
 		t.Fatalf("snapshot-only (setup) failed: %v", err)
 	}
 	cancel()
 
-	sf := cfg.snowflakeDB(t, schema)
+	sf := cfg.snowflakeDB(t)
 	defer sf.Close()
-	waitForRowCount(t, sf, table, 3, 2*time.Minute)
+	waitForRowCount(t, sf, sfTable, 3, 2*time.Minute)
 
 	// now stream increments
-	stop := startTool(t, cfg, "incremental-only", storagePath, schema, dbTable)
+	stop := startTool(t, cfg, "incremental-only", storagePath, dbTable)
 	defer stop()
 
 	waitForStorageFile(t, cfg, storagePath, "increment/metadata", 5*time.Minute)
 	applyIncrementDMLs(t, tidb, dbTable)
-	waitForRowCount(t, sf, table, 4, incrementTimeout)
-	waitForColValue(t, sf, table, "amount", 2, 222, incrementTimeout)
+	waitForRowCount(t, sf, sfTable, 4, incrementTimeout)
+	waitForColValue(t, sf, sfTable, "amount", 2, 222, incrementTimeout)
 }

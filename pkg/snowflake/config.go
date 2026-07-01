@@ -2,7 +2,6 @@ package snowflake
 
 import (
 	"database/sql"
-	"fmt"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -12,11 +11,10 @@ import (
 
 type Config struct {
 	AccountId string
-	Warehouse string
 	User      string
 	Pass      string
+	Warehouse string
 	Database  string
-	Schema    string
 }
 
 // Open a connection to Snowflake.
@@ -26,25 +24,20 @@ func OpenDB(config *Config) (*sql.DB, error) {
 		User:     config.User,
 		Password: config.Pass,
 	}
-	db, err := establishSnowflakeConnection(&sfConfig)
+	testDB, err := establishSnowflakeConnection(&sfConfig)
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer testDB.Close()
 	// make sure database exists, if not then create
-	_, err = db.Exec("CREATE DATABASE IF NOT EXISTS IDENTIFIER(?)", config.Database)
+	_, err = testDB.Exec("CREATE DATABASE IF NOT EXISTS IDENTIFIER(?)", config.Database)
 	if err != nil {
 		return nil, errors.Annotate(err, "Failed to create database")
 	}
-	// make sure schema exists, if not then create
-	_, err = db.Exec("CREATE SCHEMA IF NOT EXISTS IDENTIFIER(?)", fmt.Sprintf("%s.%s", config.Database, config.Schema))
-	if err != nil {
-		return nil, errors.Annotate(err, "Failed to create schema")
-	}
-	sfConfig.Database = config.Database
-	sfConfig.Schema = config.Schema
+
 	sfConfig.Warehouse = config.Warehouse
-	db, err = establishSnowflakeConnection(&sfConfig)
+	sfConfig.Database = config.Database
+	result, err := establishSnowflakeConnection(&sfConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -52,9 +45,8 @@ func OpenDB(config *Config) (*sql.DB, error) {
 	log.Info("Snowflake connection established",
 		zap.String("account", config.AccountId),
 		zap.String("warehouse", config.Warehouse),
-		zap.String("database", config.Database),
-		zap.String("schema", config.Schema))
-	return db, nil
+		zap.String("database", config.Database))
+	return result, nil
 }
 
 func establishSnowflakeConnection(sfConfig *gosnowflake.Config) (*sql.DB, error) {

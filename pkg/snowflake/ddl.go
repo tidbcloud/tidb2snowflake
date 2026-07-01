@@ -38,12 +38,12 @@ func columnModifyString(before, after table.Column) string {
 	return strings.Join(strs, ", ")
 }
 
-func GenDDLViaTiDBDDL(prevMeta, nextMeta *table.Meta, action model.ActionType, query string) ([]string, error) {
+func GenDDLViaTiDBDDL(targetDatabase string, prevMeta, nextMeta *table.Meta, action model.ActionType, query string) ([]string, error) {
 	switch action {
 	case model.ActionTruncateTable:
-		return []string{fmt.Sprintf("TRUNCATE TABLE %s", quoteIdent(nextMeta.SnowflakeTableName()))}, nil
+		return []string{fmt.Sprintf("TRUNCATE TABLE %s", quoteQualifiedIdent(targetDatabase, nextMeta.Schema, nextMeta.Table))}, nil
 	case model.ActionDropTable:
-		return []string{fmt.Sprintf("DROP TABLE IF EXISTS %s", quoteIdent(nextMeta.SnowflakeTableName()))}, nil
+		return []string{fmt.Sprintf("DROP TABLE IF EXISTS %s", quoteQualifiedIdent(targetDatabase, nextMeta.Schema, nextMeta.Table))}, nil
 	case model.ActionCreateTable:
 		return nil, errors.New("Received create table ddl, which should not happen")
 	case model.ActionRenameTable:
@@ -68,14 +68,14 @@ func GenDDLViaTiDBDDL(prevMeta, nextMeta *table.Meta, action model.ActionType, q
 	}
 	switch stmt := stmt.(type) {
 	case *ast.AlterTableStmt:
-		return genAlterTableDDLs(prevMeta, nextMeta, stmt)
+		return genAlterTableDDLs(targetDatabase, prevMeta, nextMeta, stmt)
 	default:
 		return nil, errors.Errorf("unsupported TiDB DDL query %T: %s", stmt, query)
 	}
 }
 
-func genAlterTableDDLs(prevMeta, nextMeta *table.Meta, alterStmt *ast.AlterTableStmt) ([]string, error) {
-	tableName := quoteIdent(nextMeta.SnowflakeTableName())
+func genAlterTableDDLs(targetDatabase string, prevMeta, nextMeta *table.Meta, alterStmt *ast.AlterTableStmt) ([]string, error) {
+	tableName := quoteQualifiedIdent(targetDatabase, nextMeta.Schema, nextMeta.Table)
 	ddls := make([]string, 0, len(alterStmt.Specs))
 	for _, spec := range alterStmt.Specs {
 		switch spec.Tp {
@@ -152,7 +152,7 @@ func columnInMeta(meta *table.Meta, name string) (table.Column, error) {
 			return col, nil
 		}
 	}
-	return table.Column{}, errors.Errorf("column %s not found in table %s", name, meta.SnowflakeTableName())
+	return table.Column{}, errors.Errorf("column %s not found in table %s.%s", name, meta.Schema, meta.Table)
 }
 
 // GetSnowflakeColumnString returns a string describing the column in Snowflake, e.g.
