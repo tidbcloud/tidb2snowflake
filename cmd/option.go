@@ -45,7 +45,7 @@ const (
 	envTiDBCloudHost       = "TIDBCLOUD_HOST"
 )
 
-// Option contains the raw values accepted from the command line.
+// Option contains the raw values accepted from the config file and environment.
 type Option struct {
 	StoragePath  string
 	AWSAccessKey string
@@ -268,28 +268,41 @@ func (opt *Option) validate() error {
 
 	if opt.SourceMode == sourceModeOP {
 		if opt.Mode != runModeSnapshotOnly && opt.TiCDCAddress == "" {
-			return errors.New("--ticdc.address is required when --source.mode=op")
+			return errors.New("ticdc.address is required when source=op")
 		}
 	}
 
+	if opt.StoragePath == "" {
+		return errors.New("storage.uri is required")
+	}
 	if opt.AWSAccessKey == "" || opt.AWSSecretKey == "" {
-		return errors.New("--aws.access-key and --aws.secret-key are required")
+		return errors.New("storage.access-key and storage.secret-key are required")
+	}
+
+	if opt.SnowflakeAccountID == "" {
+		return errors.New("snowflake.account-id is required")
+	}
+	if opt.SnowflakeUser == "" {
+		return errors.New("snowflake.user is required")
+	}
+	if opt.SnowflakePass == "" {
+		return errors.New("snowflake.pass is required")
 	}
 
 	if opt.SnowflakeDatabase == "" {
-		return errors.New("--snowflake.database is required")
+		return errors.New("snowflake.database is required")
 	}
 
 	if len(opt.Tables) == 0 {
-		return errors.New("no tables specified")
+		return errors.New("tables is required")
 	}
 	if opt.SnapshotTSO != "" {
 		tso, err := strconv.ParseUint(opt.SnapshotTSO, 10, 64)
 		if err != nil {
-			return errors.Annotate(err, "parse --snapshot-tso")
+			return errors.Annotate(err, "parse snapshot.tso")
 		}
 		if tso == 0 {
-			return errors.New("--snapshot-tso must be greater than 0")
+			return errors.New("snapshot.tso must be greater than 0")
 		}
 	}
 	// TiDB Cloud API credentials are only required when an export/changefeed has
