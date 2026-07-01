@@ -70,8 +70,19 @@ make build       # produces bin/tidb2snowflake
   cluster and an API key (public/private).
 - For `--source.mode=op`: a TiDB SQL endpoint and a reachable TiCDC OpenAPI
   service address.
-- A Snowflake account, warehouse, database and schema.
+- A Snowflake account, warehouse, and target database.
 - Object storage (S3) writable by the export/changefeed and readable by this tool.
+
+Snowflake target objects use this layout:
+
+```text
+<snowflake_database>.<source_database>.<source_table>
+```
+
+For example, source table `source.t` loads into `ODS_DB.source.t` when
+`--snowflake.database ODS_DB` is used. The loader also creates one internal
+external stage at
+`<snowflake_database>.TIDB2SNOWFLAKE_INTERNAL.tidb2snowflake_external`.
 
 ## Source deployment modes
 

@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	dbName    = "t2sf_matrix"
-	typeTable = "supported_type_matrix"
-	ddlTable  = "supported_ddl_live"
+	targetDBName = "target_db"
+	dbName       = "t2sf_matrix"
+	typeTable    = "supported_type_matrix"
+	ddlTable     = "supported_ddl_live"
 )
 
 func main() {
@@ -90,7 +91,7 @@ func checkLiveDDL(db *sql.DB) {
 	exec(db, `INSERT INTO `+dbName+`.`+ddlTable+` VALUES
 		(1, 'drop', 'rename', 1, 'v', 1.23, 'filled', 'v1')`)
 
-	tableName := `"` + dbName + "." + ddlTable + `"`
+	tableName := `"` + targetDBName + `"."` + dbName + `"."` + ddlTable + `"`
 	expectDDL(db, "ALTER TABLE "+dbName+"."+ddlTable+" ADD COLUMN c_added_nullable VARCHAR(64) NULL",
 		"ALTER TABLE "+tableName+" ADD COLUMN \"c_added_nullable\" VARCHAR(64);")
 	expectDDL(db, "ALTER TABLE "+dbName+"."+ddlTable+" ADD COLUMN c_added_not_null_default INT NOT NULL DEFAULT 7",
@@ -123,7 +124,7 @@ func expectDDL(db *sql.DB, query string, expected ...string) {
 	prev := tableSchema(db, ddlTable)
 	exec(db, query)
 	next := tableSchema(db, ddlTable)
-	got, err := snowflake.GenDDLViaTiDBDDL(prev, next, model.ActionNone, query)
+	got, err := snowflake.GenDDLViaTiDBDDL(targetDBName, prev, next, model.ActionNone, query)
 	must(err)
 	assertElements(got, expected)
 }
@@ -148,20 +149,20 @@ func checkSyntheticTableDDL() {
 		{
 			name: "truncate",
 			def:  cloudstorage.SchemaFile{Schema: dbName, Table: "t_truncate", Type: byte(model.ActionTruncateTable)},
-			want: []string{"TRUNCATE TABLE \"" + dbName + ".t_truncate\""},
+			want: []string{"TRUNCATE TABLE \"" + targetDBName + "\".\"" + dbName + "\".\"t_truncate\""},
 		},
 		{
 			name: "drop table",
 			def:  cloudstorage.SchemaFile{Schema: dbName, Table: "t_drop", Type: byte(model.ActionDropTable)},
-			want: []string{"DROP TABLE \"" + dbName + ".t_drop\""},
+			want: []string{"DROP TABLE IF EXISTS \"" + targetDBName + "\".\"" + dbName + "\".\"t_drop\""},
 		},
 		{
 			name: "drop schema",
 			def:  cloudstorage.SchemaFile{Schema: "s_drop", Type: byte(model.ActionDropSchema)},
-			want: []string{"DROP SCHEMA \"s_drop\""},
+			want: nil,
 		},
 	} {
-		got, err := snowflake.GenDDLViaTiDBDDL(nil, table.FromSchemaFile(tc.def), model.ActionType(tc.def.Type), "")
+		got, err := snowflake.GenDDLViaTiDBDDL(targetDBName, nil, table.FromSchemaFile(tc.def), model.ActionType(tc.def.Type), "")
 		must(err)
 		assertElements(got, tc.want)
 	}

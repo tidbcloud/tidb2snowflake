@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -20,16 +19,15 @@ import (
 )
 
 type Config struct {
-	Credential  *credentials.Value
 	Tables      []string
-	StorageURI  *url.URL
 	StorageDir  string
 	Compression string
 }
 
 type loadTask struct {
-	targetTable string
-	filePath    string
+	sourceDatabase string
+	sourceTable    string
+	filePath       string
 }
 
 const maxInFlightSnapshotFiles = workerpool.DefaultConcurrency * 4
@@ -38,10 +36,9 @@ func Load(ctx context.Context, cfg Config, store *storage.Storage, pool *workerp
 	log.Info("starting Snowflake snapshot load phase",
 		zap.Int("tableCount", len(cfg.Tables)))
 
-	if err := conn.CreateStage(ctx, snowflake.SnapshotStageName, cfg.StorageURI, cfg.Credential); err != nil {
+	if err := prepareSchemas(ctx, cfg, store, conn); err != nil {
 		return errors.Trace(err)
 	}
-	defer conn.DropStage(context.WithoutCancel(ctx), snowflake.SnapshotStageName)
 
 	if err := prepareTables(ctx, cfg, store, conn, pool); err != nil {
 		return errors.Trace(err)
@@ -52,6 +49,34 @@ func Load(ctx context.Context, cfg Config, store *storage.Storage, pool *workerp
 	}
 
 	log.Info("Snowflake snapshot load phase finished", zap.Int("tableCount", len(cfg.Tables)))
+	return nil
+}
+
+func prepareSchemas(ctx context.Context, cfg Config, store *storage.Storage, conn *snowflake.Connector) error {
+	configured := configuredSourceDatabases(cfg.Tables)
+	if len(configured) == 0 {
+		return nil
+	}
+
+	start := time.Now()
+	err := store.WalkDir(ctx, &storeapi.WalkOption{SubDir: cfg.StorageDir}, func(filePath string, _ int64) error {
+		database, ok := sourceDatabaseFromSchemaCreateFile(path.Base(filePath))
+		if !ok {
+			return nil
+		}
+		if _, ok := configured[database]; !ok {
+			return nil
+		}
+		if err := conn.CreateSchema(ctx, database); err != nil {
+			return errors.Trace(err)
+		}
+		return nil
+	})
+	if err != nil {
+		log.Error("snapshot prepare schemas failed", zap.Duration("duration", time.Since(start)), zap.Error(err))
+		return errors.Trace(err)
+	}
+	log.Info("snapshot prepare schemas finished", zap.Duration("duration", time.Since(start)))
 	return nil
 }
 
@@ -103,6 +128,17 @@ func prepareTables(
 	return nil
 }
 
+func configuredSourceDatabases(tables []string) map[string]struct{} {
+	sourceDatabases := make(map[string]struct{})
+	for _, tableFQN := range tables {
+		sourceDatabase, _, ok := strings.Cut(tableFQN, ".")
+		if ok && sourceDatabase != "" {
+			sourceDatabases[sourceDatabase] = struct{}{}
+		}
+	}
+	return sourceDatabases
+}
+
 func loadFiles(ctx context.Context, cfg Config, store *storage.Storage, conn *snowflake.Connector, pool *workerpool.Pool) error {
 	start := time.Now()
 
@@ -122,14 +158,15 @@ func loadFiles(ctx context.Context, cfg Config, store *storage.Storage, conn *sn
 		if !ok {
 			return nil
 		}
-		if _, ok := configuredTables[task.targetTable]; !ok {
+		tableFQN := task.tableFQN()
+		if _, ok := configuredTables[tableFQN]; !ok {
 			return nil
 		}
 		if err := group.Submit(workerpool.TaskFunc(func(ctx context.Context) error {
-			if err := conn.LoadSnapshot(ctx, task.targetTable, task.filePath, cfg.Compression); err != nil {
-				metrics.AddCounter(metrics.ErrorCounter, 1, task.targetTable)
+			if err := conn.LoadSnapshot(ctx, task.sourceDatabase, task.sourceTable, task.filePath, cfg.Compression); err != nil {
+				metrics.AddCounter(metrics.ErrorCounter, 1, tableFQN)
 				log.Error("snapshot load failed",
-					zap.String("table", task.targetTable),
+					zap.String("table", tableFQN),
 					zap.String("file", task.filePath),
 					zap.Error(err))
 				return errors.Trace(err)
@@ -158,30 +195,58 @@ func loadFiles(ctx context.Context, cfg Config, store *storage.Storage, conn *sn
 }
 
 func snapshotTaskForFile(filePath string) (loadTask, bool) {
-	targetTable, ok := targetTableFromFile(path.Base(filePath))
+	sourceDatabase, sourceTable, ok := sourceTableFromFile(path.Base(filePath))
 	if !ok {
 		return loadTask{}, false
 	}
 	return loadTask{
-		targetTable: targetTable,
-		filePath:    filePath,
+		sourceDatabase: sourceDatabase,
+		sourceTable:    sourceTable,
+		filePath:       filePath,
 	}, true
 }
 
-func targetTableFromFile(name string) (string, bool) {
+func (task loadTask) tableFQN() string {
+	return task.sourceDatabase + "." + task.sourceTable
+}
+
+func sourceDatabaseFromSchemaCreateFile(name string) (string, bool) {
+	if !strings.HasSuffix(name, table.SchemaCreateFileSuffix) {
+		return "", false
+	}
+	escaped := strings.TrimSuffix(name, table.SchemaCreateFileSuffix)
+	if escaped == "" {
+		return "", false
+	}
+	database, err := url.PathUnescape(escaped)
+	if err != nil || database == "" {
+		return "", false
+	}
+	return database, true
+}
+
+func sourceTableFromFile(name string) (string, string, bool) {
 	name = strings.TrimSuffix(name, ".gz")
 	if !strings.HasSuffix(name, storage.CSVFileExtension) {
-		return "", false
+		return "", "", false
 	}
 
 	stem := strings.TrimSuffix(name, storage.CSVFileExtension)
 	schema, rest, ok := strings.Cut(stem, ".")
 	if !ok {
-		return "", false
+		return "", "", false
 	}
 	table, _, _ := strings.Cut(rest, ".")
 	if schema == "" || table == "" {
-		return "", false
+		return "", "", false
 	}
-	return schema + "." + table, true
+	sourceDatabase, err := url.PathUnescape(schema)
+	if err != nil || sourceDatabase == "" {
+		return "", "", false
+	}
+	sourceTable, err := url.PathUnescape(table)
+	if err != nil || sourceTable == "" {
+		return "", "", false
+	}
+	return sourceDatabase, sourceTable, true
 }

@@ -17,7 +17,6 @@ SOURCE_DB="${SOURCE_DB:-tidb2snowflake_local}"
 SOURCE_TABLE="${SOURCE_TABLE:-t_${RUN_ID//[^0-9A-Za-z_]/_}}"
 TABLE_FQN="$SOURCE_DB.$SOURCE_TABLE"
 SNOWFLAKE_DATABASE="${SNOWFLAKE_DATABASE:-TIDB2SNOWFLAKE_E2E}"
-SNOWFLAKE_SCHEMA="${SNOWFLAKE_SCHEMA:-LOCAL_${RUN_ID//[^0-9A-Za-z_]/_}}"
 CHANGEFEED_ID="${CHANGEFEED_ID:-tidb2sf-${RUN_ID//[^0-9A-Za-z-]/-}}"
 WORKDIR="${WORKDIR:-$ROOT/.local-e2e/$RUN_ID}"
 SNAPSHOT_COMPRESSION="${SNAPSHOT_COMPRESSION:-none}"
@@ -193,7 +192,7 @@ main() {
   log "run id: $RUN_ID"
   log "workdir: $WORKDIR"
   log "storage root: $STORAGE_ROOT"
-  log "snowflake database/schema: $SNOWFLAKE_DATABASE.$SNOWFLAKE_SCHEMA"
+  log "snowflake target table: $SNOWFLAKE_DATABASE.$SOURCE_DB.$SOURCE_TABLE"
   log "snapshot compression: $SNAPSHOT_COMPRESSION"
 
   log "building tidb2snowflake"
@@ -237,7 +236,7 @@ SQL
   fi
   AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN:-}" \
     tiup dumpling -h "$TIDB_HOST" -P "$TIDB_PORT" -u root \
-      --filetype csv --no-header --no-schemas --csv-output-dialect snowflake --escape-backslash=false \
+      --filetype csv --no-header --csv-output-dialect snowflake --escape-backslash=false \
       --tables-list "$TABLE_FQN" --output "$STORAGE_ROOT/snapshot" --s3.region "$S3_REGION" \
       --output-filename-template '{{.DB}}.{{.Table}}.{{.Index}}' ${dumpling_extra_args[@]+"${dumpling_extra_args[@]}"} >"$WORKDIR/dumpling.log" 2>&1
   wait_for_s3_objects "$STORAGE_ROOT/snapshot" 1
@@ -268,7 +267,6 @@ SQL
     --snowflake.pass "$SNOWFLAKE_PASS" \
     --snowflake.warehouse "$SNOWFLAKE_WAREHOUSE" \
     --snowflake.database "$SNOWFLAKE_DATABASE" \
-    --snowflake.schema "$SNOWFLAKE_SCHEMA" \
     --storage "$STORAGE_ROOT" \
     --aws.access-key "$AWS_ACCESS_KEY_ID" \
     --aws.secret-key "$AWS_SECRET_ACCESS_KEY" \
@@ -284,8 +282,7 @@ SQL
   SNOWFLAKE_PASS="$SNOWFLAKE_PASS" \
   SNOWFLAKE_WAREHOUSE="$SNOWFLAKE_WAREHOUSE" \
   SNOWFLAKE_DATABASE="$SNOWFLAKE_DATABASE" \
-  SNOWFLAKE_SCHEMA="$SNOWFLAKE_SCHEMA" \
-    go run -ldflags=-checklinkname=0 "$ROOT/scripts/local_tiup_s3_snowflake_probe" --table "$SOURCE_TABLE" --timeout 8m
+    go run -ldflags=-checklinkname=0 "$ROOT/scripts/local_tiup_s3_snowflake_probe" --schema "$SOURCE_DB" --table "$SOURCE_TABLE" --timeout 8m
 
   log "success"
   log "logs are in $WORKDIR"

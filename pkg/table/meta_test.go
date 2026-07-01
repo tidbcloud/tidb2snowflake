@@ -8,10 +8,9 @@ import (
 
 func TestSchemaFilePath(t *testing.T) {
 	require.Equal(t, "test.bank0-schema.sql", SchemaFilePath("test", "bank0"))
-}
-
-func TestSnowflakeTableName(t *testing.T) {
-	require.Equal(t, "test.bank0", (&Meta{Schema: "test", Table: "bank0"}).SnowflakeTableName())
+	require.Equal(t, "test-schema-create.sql", SchemaCreateFilePath("test"))
+	require.Equal(t, "d%2Eb.t%2Ea-schema.sql", SchemaFilePath("d.b", "t.a"))
+	require.Equal(t, "d%2Eb-schema-create.sql", SchemaCreateFilePath("d.b"))
 }
 
 func TestParseTableSchema(t *testing.T) {

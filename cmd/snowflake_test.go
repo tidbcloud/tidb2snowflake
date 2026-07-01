@@ -55,7 +55,6 @@ func TestSnowflakeCmdReadsTiDBCloudEnvironment(t *testing.T) {
 		"--aws.access-key", "AKIA",
 		"--aws.secret-key", "secret",
 		"--snowflake.database", "SNOW",
-		"--snowflake.schema", "PUBLIC",
 		"--storage", "s3://bucket/path",
 		"--table", "db1.t1",
 	})
@@ -79,7 +78,6 @@ func TestSnowflakeCmdRejectsTiDBCloudCredentialFlags(t *testing.T) {
 		"--aws.access-key", "AKIA",
 		"--aws.secret-key", "secret",
 		"--snowflake.database", "SNOW",
-		"--snowflake.schema", "PUBLIC",
 		"--storage", "s3://bucket/path",
 		"--table", "db1.t1",
 		"--tidbcloud.public-key", "public-from-flag",

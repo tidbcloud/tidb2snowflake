@@ -13,12 +13,11 @@ import (
 
 func TestCreateTablesRejectsTableWithoutPrimaryKey(t *testing.T) {
 	ctx := context.Background()
-	storageURI, store := newTestSnapshotStore(t)
+	_, store := newTestSnapshotStore(t)
 	writeSnapshotObject(t, ctx, store, "snapshot/"+table.SchemaFilePath("db", "t1"), "CREATE TABLE t1 (id bigint);")
 
 	cfg := Config{
 		Tables:     []string{"db.t1"},
-		StorageURI: storageURI,
 		StorageDir: "snapshot",
 	}
 	pool := newStartedPool(ctx, t)
@@ -32,22 +31,60 @@ func TestSnapshotTaskForFile(t *testing.T) {
 	task, ok := snapshotTaskForFile("snapshot/db.t.000001.csv.gz")
 	require.True(t, ok)
 	require.Equal(t, loadTask{
-		targetTable: "db.t",
-		filePath:    "snapshot/db.t.000001.csv.gz",
+		sourceDatabase: "db",
+		sourceTable:    "t",
+		filePath:       "snapshot/db.t.000001.csv.gz",
+	}, task)
+
+	task, ok = snapshotTaskForFile("snapshot/d%2Eb.t%2Ea.000001.csv")
+	require.True(t, ok)
+	require.Equal(t, loadTask{
+		sourceDatabase: "d.b",
+		sourceTable:    "t.a",
+		filePath:       "snapshot/d%2Eb.t%2Ea.000001.csv",
 	}, task)
 
 	_, ok = snapshotTaskForFile("snapshot/notes.csv")
 	require.False(t, ok)
 }
 
+func TestSourceDatabaseFromSchemaCreateFile(t *testing.T) {
+	sourceDatabase, ok := sourceDatabaseFromSchemaCreateFile("test-schema-create.sql")
+	require.True(t, ok)
+	require.Equal(t, "test", sourceDatabase)
+
+	sourceDatabase, ok = sourceDatabaseFromSchemaCreateFile("d%2Eb-schema-create.sql")
+	require.True(t, ok)
+	require.Equal(t, "d.b", sourceDatabase)
+
+	sourceDatabase, ok = sourceDatabaseFromSchemaCreateFile("d.b-schema-create.sql")
+	require.True(t, ok)
+	require.Equal(t, "d.b", sourceDatabase)
+
+	_, ok = sourceDatabaseFromSchemaCreateFile("test.t-schema.sql")
+	require.False(t, ok)
+}
+
+func TestPrepareSchemasIgnoresMissingSchemaCreateFile(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestSnapshotStore(t)
+
+	cfg := Config{
+		Tables:     []string{"db.t1"},
+		StorageDir: "snapshot",
+	}
+
+	err := prepareSchemas(ctx, cfg, store, nil)
+	require.NoError(t, err)
+}
+
 func TestLoadFilesSkipsUnconfiguredTables(t *testing.T) {
 	ctx := context.Background()
-	storageURI, store := newTestSnapshotStore(t)
+	_, store := newTestSnapshotStore(t)
 	writeSnapshotObject(t, ctx, store, "snapshot/db.skip.000001.csv", "ignored")
 
 	cfg := Config{
 		Tables:     []string{"db.keep"},
-		StorageURI: storageURI,
 		StorageDir: "snapshot",
 	}
 	pool := newStartedPool(ctx, t)

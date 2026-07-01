@@ -1,30 +1,21 @@
 package snowflake
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/log"
 	"github.com/tidbcloud/tidb2snowflake/pkg/table"
 	"go.uber.org/zap"
 )
 
-func createExternalStage(ctx context.Context, db *sql.DB, stageName, s3WorkspaceURL string, cred *credentials.Value) error {
-	sql := fmt.Sprintf(`CREATE OR REPLACE STAGE %s URL = '%s' CREDENTIALS = (AWS_KEY_ID = '%s' AWS_SECRET_KEY = '%s' AWS_TOKEN = '%s')
-			FILE_FORMAT = (type = 'CSV' EMPTY_FIELD_AS_NULL = FALSE NULL_IF=('\\N') FIELD_OPTIONALLY_ENCLOSED_BY='"' ESCAPE='\\' BINARY_FORMAT = 'HEX');`,
-		stageName, escapeString(s3WorkspaceURL), escapeString(cred.AccessKeyID), escapeString(cred.SecretAccessKey), escapeString(cred.SessionToken))
-	_, err := db.ExecContext(ctx, sql)
-	return err
-}
-
-func dropStage(ctx context.Context, db *sql.DB, stageName string) error {
-	sql := fmt.Sprintf(`DROP STAGE IF EXISTS %s;`, stageName)
-	_, err := db.ExecContext(ctx, sql)
-	return err
+func quoteQualifiedIdent(idents ...string) string {
+	parts := make([]string, 0, len(idents))
+	for _, ident := range idents {
+		parts = append(parts, quoteIdent(ident))
+	}
+	return strings.Join(parts, ".")
 }
 
 func snapshotFileFormat(compression string) string {
@@ -110,7 +101,7 @@ func defaultString(val any) string {
 	return fmt.Sprintf("%v", val)
 }
 
-func buildCreateTableSQL(tableSchema *table.Meta) string {
+func buildCreateTableSQL(targetDatabase string, tableSchema *table.Meta) string {
 	defs := make([]string, 0, len(tableSchema.Columns)+1)
 	for _, column := range tableSchema.Columns {
 		defs = append(defs, buildColumn(column))
@@ -121,12 +112,12 @@ func buildCreateTableSQL(tableSchema *table.Meta) string {
 
 	return fmt.Sprintf(
 		"CREATE OR REPLACE TABLE %s (%s)",
-		quoteIdent(tableSchema.SnowflakeTableName()),
+		quoteQualifiedIdent(targetDatabase, tableSchema.Schema, tableSchema.Table),
 		strings.Join(defs, ", "),
 	)
 }
 
-func genMergeIntoSQL(tableMeta *table.Meta, filePath string, stageName string, checkpointTs uint64) string {
+func genMergeIntoSQL(targetDatabase string, tableMeta *table.Meta, filePath string, checkpointTs uint64) string {
 	selectStat := make([]string, 0, len(tableMeta.Columns)+1)
 	selectStat = append(selectStat, `$1 AS "METADATA$FLAG"`)
 	for i, col := range tableMeta.Columns {
@@ -163,10 +154,10 @@ func genMergeIntoSQL(tableMeta *table.Meta, filePath string, stageName string, c
 	}
 
 	// TODO: Remove QUALIFY row_number() after cdc support merge dml or snowflake support deterministic merge
-	stageFile := fmt.Sprintf("@%s/%s", stageName, escapeString(filePath))
+	stageFile := fmt.Sprintf("@%s/%s", quoteQualifiedIdent(targetDatabase, InternalSchemaName, ExternalStageName), escapeString(filePath))
 	mergeQuery := fmt.Sprintf(
 		`MERGE INTO %s AS T USING
-		(
+			(
 			SELECT
 				%s
 			FROM '%s'
@@ -177,10 +168,10 @@ func genMergeIntoSQL(tableMeta *table.Meta, filePath string, stageName string, c
 		(
 			%s
 		)
-		WHEN MATCHED AND S.METADATA$FLAG != 'D' THEN UPDATE SET %s
-		WHEN MATCHED AND S.METADATA$FLAG = 'D' THEN DELETE
-		WHEN NOT MATCHED AND S.METADATA$FLAG != 'D' THEN INSERT (%s) VALUES (%s);`,
-		quoteIdent(tableMeta.SnowflakeTableName()),
+			WHEN MATCHED AND S.METADATA$FLAG != 'D' THEN UPDATE SET %s
+			WHEN MATCHED AND S.METADATA$FLAG = 'D' THEN DELETE
+			WHEN NOT MATCHED AND S.METADATA$FLAG != 'D' THEN INSERT (%s) VALUES (%s);`,
+		quoteQualifiedIdent(targetDatabase, tableMeta.Schema, tableMeta.Table),
 		strings.Join(selectStat, ",\n"),
 		stageFile,
 		checkpointTs,

@@ -12,9 +12,9 @@ make e2e
 ## What they cover
 
 Each test seeds a uniquely named source table (`tidb2snowflake_e2e.t_*`) with
-baseline rows, runs the tool, and verifies the data in a uniquely named
-Snowflake schema (`E2E_*`). Snowflake schemas and TiDB source tables are cleaned
-up afterwards.
+baseline rows, runs the tool, and verifies the data in the mapped Snowflake
+table (`<database>.tidb2snowflake_e2e.t_*`). Snowflake target tables and TiDB
+source tables are cleaned up afterwards.
 
 | Test | Mode | Flow |
 |------|------|------|
@@ -45,7 +45,7 @@ Baseline rows have ids `1,2,3`. The incremental step inserts `4,5`, updates
 | `E2E_SNOWFLAKE_USER` | yes | Snowflake user |
 | `E2E_SNOWFLAKE_PASS` | yes | Snowflake password |
 | `E2E_SNOWFLAKE_WAREHOUSE` | no (`COMPUTE_WH`) | Warehouse |
-| `E2E_SNOWFLAKE_DATABASE` | yes | Database (schemas are created per run) |
+| `E2E_SNOWFLAKE_DATABASE` | yes | Target database |
 
 > The TiDB SQL endpoint (`E2E_TIDB_*`) and the OpenAPI cluster
 > (`E2E_TIDBCLOUD_CLUSTER_ID`) must be the **same** cluster: the tests seed data

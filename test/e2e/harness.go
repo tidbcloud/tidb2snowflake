@@ -106,14 +106,13 @@ func (c *e2eConfig) tidbConfig() *tidb.Config {
 	return &tidb.Config{Host: c.TiDBHost, Port: c.TiDBPort, User: c.TiDBUser, Pass: c.TiDBPass, TLS: true}
 }
 
-func (c *e2eConfig) Config(schema string) *snowflake.Config {
+func (c *e2eConfig) Config() *snowflake.Config {
 	return &snowflake.Config{
 		AccountId: c.SFAccountID,
 		Warehouse: c.SFWarehouse,
 		User:      c.SFUser,
 		Pass:      c.SFPass,
 		Database:  c.SFDatabase,
-		Schema:    schema,
 	}
 }
 
@@ -126,11 +125,9 @@ func (c *e2eConfig) tidbDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// snowflakeDB returns a *sql.DB scoped to the given schema (creating the
-// database/schema if needed).
-func (c *e2eConfig) snowflakeDB(t *testing.T, schema string) *sql.DB {
+func (c *e2eConfig) snowflakeDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := snowflake.OpenDB(c.Config(schema))
+	db, err := snowflake.OpenDB(c.Config())
 	if err != nil {
 		t.Fatalf("open Snowflake: %v", err)
 	}
@@ -139,9 +136,9 @@ func (c *e2eConfig) snowflakeDB(t *testing.T, schema string) *sql.DB {
 
 // runTool runs the built binary to completion (used for snapshot-only) and
 // returns its combined output.
-func runTool(ctx context.Context, t *testing.T, cfg *e2eConfig, mode, storagePath, schema, table string) error {
+func runTool(ctx context.Context, t *testing.T, cfg *e2eConfig, mode, storagePath, table string) error {
 	t.Helper()
-	cmd := exec.CommandContext(ctx, toolBinary, toolArgs(cfg, mode, storagePath, schema, table)...)
+	cmd := exec.CommandContext(ctx, toolBinary, toolArgs(cfg, mode, storagePath, table)...)
 	cmd.Env = toolEnv(cfg)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -153,10 +150,10 @@ func runTool(ctx context.Context, t *testing.T, cfg *e2eConfig, mode, storagePat
 
 // startTool runs the binary in the background (used for full/incremental-only,
 // which stream). The returned stop function terminates the process.
-func startTool(t *testing.T, cfg *e2eConfig, mode, storagePath, schema, table string) (stop func()) {
+func startTool(t *testing.T, cfg *e2eConfig, mode, storagePath, table string) (stop func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, toolBinary, toolArgs(cfg, mode, storagePath, schema, table)...)
+	cmd := exec.CommandContext(ctx, toolBinary, toolArgs(cfg, mode, storagePath, table)...)
 	cmd.Env = toolEnv(cfg)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -172,7 +169,7 @@ func startTool(t *testing.T, cfg *e2eConfig, mode, storagePath, schema, table st
 	}
 }
 
-func toolArgs(cfg *e2eConfig, mode, storagePath, schema, table string) []string {
+func toolArgs(cfg *e2eConfig, mode, storagePath, table string) []string {
 	args := []string{
 		"snowflake",
 		"--mode", mode,
@@ -186,7 +183,6 @@ func toolArgs(cfg *e2eConfig, mode, storagePath, schema, table string) []string 
 		"--snowflake.pass", cfg.SFPass,
 		"--snowflake.warehouse", cfg.SFWarehouse,
 		"--snowflake.database", cfg.SFDatabase,
-		"--snowflake.schema", schema,
 		"--storage", storagePath,
 		"--aws.access-key", cfg.AWSAccessKey,
 		"--aws.secret-key", cfg.AWSSecretKey,
@@ -257,13 +253,13 @@ func waitForColValue(t *testing.T, db *sql.DB, table, col string, id, want int, 
 
 // ---- cleanup ----
 
-// cleanup best-effort removes the Snowflake schema and the TiDB table.
-func cleanup(t *testing.T, cfg *e2eConfig, storagePath, schema, dbTable string) {
+// cleanup best-effort removes the Snowflake target table and the TiDB table.
+func cleanup(t *testing.T, cfg *e2eConfig, targetTable, dbTable string) {
 	t.Helper()
-	// Snowflake schema (drops the loaded table too).
-	if db, err := snowflake.OpenDB(cfg.Config(schema)); err == nil {
-		if _, err := db.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %s.%s", cfg.SFDatabase, schema)); err != nil {
-			t.Logf("cleanup: drop snowflake schema: %v", err)
+	// Snowflake target table.
+	if db, err := snowflake.OpenDB(cfg.Config()); err == nil {
+		if _, err := db.Exec("DROP TABLE IF EXISTS " + targetTable); err != nil {
+			t.Logf("cleanup: drop snowflake table: %v", err)
 		}
 		_ = db.Close()
 	}
@@ -274,6 +270,14 @@ func cleanup(t *testing.T, cfg *e2eConfig, storagePath, schema, dbTable string) 
 		}
 		_ = db.Close()
 	}
+}
+
+func targetTable(cfg *e2eConfig, sourceDB, sourceTable string) string {
+	return quoteSnowflakeIdent(cfg.SFDatabase) + "." + quoteSnowflakeIdent(sourceDB) + "." + quoteSnowflakeIdent(sourceTable)
+}
+
+func quoteSnowflakeIdent(ident string) string {
+	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
 }
 
 func mustTiDB(cfg *e2eConfig) *sql.DB {

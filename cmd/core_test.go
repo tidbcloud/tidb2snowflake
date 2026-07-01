@@ -44,7 +44,6 @@ func TestValidateConfig(t *testing.T) {
 		AWSAccessKey:            "AKIA",
 		AWSSecretKey:            "secret",
 		SnowflakeDatabase:       "SNOW",
-		SnowflakeSchema:         "PUBLIC",
 		Tables:                  []string{"db1.t1"},
 		Mode:                    "SNAPSHOT-ONLY",
 		SourceMode:              "OP",
@@ -75,7 +74,6 @@ func TestValidateConfig(t *testing.T) {
 		AWSAccessKey:        "AKIA",
 		AWSSecretKey:        "secret",
 		SnowflakeDatabase:   "SNOW",
-		SnowflakeSchema:     "PUBLIC",
 		Tables:              []string{"db1.t1"},
 	}
 	err = opt.validate()
@@ -92,7 +90,6 @@ func TestValidateConfig(t *testing.T) {
 		AWSAccessKey:        "AKIA",
 		AWSSecretKey:        "secret",
 		SnowflakeDatabase:   "SNOW",
-		SnowflakeSchema:     "PUBLIC",
 		Tables:              []string{"db1.t1"},
 	}
 	err = opt.validate()
@@ -125,7 +122,7 @@ func TestValidateConfig(t *testing.T) {
 	opt.SnowflakeDatabase = ""
 	err = opt.validate()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "--snowflake.database and --snowflake.schema are required")
+	require.Contains(t, err.Error(), "--snowflake.database is required")
 
 	opt = validationOption()
 	opt.AWSAccessKey = ""
@@ -169,6 +166,5 @@ func validationOption() *Option {
 	opt.TiDBPort = 4000
 	opt.TiDBUser = "root"
 	opt.SnowflakeDatabase = "SNOW"
-	opt.SnowflakeSchema = "PUBLIC"
 	return opt
 }
