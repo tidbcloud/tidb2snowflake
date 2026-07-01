@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
@@ -20,7 +20,7 @@ const (
 	ExternalStageName = "tidb2snowflake_external"
 )
 
-func (sc *Connector) CreateStage(ctx context.Context, storageURI *url.URL, cred *credentials.Value) error {
+func (sc *Connector) CreateStage(ctx context.Context, storageURI *url.URL, cred *aws.Credentials) error {
 	// A Snowflake named stage must belong to a schema. Keep it in an internal
 	// schema so business schemas can stay mapped from upstream databases.
 	// The full stage name is:

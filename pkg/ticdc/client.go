@@ -24,6 +24,7 @@ type ChangefeedConfig = apiv2.ChangefeedConfig
 type Changefeed = apiv2.ChangeFeedInfo
 
 type ChangefeedConfigOptions struct {
+	ChangefeedID  string
 	Tables        []string
 	StorageURI    *url.URL
 	StartTSO      uint64
@@ -68,10 +69,7 @@ func NewClient(address string, opts ...Option) (*Client, error) {
 	return c, nil
 }
 
-func BuildChangefeedConfig(opts ChangefeedConfigOptions) (*ChangefeedConfig, error) {
-	if opts.StorageURI == nil {
-		return nil, errors.New("storage uri is required")
-	}
+func BuildChangefeedConfig(opts ChangefeedConfigOptions) *ChangefeedConfig {
 	flushInterval := opts.FlushInterval
 	if flushInterval <= 0 {
 		flushInterval = 60 * time.Second
@@ -101,10 +99,11 @@ func BuildChangefeedConfig(opts ChangefeedConfigOptions) (*ChangefeedConfig, err
 	}
 
 	return &ChangefeedConfig{
+		ID:            opts.ChangefeedID,
 		SinkURI:       sinkURI.String(),
 		StartTs:       opts.StartTSO,
 		ReplicaConfig: replicaCfg,
-	}, nil
+	}
 }
 
 func (c *Client) CreateChangefeed(ctx context.Context, cfg *ChangefeedConfig) (*Changefeed, error) {

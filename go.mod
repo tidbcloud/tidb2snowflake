@@ -5,7 +5,7 @@ go 1.25.10
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/DATA-DOG/go-sqlmock v1.5.0
-	github.com/aws/aws-sdk-go v1.55.7
+	github.com/aws/aws-sdk-go-v2/config v1.32.2
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/icholy/digest v1.1.0
 	github.com/pingcap/errors v0.11.5-0.20260508054701-306e305bcf41
@@ -53,7 +53,7 @@ require (
 	github.com/apache/pulsar-client-go v0.13.0 // indirect
 	github.com/ardielle/ardielle-go v1.5.2 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
-	github.com/aws/aws-sdk-go-v2/config v1.32.2 // indirect
+	github.com/aws/aws-sdk-go v1.55.7 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.14 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/ini v1.8.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.45.3 // indirect
@@ -239,10 +239,10 @@ require (
 	github.com/VividCortex/ewma v1.2.0 // indirect
 	github.com/aliyun/alibaba-cloud-sdk-go v1.61.1581 // indirect
 	github.com/apache/thrift v0.23.0 // indirect
-	github.com/aws/aws-sdk-go-v2 v1.41.1 // indirect
+	github.com/aws/aws-sdk-go-v2 v1.41.1
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.3 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.2 // indirect
-	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.19.0 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.2
+	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.19.0
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.17 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.17 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.14 // indirect
@@ -250,7 +250,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.14 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.14 // indirect
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.92.1 // indirect
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.92.1
 	github.com/aws/smithy-go v1.24.0 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
