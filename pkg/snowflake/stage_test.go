@@ -25,7 +25,7 @@ func TestCreateStageUsesInternalSchemaAndSingleStage(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`CREATE SCHEMA IF NOT EXISTS "ODS_DB"."TIDB2SNOWFLAKE_INTERNAL";`)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(`CREATE OR REPLACE STAGE "ODS_DB"."TIDB2SNOWFLAKE_INTERNAL"."tidb2snowflake_external" URL = 's3://bucket/root/'`)).
+	mock.ExpectExec(regexp.QuoteMeta(`CREATE OR REPLACE STAGE "ODS_DB"."TIDB2SNOWFLAKE_INTERNAL"."TIDB2SNOWFLAKE_EXTERNAL" URL = 's3://bucket/root/'`)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	require.NoError(t, conn.CreateStage(context.Background(), &url.URL{Scheme: "s3", Host: "bucket", Path: "/root"}, cred))
@@ -38,7 +38,7 @@ func TestDropStageUsesInternalSchemaAndSingleStage(t *testing.T) {
 	defer db.Close()
 
 	conn := &Connector{db: db, TargetDatabase: "ODS_DB"}
-	mock.ExpectExec(regexp.QuoteMeta(`DROP STAGE IF EXISTS "ODS_DB"."TIDB2SNOWFLAKE_INTERNAL"."tidb2snowflake_external";`)).
+	mock.ExpectExec(regexp.QuoteMeta(`DROP STAGE IF EXISTS "ODS_DB"."TIDB2SNOWFLAKE_INTERNAL"."TIDB2SNOWFLAKE_EXTERNAL";`)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	conn.DropStage(context.Background())

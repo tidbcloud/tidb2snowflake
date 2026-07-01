@@ -5,7 +5,10 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/client"
 	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,6 +38,66 @@ func TestGetS3URIWithCredentials(t *testing.T) {
 
 	_, err = GetS3URIWithCredentials("gcs://bucket/path", testCred())
 	require.Error(t, err)
+}
+
+func TestNewS3ClientDetectsRegionWhenMissing(t *testing.T) {
+	old := getS3BucketRegion
+	defer func() {
+		getS3BucketRegion = old
+	}()
+	called := false
+	getS3BucketRegion = func(_ aws.Context, _ client.ConfigProvider, bucket, hint string, _ ...request.Option) (string, error) {
+		called = true
+		require.Equal(t, "bucket", bucket)
+		require.Equal(t, defaultS3RegionHint, hint)
+		return "us-west-2", nil
+	}
+
+	uri, err := url.Parse("s3://bucket/path?access-key=AKIA&secret-access-key=secret")
+	require.NoError(t, err)
+
+	client, err := newS3Client(context.Background(), uri)
+	require.NoError(t, err)
+	require.True(t, called)
+	require.Equal(t, "us-west-2", aws.StringValue(client.Config.Region))
+}
+
+func TestNewS3ClientUsesConfiguredRegion(t *testing.T) {
+	old := getS3BucketRegion
+	defer func() {
+		getS3BucketRegion = old
+	}()
+	getS3BucketRegion = func(aws.Context, client.ConfigProvider, string, string, ...request.Option) (string, error) {
+		t.Fatal("region detector should not be called when region is configured")
+		return "", nil
+	}
+
+	uri, err := url.Parse("s3://bucket/path?region=eu-central-1&access-key=AKIA&secret-access-key=secret")
+	require.NoError(t, err)
+
+	client, err := newS3Client(context.Background(), uri)
+	require.NoError(t, err)
+	require.Equal(t, "eu-central-1", aws.StringValue(client.Config.Region))
+}
+
+func TestNewS3ClientUsesDefaultRegionForCustomEndpoint(t *testing.T) {
+	old := getS3BucketRegion
+	defer func() {
+		getS3BucketRegion = old
+	}()
+	getS3BucketRegion = func(aws.Context, client.ConfigProvider, string, string, ...request.Option) (string, error) {
+		t.Fatal("region detector should not be called for custom endpoints")
+		return "", nil
+	}
+
+	uri, err := url.Parse("s3://bucket/path?endpoint=http%3A%2F%2F127.0.0.1%3A9000&access-key=AKIA&secret-access-key=secret")
+	require.NoError(t, err)
+
+	client, err := newS3Client(context.Background(), uri)
+	require.NoError(t, err)
+	require.Equal(t, defaultS3RegionHint, aws.StringValue(client.Config.Region))
+	require.Equal(t, "http://127.0.0.1:9000", aws.StringValue(client.Config.Endpoint))
+	require.True(t, aws.BoolValue(client.Config.S3ForcePathStyle))
 }
 
 func TestDirHasObjects(t *testing.T) {

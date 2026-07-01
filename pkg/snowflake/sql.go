@@ -43,7 +43,33 @@ type defaultSQLExpression interface {
 }
 
 func quoteIdent(ident string) string {
+	if isSnowflakeRegularIdent(ident) {
+		ident = strings.ToUpper(ident)
+	}
 	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
+}
+
+func isSnowflakeRegularIdent(ident string) bool {
+	if ident == "" {
+		return false
+	}
+	if !isSnowflakeIdentStart(ident[0]) {
+		return false
+	}
+	for i := 1; i < len(ident); i++ {
+		if !isSnowflakeIdentPart(ident[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isSnowflakeIdentStart(ch byte) bool {
+	return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_'
+}
+
+func isSnowflakeIdentPart(ch byte) bool {
+	return isSnowflakeIdentStart(ch) || (ch >= '0' && ch <= '9') || ch == '$'
 }
 
 func quoteIdents(idents []string) []string {

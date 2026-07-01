@@ -79,10 +79,11 @@ Snowflake target objects use this layout:
 <snowflake_database>.<source_database>.<source_table>
 ```
 
-For example, source table `source.t` loads into `ODS_DB.source.t` when
-`snowflake.database = "ODS_DB"` is used. The loader also creates one internal
-external stage at
-`<snowflake_database>.TIDB2SNOWFLAKE_INTERNAL.tidb2snowflake_external`.
+Regular source identifiers are created as uppercase Snowflake identifiers so
+they can be queried without double quotes. For example, source table `source.t`
+loads into `ODS_DB.SOURCE.T` when `snowflake.database = "ODS_DB"` is used. The
+loader also creates one internal external stage at
+`<snowflake_database>.TIDB2SNOWFLAKE_INTERNAL.TIDB2SNOWFLAKE_EXTERNAL`.
 
 ## Configuration
 
