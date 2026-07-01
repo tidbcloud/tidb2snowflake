@@ -17,11 +17,7 @@ func TestBuildConfigSnowflakeSnapshotDump(t *testing.T) {
 	storageURI, err := url.Parse("local:///tmp/tidb2snowflake/snapshot")
 	require.NoError(t, err)
 
-	ctx := context.Background()
-	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, storageURI.String())
-	require.NoError(t, err)
-
-	cfg, err := buildConfig(store, &tidb.Config{
+	cfg, err := buildConfig(&tidb.Config{
 		Host: "127.0.0.1",
 		Port: 4000,
 		User: "root",
@@ -54,7 +50,17 @@ func TestBuildConfigSnowflakeSnapshotDump(t *testing.T) {
 	require.Equal(t, uint64(export.UnspecifiedSize), cfg.FileSize)
 	require.True(t, cfg.SpecifiedTables)
 	require.Equal(t, storageURI.String(), cfg.OutputDirPath)
-	require.NotNil(t, cfg.ExtStorage)
+	require.Nil(t, cfg.ExtStorage)
+}
+
+func TestBuildConfigRequiresStorageURI(t *testing.T) {
+	_, err := buildConfig(&tidb.Config{}, Config{
+		Concurrency: 8,
+		Tables:      []string{"db1.t1"},
+		Compression: "none",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "storage uri is required")
 }
 
 func TestLoadTSOFromMetadata(t *testing.T) {

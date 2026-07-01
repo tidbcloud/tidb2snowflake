@@ -81,7 +81,7 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 	}
 
 	log.Info("dumping OP TiDB snapshot with Dumpling")
-	if err := dumpling.Run(ctx, r.store, r.cfg.TiDB, dumpling.Config{
+	if err := dumpling.Run(ctx, r.cfg.TiDB, dumpling.Config{
 		Concurrency:  r.cfg.SnapshotConcurrency,
 		StorageURI:   r.cfg.SnapshotURI,
 		SnapshotTSO:  r.cfg.SnapshotTSO,
@@ -101,8 +101,8 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	log.Info("snapshot data already exists in storage, skipping OP Dumpling snapshot dump",
-		zap.String("dir", storage.SnapshotDirName),
+	log.Info("OP Dumpling snapshot dump finished, snapshot metadata loaded",
+		zap.String("metadata", path.Join(storage.SnapshotDirName, "metadata")),
 		zap.Uint64("snapshotTSO", snapshotTSO))
 	return nil
 }
