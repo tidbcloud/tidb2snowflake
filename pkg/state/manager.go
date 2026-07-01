@@ -23,6 +23,9 @@ type Manager interface {
 	// SetChangefeedID records the source changefeed job so a restarted process can resume waiting for it.
 	SetChangefeedID(context.Context, string) error
 
+	// ClearChangefeedID removes the recorded source changefeed job after it is deleted.
+	ClearChangefeedID(context.Context) error
+
 	// SetDDLTableVersionWatermark records the latest schema table version applied to Snowflake for a table.
 	SetDDLTableVersionWatermark(context.Context, string, uint64) error
 
@@ -71,6 +74,17 @@ func Open(ctx context.Context, store storeapi.Storage, tables []string, snapshot
 	}
 	m.state = st
 	return m, nil
+}
+
+func OpenExisting(ctx context.Context, store storeapi.Storage) (Manager, error) {
+	exists, err := store.FileExists(ctx, stateFileName)
+	if err != nil {
+		return nil, errors.Annotatef(err, "check state file %s", stateFileName)
+	}
+	if !exists {
+		return nil, errors.Errorf("state file %s does not exist", stateFileName)
+	}
+	return Open(ctx, store, nil, false)
 }
 
 func (m *manager) Snapshot() State {
@@ -126,6 +140,13 @@ func (m *manager) SetChangefeedID(ctx context.Context, changefeedID string) erro
 	}
 	return m.update(ctx, func(st *State) error {
 		st.TaskInfo.ChangefeedID = changefeedID
+		return nil
+	})
+}
+
+func (m *manager) ClearChangefeedID(ctx context.Context) error {
+	return m.update(ctx, func(st *State) error {
+		st.TaskInfo.ChangefeedID = ""
 		return nil
 	})
 }

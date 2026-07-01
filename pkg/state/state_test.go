@@ -123,6 +123,20 @@ func TestStateMutationsPersist(t *testing.T) {
 	require.Equal(t, DMLCursor{Date: "2026-06-30", FileIndex: 12}, st.Tables["db.t"].DMLCursors["449/0/CDC"])
 }
 
+func TestClearChangefeedIDPersists(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	manager, err := Open(ctx, store, []string{"db.t"}, false)
+	require.NoError(t, err)
+	require.NoError(t, manager.SetChangefeedID(ctx, "cf-1"))
+
+	require.NoError(t, manager.ClearChangefeedID(ctx))
+
+	reopened, err := Open(ctx, store, []string{"db.t"}, false)
+	require.NoError(t, err)
+	require.Empty(t, reopened.Snapshot().TaskInfo.ChangefeedID)
+}
+
 func TestSnapshotReturnsDeepCopy(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)

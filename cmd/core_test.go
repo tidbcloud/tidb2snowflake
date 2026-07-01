@@ -156,6 +156,42 @@ func TestMarkSnapshotFinishedSetsCheckpoint(t *testing.T) {
 	require.Equal(t, uint64(466924115091783691), st.CheckpointTS)
 }
 
+func TestDeleteChangefeedFromStateDeletesRecordedChangefeed(t *testing.T) {
+	ctx := context.Background()
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
+	manager := newCmdTestStateManager(t, ctx, store)
+	require.NoError(t, manager.SetChangefeedID(ctx, "cf-1"))
+	deleter := &recordingChangefeedDeleter{}
+
+	require.NoError(t, deleteChangefeedFromState(ctx, manager, deleter))
+
+	require.Equal(t, []string{"cf-1"}, deleter.ids)
+	require.Empty(t, manager.Snapshot().TaskInfo.ChangefeedID)
+}
+
+func TestDeleteChangefeedFromStateRequiresChangefeedID(t *testing.T) {
+	ctx := context.Background()
+	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())
+	require.NoError(t, err)
+	manager := newCmdTestStateManager(t, ctx, store)
+	deleter := &recordingChangefeedDeleter{}
+
+	err = deleteChangefeedFromState(ctx, manager, deleter)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no changefeed id found in state")
+	require.Empty(t, deleter.ids)
+}
+
+type recordingChangefeedDeleter struct {
+	ids []string
+}
+
+func (d *recordingChangefeedDeleter) DeleteChangefeed(_ context.Context, changefeedID string) error {
+	d.ids = append(d.ids, changefeedID)
+	return nil
+}
+
 func newCmdTestStateManager(t *testing.T, ctx context.Context, store storeapi.Storage) state.Manager {
 	t.Helper()
 	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"}, false)

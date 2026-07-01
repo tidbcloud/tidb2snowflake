@@ -303,6 +303,47 @@ func (opt *Option) validate() error {
 	return nil
 }
 
+func (opt *Option) validateDelete() error {
+	opt.adjust()
+
+	if opt.StoragePath == "" {
+		return errors.New("--storage is required")
+	}
+	if opt.AWSAccessKey == "" || opt.AWSSecretKey == "" {
+		return errors.New("--aws.access-key and --aws.secret-key are required")
+	}
+	switch opt.SourceMode {
+	case sourceModeOP:
+		if opt.TiCDCAddress == "" {
+			return errors.New("--ticdc.address is required when --source.mode=op")
+		}
+	case sourceModeTiDBCloud:
+		if err := opt.validateTiDBCloudDeleteConfig(); err != nil {
+			return err
+		}
+	}
+
+	opt.logDeleteSummary()
+	return nil
+}
+
+func (opt *Option) validateTiDBCloudDeleteConfig() error {
+	var missing []string
+	if opt.TiDBCloudClusterID == "" {
+		missing = append(missing, envTiDBCloudClusterID)
+	}
+	if opt.TiDBCloudPublicKey == "" {
+		missing = append(missing, envTiDBCloudPublicKey)
+	}
+	if opt.TiDBCloudPrivateKey == "" {
+		missing = append(missing, envTiDBCloudPrivateKey)
+	}
+	if len(missing) > 0 {
+		return errors.Errorf("missing TiDB Cloud API environment variable(s): %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 func (opt *Option) logSummary() {
 	storage := opt.StoragePath
 	if uri, err := url.Parse(opt.StoragePath); err == nil {
@@ -323,6 +364,20 @@ func (opt *Option) logSummary() {
 		zap.String("ticdcAddress", opt.TiCDCAddress),
 		zap.String("snowflakeDatabase", opt.SnowflakeDatabase),
 		zap.String("snowflakeSchema", opt.SnowflakeSchema))
+}
+
+func (opt *Option) logDeleteSummary() {
+	storage := opt.StoragePath
+	if uri, err := url.Parse(opt.StoragePath); err == nil {
+		uri.RawQuery = ""
+		storage = uri.String()
+	}
+
+	log.Info("task deletion options validated",
+		zap.String("sourceMode", opt.SourceMode),
+		zap.String("storage", storage),
+		zap.Bool("tidbCloudConfigured", opt.TiDBCloudClusterID != ""),
+		zap.String("ticdcAddress", opt.TiCDCAddress))
 }
 
 func envDefault(name string) string {

@@ -260,7 +260,7 @@ SQL
   wait_for_s3_objects "$STORAGE_ROOT/increment/$SOURCE_DB/$SOURCE_TABLE" 2
 
   log "starting tidb2snowflake full loader"
-  "$ROOT/bin/tidb2snowflake" snowflake \
+  "$ROOT/bin/tidb2snowflake" create \
     --mode full \
     --tidb.host "$TIDB_HOST" --tidb.port "$TIDB_PORT" --tidb.user root \
     --snowflake.account-id "$SNOWFLAKE_ACCOUNT_ID" \

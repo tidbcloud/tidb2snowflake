@@ -20,7 +20,8 @@ func newRootCmd() *cobra.Command {
 	}
 
 	rootCmd.AddCommand(newVersionCmd())
-	rootCmd.AddCommand(cmd.NewSnowflakeCmd())
+	rootCmd.AddCommand(cmd.NewCreateCmd())
+	rootCmd.AddCommand(cmd.NewDeleteCmd())
 	return rootCmd
 }
 

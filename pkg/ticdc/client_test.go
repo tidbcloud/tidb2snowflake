@@ -86,6 +86,25 @@ func TestClientCreateAndWaitChangefeed(t *testing.T) {
 	require.Equal(t, 1, getCount)
 }
 
+func TestClientDeleteChangefeed(t *testing.T) {
+	var gotPath string
+	var gotNamespace string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		gotPath = r.URL.Path
+		gotNamespace = r.URL.Query().Get("namespace")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(srv.URL)
+	require.NoError(t, err)
+
+	require.NoError(t, client.DeleteChangefeed(context.Background(), "cf-1"))
+	require.Equal(t, "/api/v2/changefeeds/cf-1", gotPath)
+	require.Equal(t, "default", gotNamespace)
+}
+
 func TestClientWaitChangefeedFailsOnTerminalState(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodGet, r.Method)

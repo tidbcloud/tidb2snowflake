@@ -86,7 +86,7 @@ export TIDBCLOUD_CLUSTER_ID="..."
 export TIDBCLOUD_PUBLIC_KEY="..."
 export TIDBCLOUD_PRIVATE_KEY="..."
 
-./bin/tidb2snowflake snowflake \
+./bin/tidb2snowflake create \
   --source.mode=tidbcloud \
   --tidb.host "$TIDB_HOST" \
   --storage "s3://bucket/path" \
@@ -98,7 +98,7 @@ OpenAPI. The existing `--tidb.*` flags configure the TiDB SQL endpoint, and
 `--ticdc.address` points at the TiCDC OpenAPI service:
 
 ```bash
-./bin/tidb2snowflake snowflake \
+./bin/tidb2snowflake create \
   --source.mode=op \
   --tidb.host "$TIDB_HOST" \
   --tidb.port 4000 \
@@ -112,6 +112,16 @@ changefeed from that TSO, waits for the changefeed to become running, then dumps
 the snapshot with Dumpling. After Dumpling finishes, `snapshot/metadata` `Pos`
 is read back as the final snapshot TSO. `--snapshot.concurrency` controls
 Dumpling snapshot dump concurrency in OP mode.
+
+Delete a task's recorded changefeed with the same storage path used by
+`create`. TiDB Cloud mode reads the same `TIDBCLOUD_*` environment variables;
+OP mode also requires `--ticdc.address`:
+
+```bash
+./bin/tidb2snowflake delete \
+  --source.mode=tidbcloud \
+  --storage "s3://bucket/path"
+```
 
 ## Reusing an existing export / changefeed
 

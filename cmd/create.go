@@ -10,12 +10,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// NewSnowflakeCmd builds the `snowflake` subcommand.
-func NewSnowflakeCmd() *cobra.Command {
-	return newSnowflakeCmdWithRun(run)
+// NewCreateCmd builds the `create` subcommand.
+func NewCreateCmd() *cobra.Command {
+	return newCreateCmdWithRun(run)
 }
 
-func newSnowflakeCmdWithRun(run func(context.Context, *Option) error) *cobra.Command {
+func newCreateCmdWithRun(run func(context.Context, *Option) error) *cobra.Command {
 	var (
 		logFile  string
 		logLevel string
@@ -23,8 +23,8 @@ func newSnowflakeCmdWithRun(run func(context.Context, *Option) error) *cobra.Com
 
 	opt := NewOption()
 	cmd := &cobra.Command{
-		Use:   "snowflake",
-		Short: "Replicate snapshot and incremental data from TiDB to Snowflake",
+		Use:   "create",
+		Short: "Create a task that replicates TiDB data to Snowflake",
 		RunE: func(c *cobra.Command, _ []string) error {
 			if err := logger.InitLogger(&logger.Config{Level: logLevel, File: logFile}); err != nil {
 				return errors.Trace(err)

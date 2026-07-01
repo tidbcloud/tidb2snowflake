@@ -174,7 +174,7 @@ func startTool(t *testing.T, cfg *e2eConfig, mode, storagePath, schema, table st
 
 func toolArgs(cfg *e2eConfig, mode, storagePath, schema, table string) []string {
 	args := []string{
-		"snowflake",
+		"create",
 		"--mode", mode,
 		"--tidb.host", cfg.TiDBHost,
 		"--tidb.port", fmt.Sprintf("%d", cfg.TiDBPort),

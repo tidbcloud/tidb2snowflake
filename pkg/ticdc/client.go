@@ -125,6 +125,12 @@ func (c *Client) GetChangefeed(ctx context.Context, changefeedID string) (*Chang
 	return &out, nil
 }
 
+func (c *Client) DeleteChangefeed(ctx context.Context, changefeedID string) error {
+	values := url.Values{}
+	values.Set("namespace", common.DefaultKeyspaceName)
+	return c.doJSON(ctx, http.MethodDelete, []string{"changefeeds", changefeedID}, nil, nil, withQuery(values))
+}
+
 func (c *Client) WaitChangefeed(ctx context.Context, changefeedID string) (*Changefeed, error) {
 	if changefeedID == "" {
 		return nil, errors.New("changefeed id is required")
@@ -193,7 +199,7 @@ func (c *Client) doJSON(
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		respBody, _ := io.ReadAll(resp.Body)
 		return errors.Errorf("ticdc api %s %s failed with status %d: %s", method, endpoint.Path, resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
