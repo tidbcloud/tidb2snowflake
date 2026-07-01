@@ -1,9 +1,12 @@
 package incremental
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path"
 	"slices"
 	"strconv"
@@ -109,6 +112,18 @@ type scanSummary struct {
 	activeTables int
 	// loadedFiles is the number of DML files fully loaded into Snowflake.
 	loadedFiles uint64
+}
+
+type dmlFileStats struct {
+	rowCount                 uint64
+	minCommitTs              uint64
+	maxCommitTs              uint64
+	rowsAtOrBelowCheckpoint  uint64
+	rowsAfterCheckpoint      uint64
+	insertRows               uint64
+	updateRows               uint64
+	deleteRows               uint64
+	unknownOperationTypeRows uint64
 }
 
 type tableScan struct {
@@ -667,6 +682,26 @@ func (loader *loader) syncExecDMLEvents(
 	}, storage.CSVFileExtension, config.DefaultFileIndexWidth)
 	objectPath := path.Join(loader.storageDir, filePath)
 
+	if stats, err := loader.inspectDMLFile(ctx, objectPath, bounds.checkpointTs); err != nil {
+		log.Warn("failed to inspect DML file before load",
+			zap.String("filePath", objectPath),
+			zap.Uint64("checkpointTsUsedByMerge", bounds.checkpointTs),
+			zap.Error(err))
+	} else {
+		log.Info("DML file inspected before load",
+			zap.String("filePath", objectPath),
+			zap.Uint64("checkpointTsUsedByMerge", bounds.checkpointTs),
+			zap.Uint64("rowCount", stats.rowCount),
+			zap.Uint64("minCommitTs", stats.minCommitTs),
+			zap.Uint64("maxCommitTs", stats.maxCommitTs),
+			zap.Uint64("rowsAtOrBelowCheckpoint", stats.rowsAtOrBelowCheckpoint),
+			zap.Uint64("rowsAfterCheckpoint", stats.rowsAfterCheckpoint),
+			zap.Uint64("insertRows", stats.insertRows),
+			zap.Uint64("updateRows", stats.updateRows),
+			zap.Uint64("deleteRows", stats.deleteRows),
+			zap.Uint64("unknownOperationTypeRows", stats.unknownOperationTypeRows))
+	}
+
 	err := loader.conn.LoadIncrement(ctx, table.FromSchemaFile(schemaFile), objectPath, bounds.checkpointTs)
 	if err != nil {
 		log.Error("failed to load DML file into data warehouse",
@@ -679,10 +714,60 @@ func (loader *loader) syncExecDMLEvents(
 			zap.Uint64("fileIndex", fileIdx))
 		return errors.Trace(err)
 	}
-	log.Info("DML file loaded into data warehouse",
-		zap.String("filePath", objectPath),
-		zap.Uint64("checkpointTsUsedByMerge", bounds.checkpointTs))
 	return nil
+}
+
+func (loader *loader) inspectDMLFile(ctx context.Context, objectPath string, checkpointTs uint64) (dmlFileStats, error) {
+	data, err := loader.storage.ReadFile(ctx, objectPath)
+	if err != nil {
+		return dmlFileStats{}, errors.Trace(err)
+	}
+
+	reader := csv.NewReader(bytes.NewReader(data))
+	reader.FieldsPerRecord = -1
+
+	var stats dmlFileStats
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return stats, errors.Trace(err)
+		}
+		if len(record) < 4 {
+			return stats, errors.Errorf("DML CSV row has %d columns, expected at least 4", len(record))
+		}
+
+		commitTs, err := strconv.ParseUint(record[3], 10, 64)
+		if err != nil {
+			return stats, errors.Annotatef(err, "parse DML CSV commit ts %q", record[3])
+		}
+		stats.rowCount++
+		if stats.minCommitTs == 0 || commitTs < stats.minCommitTs {
+			stats.minCommitTs = commitTs
+		}
+		if commitTs > stats.maxCommitTs {
+			stats.maxCommitTs = commitTs
+		}
+		if commitTs <= checkpointTs {
+			stats.rowsAtOrBelowCheckpoint++
+		} else {
+			stats.rowsAfterCheckpoint++
+		}
+
+		switch record[0] {
+		case "I":
+			stats.insertRows++
+		case "U":
+			stats.updateRows++
+		case "D":
+			stats.deleteRows++
+		default:
+			stats.unknownOperationTypeRows++
+		}
+	}
+	return stats, nil
 }
 
 func (loader *loader) execDDL(ctx context.Context, tbl *tableState, schemaFile cloudstorage.SchemaFile) error {
