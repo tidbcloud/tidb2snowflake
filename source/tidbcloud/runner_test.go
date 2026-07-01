@@ -3,6 +3,8 @@ package tidbcloud
 import (
 	"context"
 	"net/url"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,8 +94,15 @@ func TestBuildExportRequestGzipCompression(t *testing.T) {
 
 func TestBuildChangefeedRequestFromTSO(t *testing.T) {
 	cfg := baseConfig()
+	before := time.Now().UnixMilli()
 	req := buildChangefeedRequest(cfg, "s3://bucket/path/increment/", testCred(), "449023000000000000")
+	after := time.Now().UnixMilli()
 
+	require.Regexp(t, `^tidb2snowflake-\d+$`, req.DisplayName)
+	displayNameTS, err := strconv.ParseInt(strings.TrimPrefix(req.DisplayName, "tidb2snowflake-"), 10, 64)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, displayNameTS, before)
+	require.LessOrEqual(t, displayNameTS, after)
 	require.Equal(t, cloudapi.ChangefeedTypeCloudStorage, req.Sink.Type)
 	cs := req.Sink.CloudStorage
 	require.Equal(t, cloudapi.CloudStorageTypeS3, cs.Storage.Type)
