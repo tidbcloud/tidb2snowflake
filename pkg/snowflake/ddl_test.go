@@ -24,7 +24,7 @@ func TestGenDDLViaTiDBDDLColumnDDL(t *testing.T) {
 		table.Column{Name: "gender", Tp: "varchar", Precision: "10", Nullable: "false", Default: 7},
 	), model.ActionAddColumn, "ALTER TABLE test_schema.test_table ADD COLUMN gender VARCHAR(10) NOT NULL DEFAULT 7")
 	require.NoError(t, err)
-	require.Equal(t, []string{`ALTER TABLE "TARGET_DB"."test_schema"."test_table" ADD COLUMN "gender" VARCHAR(10) NOT NULL DEFAULT 7;`}, ddl)
+	require.Equal(t, []string{`ALTER TABLE "TARGET_DB"."TEST_SCHEMA"."TEST_TABLE" ADD COLUMN "GENDER" VARCHAR(10) NOT NULL DEFAULT 7;`}, ddl)
 
 	ddl, err = GenDDLViaTiDBDDL("TARGET_DB", prevMeta, testMeta(
 		table.Column{Name: "id", Tp: "int", Precision: "11"},
@@ -32,7 +32,7 @@ func TestGenDDLViaTiDBDDLColumnDDL(t *testing.T) {
 		table.Column{Name: "c_default", Tp: "varchar", Precision: "16", Default: "v1"},
 	), model.ActionDropColumn, "ALTER TABLE test_schema.test_table DROP COLUMN age")
 	require.NoError(t, err)
-	require.Equal(t, []string{`ALTER TABLE "TARGET_DB"."test_schema"."test_table" DROP COLUMN "age";`}, ddl)
+	require.Equal(t, []string{`ALTER TABLE "TARGET_DB"."TEST_SCHEMA"."TEST_TABLE" DROP COLUMN "AGE";`}, ddl)
 
 	ddl, err = GenDDLViaTiDBDDL("TARGET_DB", prevMeta, testMeta(
 		table.Column{Name: "id", Tp: "int", Precision: "11"},
@@ -41,7 +41,7 @@ func TestGenDDLViaTiDBDDLColumnDDL(t *testing.T) {
 		table.Column{Name: "c_default", Tp: "varchar", Precision: "16", Default: "v1"},
 	), model.ActionModifyColumn, "ALTER TABLE test_schema.test_table RENAME COLUMN name TO color")
 	require.NoError(t, err)
-	require.Equal(t, []string{`ALTER TABLE "TARGET_DB"."test_schema"."test_table" RENAME COLUMN "name" TO "color";`}, ddl)
+	require.Equal(t, []string{`ALTER TABLE "TARGET_DB"."TEST_SCHEMA"."TEST_TABLE" RENAME COLUMN "NAME" TO "COLOR";`}, ddl)
 
 	ddl, err = GenDDLViaTiDBDDL("TARGET_DB", prevMeta, testMeta(
 		table.Column{Name: "id", Tp: "char", Precision: "10"},
@@ -50,7 +50,7 @@ func TestGenDDLViaTiDBDDLColumnDDL(t *testing.T) {
 		table.Column{Name: "c_default", Tp: "varchar", Precision: "16", Default: "v1"},
 	), model.ActionModifyColumn, "ALTER TABLE test_schema.test_table MODIFY COLUMN id CHAR(10)")
 	require.NoError(t, err)
-	require.Equal(t, []string{`ALTER TABLE "TARGET_DB"."test_schema"."test_table" MODIFY COLUMN "id" CHAR(10);`}, ddl)
+	require.Equal(t, []string{`ALTER TABLE "TARGET_DB"."TEST_SCHEMA"."TEST_TABLE" MODIFY COLUMN "ID" CHAR(10);`}, ddl)
 
 	ddl, err = GenDDLViaTiDBDDL("TARGET_DB", prevMeta, testMeta(
 		table.Column{Name: "id", Tp: "int", Precision: "11"},
@@ -60,8 +60,8 @@ func TestGenDDLViaTiDBDDLColumnDDL(t *testing.T) {
 	), model.ActionModifyColumn, "ALTER TABLE test_schema.test_table CHANGE COLUMN name color VARCHAR(32)")
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		`ALTER TABLE "TARGET_DB"."test_schema"."test_table" RENAME COLUMN "name" TO "color";`,
-		`ALTER TABLE "TARGET_DB"."test_schema"."test_table" MODIFY COLUMN "color" VARCHAR(32);`,
+		`ALTER TABLE "TARGET_DB"."TEST_SCHEMA"."TEST_TABLE" RENAME COLUMN "NAME" TO "COLOR";`,
+		`ALTER TABLE "TARGET_DB"."TEST_SCHEMA"."TEST_TABLE" MODIFY COLUMN "COLOR" VARCHAR(32);`,
 	}, ddl)
 
 	ddl, err = GenDDLViaTiDBDDL("TARGET_DB", prevMeta, testMeta(
@@ -71,7 +71,7 @@ func TestGenDDLViaTiDBDDLColumnDDL(t *testing.T) {
 		table.Column{Name: "c_default", Tp: "varchar", Precision: "16"},
 	), model.ActionSetDefaultValue, "ALTER TABLE test_schema.test_table ALTER COLUMN c_default DROP DEFAULT")
 	require.NoError(t, err)
-	require.Equal(t, []string{`ALTER TABLE "TARGET_DB"."test_schema"."test_table" MODIFY COLUMN "c_default" DROP DEFAULT;`}, ddl)
+	require.Equal(t, []string{`ALTER TABLE "TARGET_DB"."TEST_SCHEMA"."TEST_TABLE" MODIFY COLUMN "C_DEFAULT" DROP DEFAULT;`}, ddl)
 
 	ddl, err = GenDDLViaTiDBDDL("TARGET_DB", prevMeta, prevMeta, model.ActionAddIndex, "ALTER TABLE test_schema.test_table ADD INDEX idx_name(name)")
 	require.NoError(t, err)
@@ -85,10 +85,10 @@ func TestGenDDLViaTiDBDDLColumnDDL(t *testing.T) {
 	), model.ActionMultiSchemaChange, "ALTER TABLE test_schema.test_table DROP COLUMN age, CHANGE COLUMN name color VARCHAR(32), ADD COLUMN created_at DATETIME")
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		`ALTER TABLE "TARGET_DB"."test_schema"."test_table" DROP COLUMN "age";`,
-		`ALTER TABLE "TARGET_DB"."test_schema"."test_table" RENAME COLUMN "name" TO "color";`,
-		`ALTER TABLE "TARGET_DB"."test_schema"."test_table" MODIFY COLUMN "color" VARCHAR(32);`,
-		`ALTER TABLE "TARGET_DB"."test_schema"."test_table" ADD COLUMN "created_at" DATETIME(0);`,
+		`ALTER TABLE "TARGET_DB"."TEST_SCHEMA"."TEST_TABLE" DROP COLUMN "AGE";`,
+		`ALTER TABLE "TARGET_DB"."TEST_SCHEMA"."TEST_TABLE" RENAME COLUMN "NAME" TO "COLOR";`,
+		`ALTER TABLE "TARGET_DB"."TEST_SCHEMA"."TEST_TABLE" MODIFY COLUMN "COLOR" VARCHAR(32);`,
+		`ALTER TABLE "TARGET_DB"."TEST_SCHEMA"."TEST_TABLE" ADD COLUMN "CREATED_AT" DATETIME(0);`,
 	}, ddl)
 }
 
@@ -97,11 +97,11 @@ func TestGenDDLViaTiDBDDLTableDDL(t *testing.T) {
 
 	ddl, err := GenDDLViaTiDBDDL("TARGET_DB", nil, meta, model.ActionTruncateTable, "")
 	require.NoError(t, err)
-	require.Equal(t, []string{`TRUNCATE TABLE "TARGET_DB"."test_schema"."test_table"`}, ddl)
+	require.Equal(t, []string{`TRUNCATE TABLE "TARGET_DB"."TEST_SCHEMA"."TEST_TABLE"`}, ddl)
 
 	ddl, err = GenDDLViaTiDBDDL("TARGET_DB", nil, meta, model.ActionDropTable, "")
 	require.NoError(t, err)
-	require.Equal(t, []string{`DROP TABLE IF EXISTS "TARGET_DB"."test_schema"."test_table"`}, ddl)
+	require.Equal(t, []string{`DROP TABLE IF EXISTS "TARGET_DB"."TEST_SCHEMA"."TEST_TABLE"`}, ddl)
 
 	_, err = GenDDLViaTiDBDDL("TARGET_DB",
 		&table.Meta{Schema: "test_schema", Table: "old_table"},
@@ -134,52 +134,52 @@ func TestGetSnowflakeTypeString_NewScalarMappings(t *testing.T) {
 		{
 			name: "year",
 			col:  table.Column{Name: "c_year", Tp: "year"},
-			want: `"c_year" NUMBER`,
+			want: `"C_YEAR" NUMBER`,
 		},
 		{
 			name: "enum",
 			col:  table.Column{Name: "c_enum", Tp: "enum"},
-			want: `"c_enum" VARCHAR`,
+			want: `"C_ENUM" VARCHAR`,
 		},
 		{
 			name: "set",
 			col:  table.Column{Name: "c_set", Tp: "set"},
-			want: `"c_set" VARCHAR`,
+			want: `"C_SET" VARCHAR`,
 		},
 		{
 			name: "json",
 			col:  table.Column{Name: "c_json", Tp: "json"},
-			want: `"c_json" VARCHAR`,
+			want: `"C_JSON" VARCHAR`,
 		},
 		{
 			name: "vector",
 			col:  table.Column{Name: "c_vector", Tp: "vector"},
-			want: `"c_vector" VARCHAR`,
+			want: `"C_VECTOR" VARCHAR`,
 		},
 		{
 			name: "bit",
 			col:  table.Column{Name: "c_bit", Tp: "bit"},
-			want: `"c_bit" NUMBER`,
+			want: `"C_BIT" NUMBER`,
 		},
 		{
 			name: "mediumblob",
 			col:  table.Column{Name: "c_mediumblob", Tp: "mediumblob", Precision: "16777215"},
-			want: `"c_mediumblob" BINARY(16777215)`,
+			want: `"C_MEDIUMBLOB" BINARY(16777215)`,
 		},
 		{
 			name: "longblob",
 			col:  table.Column{Name: "c_longblob", Tp: "longblob", Precision: "67108864"},
-			want: `"c_longblob" BINARY(67108864)`,
+			want: `"C_LONGBLOB" BINARY(67108864)`,
 		},
 		{
 			name: "decimal unsigned",
 			col:  table.Column{Name: "c_decimal_unsigned", Tp: "decimal unsigned", Precision: "38", Scale: "10"},
-			want: `"c_decimal_unsigned" NUMBER(38, 10)`,
+			want: `"C_DECIMAL_UNSIGNED" NUMBER(38, 10)`,
 		},
 		{
 			name: "decimal unsigned overflow",
 			col:  table.Column{Name: "c_decimal_unsigned", Tp: "decimal unsigned", Precision: "65", Scale: "30"},
-			want: `"c_decimal_unsigned" VARCHAR`,
+			want: `"C_DECIMAL_UNSIGNED" VARCHAR`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

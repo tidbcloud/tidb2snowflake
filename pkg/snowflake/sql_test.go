@@ -17,7 +17,9 @@ func TestSnapshotFileFormatCompression(t *testing.T) {
 }
 
 func TestQuoteIdent(t *testing.T) {
-	require.Equal(t, `"simple"`, quoteIdent("simple"))
+	require.Equal(t, `"SIMPLE"`, quoteIdent("simple"))
+	require.Equal(t, `"WORKLOAD070117"`, quoteIdent("workload070117"))
+	require.Equal(t, `"SBTEST1"`, quoteIdent("sbtest1"))
 	require.Equal(t, `"a""b"`, quoteIdent(`a"b`))
 }
 
@@ -31,7 +33,7 @@ func TestLoadSnapshotEscapesFilePath(t *testing.T) {
 	defer db.Close()
 
 	conn := &Connector{db: db, TargetDatabase: "ODS_DB"}
-	mock.ExpectExec(regexp.QuoteMeta(`COPY INTO "ODS_DB"."db"."target" FROM @"ODS_DB"."TIDB2SNOWFLAKE_INTERNAL"."tidb2snowflake_external" FILES = ('dir/a\'b.csv')`)).
+	mock.ExpectExec(regexp.QuoteMeta(`COPY INTO "ODS_DB"."DB"."TARGET" FROM @"ODS_DB"."TIDB2SNOWFLAKE_INTERNAL"."TIDB2SNOWFLAKE_EXTERNAL" FILES = ('dir/a\'b.csv')`)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	require.NoError(t, conn.LoadSnapshot(context.Background(), "db", "target", "dir/a'b.csv", "none"))
@@ -44,7 +46,7 @@ func TestCreateSchemaUsesTargetDatabaseAndSourceDatabase(t *testing.T) {
 	defer db.Close()
 
 	conn := &Connector{db: db, TargetDatabase: "ODS_DB"}
-	mock.ExpectExec(regexp.QuoteMeta(`CREATE SCHEMA IF NOT EXISTS "ODS_DB"."source";`)).
+	mock.ExpectExec(regexp.QuoteMeta(`CREATE SCHEMA IF NOT EXISTS "ODS_DB"."SOURCE";`)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	require.NoError(t, conn.CreateSchema(context.Background(), "source"))
@@ -63,11 +65,11 @@ func TestGenMergeIntoEscapesIdentifiersAndFilePath(t *testing.T) {
 
 	got := genMergeIntoSQL("ODS_DB", meta, "dir/a'b.csv", 100)
 
-	require.Contains(t, got, `MERGE INTO "ODS_DB"."db"."""target" AS T`)
-	require.Contains(t, got, `FROM '@"ODS_DB"."TIDB2SNOWFLAKE_INTERNAL"."tidb2snowflake_external"/dir/a\'b.csv'`)
+	require.Contains(t, got, `MERGE INTO "ODS_DB"."DB"."""target" AS T`)
+	require.Contains(t, got, `FROM '@"ODS_DB"."TIDB2SNOWFLAKE_INTERNAL"."TIDB2SNOWFLAKE_EXTERNAL"/dir/a\'b.csv'`)
 	require.Contains(t, got, `WHERE TO_NUMBER($4) > 100`)
 	require.NotContains(t, got, `<=`)
-	require.Contains(t, got, `T."id" = S."id"`)
+	require.Contains(t, got, `T."ID" = S."ID"`)
 }
 
 func TestLoadIncrementMergesRowsAfterCheckpoint(t *testing.T) {
@@ -103,5 +105,5 @@ CREATE TABLE `+"`bank0`"+` (
   PRIMARY KEY (`+"`id`"+`)
 	);`)
 	got := buildCreateTableSQL("ODS_DB", tableSchema)
-	require.Equal(t, `CREATE OR REPLACE TABLE "ODS_DB"."test"."bank0" ("id" NUMBER NOT NULL, "balance" NUMBER(10, 0), "name" VARCHAR(30) DEFAULT 'Z', "created_at" DATETIME(0) DEFAULT CURRENT_TIMESTAMP(), PRIMARY KEY ("id"))`, got)
+	require.Equal(t, `CREATE OR REPLACE TABLE "ODS_DB"."TEST"."BANK0" ("ID" NUMBER NOT NULL, "BALANCE" NUMBER(10, 0), "NAME" VARCHAR(30) DEFAULT 'Z', "CREATED_AT" DATETIME(0) DEFAULT CURRENT_TIMESTAMP(), PRIMARY KEY ("ID"))`, got)
 }
