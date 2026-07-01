@@ -16,6 +16,7 @@ type configFile struct {
 
 	Storage    storageConfig    `toml:"storage"`
 	TiDB       tidbConfig       `toml:"tidb"`
+	TiDBCloud  tidbCloudConfig  `toml:"tidbcloud"`
 	TiCDC      ticdcConfig      `toml:"ticdc"`
 	Snowflake  snowflakeConfig  `toml:"snowflake"`
 	Snapshot   snapshotConfig   `toml:"snapshot"`
@@ -37,6 +38,13 @@ type tidbConfig struct {
 	Pass  string `toml:"pass"`
 	TLS   bool   `toml:"tls"`
 	SSLCA string `toml:"ssl-ca"`
+}
+
+type tidbCloudConfig struct {
+	ClusterID  string `toml:"cluster-id"`
+	PublicKey  string `toml:"public-key"`
+	PrivateKey string `toml:"private-key"`
+	Host       string `toml:"host"`
 }
 
 type ticdcConfig struct {
@@ -103,6 +111,11 @@ func loadConfig(path string) (*Option, *logger.Config, error) {
 	opt.TiDBPass = cfg.TiDB.Pass
 	opt.TiDBTLS = cfg.TiDB.TLS
 	opt.TiDBSSLCA = cfg.TiDB.SSLCA
+
+	opt.TiDBCloudClusterID = cfg.TiDBCloud.ClusterID
+	opt.TiDBCloudPublicKey = cfg.TiDBCloud.PublicKey
+	opt.TiDBCloudPrivateKey = cfg.TiDBCloud.PrivateKey
+	opt.TiDBCloudHost = cfg.TiDBCloud.Host
 
 	opt.TiCDCAddress = cfg.TiCDC.Address
 
