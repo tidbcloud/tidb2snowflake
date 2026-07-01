@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
@@ -29,7 +30,7 @@ func (sc *Connector) CreateStage(ctx context.Context, storageURI *url.URL, cred 
 	}
 
 	stageName := quoteQualifiedIdent(sc.TargetDatabase, InternalSchemaName, ExternalStageName)
-	stageURL := fmt.Sprintf("%s://%s%s", storageURI.Scheme, storageURI.Host, storageURI.Path)
+	stageURL := stageRootURL(storageURI)
 	sql := fmt.Sprintf(`CREATE OR REPLACE STAGE %s URL = '%s' CREDENTIALS = (AWS_KEY_ID = '%s' AWS_SECRET_KEY = '%s' AWS_TOKEN = '%s')
 				FILE_FORMAT = (type = 'CSV' EMPTY_FIELD_AS_NULL = FALSE NULL_IF=('\\N') FIELD_OPTIONALLY_ENCLOSED_BY='"' ESCAPE='\\' BINARY_FORMAT = 'HEX');`,
 		stageName, escapeString(stageURL), escapeString(cred.AccessKeyID), escapeString(cred.SecretAccessKey), escapeString(cred.SessionToken))
@@ -44,6 +45,17 @@ func (sc *Connector) CreateStage(ctx context.Context, storageURI *url.URL, cred 
 		zap.String("stage", stageName),
 		zap.String("stageURL", stageURL))
 	return nil
+}
+
+func stageRootURL(storageURI *url.URL) string {
+	rootPath := storageURI.EscapedPath()
+	if rootPath == "" {
+		rootPath = "/"
+	}
+	if !strings.HasSuffix(rootPath, "/") {
+		rootPath += "/"
+	}
+	return fmt.Sprintf("%s://%s%s", storageURI.Scheme, storageURI.Host, rootPath)
 }
 
 func (sc *Connector) DropStage(ctx context.Context) {
