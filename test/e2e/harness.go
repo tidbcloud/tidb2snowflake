@@ -16,6 +16,8 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -138,7 +140,7 @@ func (c *e2eConfig) snowflakeDB(t *testing.T) *sql.DB {
 // returns its combined output.
 func runTool(ctx context.Context, t *testing.T, cfg *e2eConfig, mode, storagePath, table string) error {
 	t.Helper()
-	cmd := exec.CommandContext(ctx, toolBinary, toolArgs(cfg, mode, storagePath, table)...)
+	cmd := exec.CommandContext(ctx, toolBinary, toolArgs(t, cfg, mode, storagePath, table)...)
 	cmd.Env = toolEnv(cfg)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -153,7 +155,7 @@ func runTool(ctx context.Context, t *testing.T, cfg *e2eConfig, mode, storagePat
 func startTool(t *testing.T, cfg *e2eConfig, mode, storagePath, table string) (stop func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, toolBinary, toolArgs(cfg, mode, storagePath, table)...)
+	cmd := exec.CommandContext(ctx, toolBinary, toolArgs(t, cfg, mode, storagePath, table)...)
 	cmd.Env = toolEnv(cfg)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -169,27 +171,40 @@ func startTool(t *testing.T, cfg *e2eConfig, mode, storagePath, table string) (s
 	}
 }
 
-func toolArgs(cfg *e2eConfig, mode, storagePath, table string) []string {
-	args := []string{
-		"snowflake",
-		"--mode", mode,
-		"--tidb.host", cfg.TiDBHost,
-		"--tidb.port", fmt.Sprintf("%d", cfg.TiDBPort),
-		"--tidb.user", cfg.TiDBUser,
-		"--tidb.pass", cfg.TiDBPass,
-		"--tidb.tls",
-		"--snowflake.account-id", cfg.SFAccountID,
-		"--snowflake.user", cfg.SFUser,
-		"--snowflake.pass", cfg.SFPass,
-		"--snowflake.warehouse", cfg.SFWarehouse,
-		"--snowflake.database", cfg.SFDatabase,
-		"--storage", storagePath,
-		"--aws.access-key", cfg.AWSAccessKey,
-		"--aws.secret-key", cfg.AWSSecretKey,
-		"--table", table,
-		"--log.level", "info",
+func toolArgs(t *testing.T, cfg *e2eConfig, mode, storagePath, table string) []string {
+	t.Helper()
+	return []string{"snowflake", "--config", writeToolConfig(t, cfg, mode, storagePath, table)}
+}
+
+func writeToolConfig(t *testing.T, cfg *e2eConfig, mode, storagePath, table string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "tidb2snowflake.toml")
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "mode = %s\n", strconv.Quote(mode))
+	fmt.Fprintf(&buf, "source = %s\n", strconv.Quote("tidbcloud"))
+	fmt.Fprintf(&buf, "tables = [%s]\n\n", strconv.Quote(table))
+	fmt.Fprintf(&buf, "[storage]\n")
+	fmt.Fprintf(&buf, "uri = %s\n", strconv.Quote(storagePath))
+	fmt.Fprintf(&buf, "access-key = %s\n", strconv.Quote(cfg.AWSAccessKey))
+	fmt.Fprintf(&buf, "secret-key = %s\n\n", strconv.Quote(cfg.AWSSecretKey))
+	fmt.Fprintf(&buf, "[tidb]\n")
+	fmt.Fprintf(&buf, "host = %s\n", strconv.Quote(cfg.TiDBHost))
+	fmt.Fprintf(&buf, "port = %d\n", cfg.TiDBPort)
+	fmt.Fprintf(&buf, "user = %s\n", strconv.Quote(cfg.TiDBUser))
+	fmt.Fprintf(&buf, "pass = %s\n", strconv.Quote(cfg.TiDBPass))
+	fmt.Fprintf(&buf, "tls = true\n\n")
+	fmt.Fprintf(&buf, "[snowflake]\n")
+	fmt.Fprintf(&buf, "account-id = %s\n", strconv.Quote(cfg.SFAccountID))
+	fmt.Fprintf(&buf, "user = %s\n", strconv.Quote(cfg.SFUser))
+	fmt.Fprintf(&buf, "pass = %s\n", strconv.Quote(cfg.SFPass))
+	fmt.Fprintf(&buf, "warehouse = %s\n", strconv.Quote(cfg.SFWarehouse))
+	fmt.Fprintf(&buf, "database = %s\n\n", strconv.Quote(cfg.SFDatabase))
+	fmt.Fprintf(&buf, "[log]\n")
+	fmt.Fprintf(&buf, "level = %s\n", strconv.Quote("info"))
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatalf("write tool config: %v", err)
 	}
-	return args
+	return path
 }
 
 func toolEnv(cfg *e2eConfig) []string {

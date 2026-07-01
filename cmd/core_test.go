@@ -17,6 +17,10 @@ func baseOption() *Option {
 	opt.StoragePath = "s3://bucket/path"
 	opt.AWSAccessKey = "AKIA"
 	opt.AWSSecretKey = "secret"
+	opt.SnowflakeAccountID = "org-account"
+	opt.SnowflakeUser = "sf-user"
+	opt.SnowflakePass = "sf-pass"
+	opt.SnowflakeDatabase = "SNOW"
 	opt.Tables = []string{"db1.t1", "db2.t2"}
 	return opt
 }
@@ -41,8 +45,12 @@ func TestNewOptionDefaults(t *testing.T) {
 
 func TestValidateConfig(t *testing.T) {
 	opt := &Option{
+		StoragePath:             "s3://bucket/path",
 		AWSAccessKey:            "AKIA",
 		AWSSecretKey:            "secret",
+		SnowflakeAccountID:      "org-account",
+		SnowflakeUser:           "sf-user",
+		SnowflakePass:           "sf-pass",
 		SnowflakeDatabase:       "SNOW",
 		Tables:                  []string{"db1.t1"},
 		Mode:                    "SNAPSHOT-ONLY",
@@ -69,10 +77,14 @@ func TestValidateConfig(t *testing.T) {
 	require.Equal(t, snapshotCSVNullValue, opt.SnapshotCSVNullValue)
 
 	opt = &Option{
+		StoragePath:         "s3://bucket/path",
 		SourceMode:          sourceModeTiDBCloud,
 		SnapshotConcurrency: -1,
 		AWSAccessKey:        "AKIA",
 		AWSSecretKey:        "secret",
+		SnowflakeAccountID:  "org-account",
+		SnowflakeUser:       "sf-user",
+		SnowflakePass:       "sf-pass",
 		SnowflakeDatabase:   "SNOW",
 		Tables:              []string{"db1.t1"},
 	}
@@ -84,11 +96,15 @@ func TestValidateConfig(t *testing.T) {
 	require.Equal(t, -1, opt.SnapshotConcurrency)
 
 	opt = &Option{
+		StoragePath:         "s3://bucket/path",
 		Mode:                "unknown",
 		SourceMode:          "unknown",
 		SnapshotCompression: "unknown",
 		AWSAccessKey:        "AKIA",
 		AWSSecretKey:        "secret",
+		SnowflakeAccountID:  "org-account",
+		SnowflakeUser:       "sf-user",
+		SnowflakePass:       "sf-pass",
 		SnowflakeDatabase:   "SNOW",
 		Tables:              []string{"db1.t1"},
 	}
@@ -109,32 +125,56 @@ func TestValidateConfig(t *testing.T) {
 	opt.SnapshotTSO = "0"
 	err = opt.validate()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "--snapshot-tso must be greater than 0")
+	require.Contains(t, err.Error(), "snapshot.tso must be greater than 0")
 
 	opt = validationOption()
 	opt.SourceMode = sourceModeOP
 	err = opt.validate()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "--ticdc.address is required when --source.mode=op")
+	require.Contains(t, err.Error(), "ticdc.address is required when source=op")
 
 	opt = validationOption()
 	opt.Mode = runModeIncrementalOnly
 	opt.SnowflakeDatabase = ""
 	err = opt.validate()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "--snowflake.database is required")
+	require.Contains(t, err.Error(), "snowflake.database is required")
 
 	opt = validationOption()
 	opt.AWSAccessKey = ""
 	err = opt.validate()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "--aws.access-key and --aws.secret-key are required")
+	require.Contains(t, err.Error(), "storage.access-key and storage.secret-key are required")
 
 	opt = validationOption()
 	opt.Tables = nil
 	err = opt.validate()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "no tables specified")
+	require.Contains(t, err.Error(), "tables is required")
+
+	opt = validationOption()
+	opt.StoragePath = ""
+	err = opt.validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "storage.uri is required")
+
+	opt = validationOption()
+	opt.SnowflakeAccountID = ""
+	err = opt.validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "snowflake.account-id is required")
+
+	opt = validationOption()
+	opt.SnowflakeUser = ""
+	err = opt.validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "snowflake.user is required")
+
+	opt = validationOption()
+	opt.SnowflakePass = ""
+	err = opt.validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "snowflake.pass is required")
 }
 
 func TestMarkSnapshotFinishedSetsCheckpoint(t *testing.T) {
@@ -165,6 +205,5 @@ func validationOption() *Option {
 	opt.TiDBHost = "127.0.0.1"
 	opt.TiDBPort = 4000
 	opt.TiDBUser = "root"
-	opt.SnowflakeDatabase = "SNOW"
 	return opt
 }

@@ -35,5 +35,6 @@ precision 38. Others are replication-semantics issues that need an explicit
 table-admission/versioning design before they are safe to run, such as
 running-task CREATE TABLE/CREATE SCHEMA, drop/recreate with a changed shape,
 primary-key changes, and tables without a stable primary key. `RENAME TABLE`
-is supported as a DDL replay operation, but an exact `--table db.old` task does
-not switch to consuming future DML from `db.new` after the rename.
+is supported as a DDL replay operation, but a task configured with only
+`tables = ["db.old"]` does not switch to consuming future DML from `db.new`
+after the rename.

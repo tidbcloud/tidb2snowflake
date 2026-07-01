@@ -182,6 +182,44 @@ null = '\N'
 TOML
 }
 
+toml_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+write_tool_config() {
+  cat >"$WORKDIR/tidb2snowflake.toml" <<TOML
+mode = "full"
+source = "tidbcloud"
+tables = ["$(toml_escape "$TABLE_FQN")"]
+
+[storage]
+uri = "$(toml_escape "$STORAGE_ROOT")"
+access-key = "$(toml_escape "$AWS_ACCESS_KEY_ID")"
+secret-key = "$(toml_escape "$AWS_SECRET_ACCESS_KEY")"
+
+[tidb]
+host = "$(toml_escape "$TIDB_HOST")"
+port = $TIDB_PORT
+user = "root"
+
+[snowflake]
+account-id = "$(toml_escape "$SNOWFLAKE_ACCOUNT_ID")"
+user = "$(toml_escape "$SNOWFLAKE_USER")"
+pass = "$(toml_escape "$SNOWFLAKE_PASS")"
+warehouse = "$(toml_escape "$SNOWFLAKE_WAREHOUSE")"
+database = "$(toml_escape "$SNOWFLAKE_DATABASE")"
+
+[snapshot]
+compression = "$(toml_escape "$SNAPSHOT_COMPRESSION")"
+
+[changefeed]
+flush-interval = "10s"
+
+[log]
+level = "info"
+TOML
+}
+
 main() {
   need tiup
   need aws
@@ -259,21 +297,8 @@ SQL
   wait_for_s3_objects "$STORAGE_ROOT/increment/$SOURCE_DB/$SOURCE_TABLE" 2
 
   log "starting tidb2snowflake full loader"
-  "$ROOT/bin/tidb2snowflake" snowflake \
-    --mode full \
-    --tidb.host "$TIDB_HOST" --tidb.port "$TIDB_PORT" --tidb.user root \
-    --snowflake.account-id "$SNOWFLAKE_ACCOUNT_ID" \
-    --snowflake.user "$SNOWFLAKE_USER" \
-    --snowflake.pass "$SNOWFLAKE_PASS" \
-    --snowflake.warehouse "$SNOWFLAKE_WAREHOUSE" \
-    --snowflake.database "$SNOWFLAKE_DATABASE" \
-    --storage "$STORAGE_ROOT" \
-    --aws.access-key "$AWS_ACCESS_KEY_ID" \
-    --aws.secret-key "$AWS_SECRET_ACCESS_KEY" \
-    --table "$TABLE_FQN" \
-    --snapshot.compression "$SNAPSHOT_COMPRESSION" \
-    --changefeed.flush-interval 10s \
-    --log.level info >"$WORKDIR/tidb2snowflake.log" 2>&1 &
+  write_tool_config
+  "$ROOT/bin/tidb2snowflake" snowflake --config "$WORKDIR/tidb2snowflake.toml" >"$WORKDIR/tidb2snowflake.log" 2>&1 &
   TOOL_PID=$!
 
   log "waiting for Snowflake assertion"
