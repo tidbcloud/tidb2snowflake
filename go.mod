@@ -3,8 +3,8 @@ module github.com/tidbcloud/tidb2snowflake
 go 1.25.10
 
 require (
-	github.com/DATA-DOG/go-sqlmock v1.5.0
 	github.com/BurntSushi/toml v1.6.0
+	github.com/DATA-DOG/go-sqlmock v1.5.0
 	github.com/aws/aws-sdk-go v1.55.7
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/icholy/digest v1.1.0
@@ -351,7 +351,7 @@ require (
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
-	golang.org/x/sync v0.20.0
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
