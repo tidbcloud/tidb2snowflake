@@ -2,6 +2,8 @@ package tidbcloud
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,7 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // newTestClient builds a Client pointed at the given test server URL.
@@ -84,6 +90,109 @@ func TestDoAPIError(t *testing.T) {
 	require.Contains(t, apiErr.Message, "invalid snapshot_tso")
 }
 
+func TestDoLogsSanitizedAPIErrorContext(t *testing.T) {
+	logs := captureTiDBCloudLogs(t)
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		req.Header.Set("Authorization", "Bearer request-header-secret")
+		req.Header.Set("X-Api-Key", "request-api-key-secret")
+		body := `{"code":3,"message":"password=response-password-secret token=response-token-secret url=https://user:response-url-password-secret@example.com/path?api_key=response-query-secret"}`
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Status:     "400 Bad Request",
+			Header: http.Header{
+				"Set-Cookie":    []string{"session=response-cookie-secret"},
+				"X-Api-Key":     []string{"response-api-key-secret"},
+				"X-Request-Id":  []string{"request-id-1"},
+				"Content-Type":  []string{"application/json"},
+				"Cache-Control": []string{"no-store"},
+			},
+			Body:    io.NopCloser(strings.NewReader(body)),
+			Request: req,
+		}, nil
+	})
+
+	c := newRawHTTPTestClient("https://api.example.test", rt)
+	var out Changefeed
+	err := c.do(context.Background(), http.MethodPost, "/v1beta1/clusters/10/changefeeds?token=url-token-secret&safe=ok", map[string]any{
+		"secret": "json-body-secret",
+		"nested": map[string]any{
+			"password": "json-password-secret",
+		},
+		"uri": "s3://user:uri-password-secret@bucket/path?secret_access_key=uri-query-secret&safe=ok",
+		"raw": "password=raw-password-secret token: raw-token-secret",
+	}, &out)
+	require.Error(t, err)
+
+	logText := observedLogContext(t, logs, "TiDB Cloud request failed")
+	require.Contains(t, logText, "POST")
+	require.Contains(t, logText, "requestHeaders")
+	require.Contains(t, logText, "responseHeaders")
+	require.Contains(t, logText, "requestBody")
+	require.Contains(t, logText, "responseBody")
+	require.Contains(t, logText, "Authorization")
+	require.Contains(t, logText, "Set-Cookie")
+	require.Contains(t, logText, "X-Request-Id")
+	require.Contains(t, logText, "request-id-1")
+	require.Contains(t, logText, "<redacted>")
+	assertNoSecrets(t, logText,
+		"request-header-secret",
+		"request-api-key-secret",
+		"response-password-secret",
+		"response-token-secret",
+		"response-url-password-secret",
+		"response-query-secret",
+		"response-cookie-secret",
+		"response-api-key-secret",
+		"url-token-secret",
+		"json-body-secret",
+		"json-password-secret",
+		"uri-password-secret",
+		"uri-query-secret",
+		"raw-password-secret",
+		"raw-token-secret",
+	)
+	assertNoSecrets(t, err.Error(), "response-password-secret", "response-token-secret", "response-query-secret")
+}
+
+func TestDoLogsSanitizedDecodeFailureContext(t *testing.T) {
+	logs := captureTiDBCloudLogs(t)
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		req.Header.Set("Authorization", "Bearer decode-request-secret")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header: http.Header{
+				"X-Api-Token":  []string{"decode-response-header-secret"},
+				"Content-Type": []string{"application/json"},
+			},
+			Body:    io.NopCloser(strings.NewReader(`{"token":"decode-response-body-secret"`)),
+			Request: req,
+		}, nil
+	})
+
+	c := newRawHTTPTestClient("https://api.example.test", rt)
+	var out Export
+	err := c.do(context.Background(), http.MethodPost, "/v1beta1/clusters/10/exports?private_key=decode-url-secret", map[string]any{
+		"privateKey": "decode-request-body-secret",
+	}, &out)
+	require.Error(t, err)
+
+	logText := observedLogContext(t, logs, "TiDB Cloud response decode failed")
+	require.Contains(t, logText, "POST")
+	require.Contains(t, logText, "requestHeaders")
+	require.Contains(t, logText, "responseHeaders")
+	require.Contains(t, logText, "requestBody")
+	require.Contains(t, logText, "responseBody")
+	require.Contains(t, logText, "<redacted>")
+	assertNoSecrets(t, logText,
+		"decode-request-secret",
+		"decode-response-header-secret",
+		"decode-response-body-secret",
+		"decode-url-secret",
+		"decode-request-body-secret",
+	)
+}
+
 func TestDoRetriesOn503ThenSucceeds(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -129,4 +238,43 @@ func TestDoContextCancel(t *testing.T) {
 	c := newTestClient(t, srv.URL, WithMaxRetries(100))
 	_, err := c.GetExport(ctx, "10", "exp-1")
 	require.Error(t, err)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func captureTiDBCloudLogs(t *testing.T) *observer.ObservedLogs {
+	t.Helper()
+	core, logs := observer.New(zapcore.ErrorLevel)
+	restore := log.ReplaceGlobals(zap.New(core), &log.ZapProperties{
+		Core:  core,
+		Level: zap.NewAtomicLevelAt(zapcore.ErrorLevel),
+	})
+	t.Cleanup(restore)
+	return logs
+}
+
+func newRawHTTPTestClient(baseURL string, rt http.RoundTripper) *Client {
+	return &Client{
+		baseURL:    baseURL,
+		maxRetries: 0,
+		httpClient: &http.Client{Transport: rt},
+	}
+}
+
+func observedLogContext(t *testing.T, logs *observer.ObservedLogs, message string) string {
+	t.Helper()
+	entries := logs.FilterMessage(message).All()
+	require.Len(t, entries, 1)
+	return fmt.Sprint(entries[0].ContextMap())
+}
+
+func assertNoSecrets(t *testing.T, text string, secrets ...string) {
+	t.Helper()
+	for _, secret := range secrets {
+		require.NotContains(t, text, secret)
+	}
 }

@@ -255,7 +255,7 @@ func validateTiDBCloudConfig(cfg Config) error {
 
 func buildChangefeedRequest(cfg Config, cleanIncrementURI string, cred *credentials.Value, snapshotTSO string) *tidbcloud.CreateChangefeedRequest {
 	return &tidbcloud.CreateChangefeedRequest{
-		DisplayName: "tidb2snowflake-incremental",
+		DisplayName: "tidb2snowflake-" + strconv.FormatInt(time.Now().UnixMilli(), 10),
 		Sink: &tidbcloud.Sink{
 			Type: tidbcloud.ChangefeedTypeCloudStorage,
 			CloudStorage: &tidbcloud.CloudStorageSink{
