@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -29,7 +29,7 @@ type Config struct {
 	SnapshotCompression     tidbcloud.ExportCompression
 	SnapshotTSO             string
 
-	Credential *credentials.Value
+	Credential *aws.Credentials
 }
 
 type Runner struct {
@@ -49,6 +49,7 @@ func NewRunner(cfg Config, store *storage.Storage, state state.Manager) *Runner 
 }
 
 func (r *Runner) EnsureSnapshot(ctx context.Context) error {
+	start := time.Now()
 	stateSnapshot := r.state.Snapshot()
 	if stateSnapshot.SnapshotFinished && stateSnapshot.CheckpointTS != 0 {
 		log.Info("snapshot already finished in state, skipping TiDB Cloud export",
@@ -67,8 +68,8 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		log.Info("snapshot metadata already exists in storage, skipping TiDB Cloud export",
-			zap.String("metadata", metadataPath),
-			zap.Uint64("snapshotTSO", snapshotTSO))
+			zap.Uint64("snapshotTSO", snapshotTSO), zap.String("metadata", metadataPath),
+			zap.Duration("duration", time.Since(start)))
 		return nil
 	}
 
@@ -99,13 +100,8 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 	if err != nil {
 		return errors.Annotate(err, "wait TiDB Cloud export")
 	}
-	log.Info("TiDB Cloud export ready", zap.String("exportID", exportID), zap.String("snapshotTSO", snapshotTSO))
-
-	tso, err := dumpling.LoadTSOFromMetadata(ctx, r.store)
-	if err != nil {
-		return errors.Annotate(err, "load TiDB Cloud export snapshot metadata")
-	}
-	log.Info("TiDB Cloud export metadata loaded", zap.Uint64("snapshotTSO", tso))
+	log.Info("snapshot prepare finished", zap.String("snapshotTSO", snapshotTSO),
+		zap.String("metadata", metadataPath), zap.Duration("duration", time.Since(start)))
 	return nil
 }
 
@@ -247,7 +243,7 @@ func validateTiDBCloudConfig(cfg Config) error {
 	return nil
 }
 
-func buildChangefeedRequest(cfg Config, cleanIncrementURI string, cred *credentials.Value, snapshotTSO string) *tidbcloud.CreateChangefeedRequest {
+func buildChangefeedRequest(cfg Config, cleanIncrementURI string, cred *aws.Credentials, snapshotTSO string) *tidbcloud.CreateChangefeedRequest {
 	return &tidbcloud.CreateChangefeedRequest{
 		DisplayName: "tidb2snowflake-" + strconv.FormatInt(time.Now().UnixMilli(), 10),
 		Sink: &tidbcloud.Sink{
@@ -278,7 +274,7 @@ func buildChangefeedRequest(cfg Config, cleanIncrementURI string, cred *credenti
 	}
 }
 
-func buildExportRequest(cfg Config, cleanSnapshotURI string, cred *credentials.Value, snapshotTSO string) *tidbcloud.CreateExportRequest {
+func buildExportRequest(cfg Config, cleanSnapshotURI string, cred *aws.Credentials, snapshotTSO string) *tidbcloud.CreateExportRequest {
 	req := &tidbcloud.CreateExportRequest{
 		DisplayName: "tidb2snowflake-snapshot",
 		ExportOptions: &tidbcloud.ExportOptions{

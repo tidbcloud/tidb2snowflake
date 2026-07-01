@@ -9,10 +9,11 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -30,7 +31,7 @@ const (
 type Storage struct {
 	storeapi.Storage
 	uri      *url.URL
-	s3Client *s3.S3
+	s3Client *s3.Client
 }
 
 func New(ctx context.Context, uri *url.URL) (*Storage, error) {
@@ -43,7 +44,7 @@ func New(ctx context.Context, uri *url.URL) (*Storage, error) {
 		uri:     uri,
 	}
 	if uri.Scheme == "s3" {
-		client, err := newS3Client(uri)
+		client, err := newS3Client(ctx, uri)
 		if err != nil {
 			store.Close()
 			return nil, errors.Trace(err)
@@ -53,7 +54,7 @@ func New(ctx context.Context, uri *url.URL) (*Storage, error) {
 	return storage, nil
 }
 
-func GetS3URIWithCredentials(storagePath string, cred *credentials.Value) (*url.URL, error) {
+func GetS3URIWithCredentials(storagePath string, cred *aws.Credentials) (*url.URL, error) {
 	uri, err := url.Parse(storagePath)
 	if err != nil {
 		return nil, errors.Annotate(err, "parse storage path")
@@ -133,18 +134,18 @@ func (s *Storage) listS3Dirs(ctx context.Context, subDir string) ([]string, erro
 	}
 	dirs := make([]string, 0)
 	for {
-		output, err := s.s3Client.ListObjectsV2WithContext(ctx, input)
+		output, err := s.s3Client.ListObjectsV2(ctx, input)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
 		for _, commonPrefix := range output.CommonPrefixes {
-			dir := strings.TrimPrefix(aws.StringValue(commonPrefix.Prefix), prefix)
+			dir := strings.TrimPrefix(aws.ToString(commonPrefix.Prefix), prefix)
 			dir = strings.Trim(dir, "/")
 			if dir != "" {
 				dirs = append(dirs, dir)
 			}
 		}
-		if !aws.BoolValue(output.IsTruncated) {
+		if !aws.ToBool(output.IsTruncated) {
 			break
 		}
 		input.ContinuationToken = output.NextContinuationToken
@@ -163,34 +164,81 @@ func (s *Storage) s3Prefix(subDir string) string {
 	return prefix
 }
 
-func newS3Client(uri *url.URL) (*s3.S3, error) {
+func newS3Client(ctx context.Context, uri *url.URL) (*s3.Client, error) {
 	values := uri.Query()
-	config := aws.NewConfig().WithCredentials(credentials.NewStaticCredentials(
-		values.Get("access-key"),
-		values.Get("secret-access-key"),
-		values.Get("session-token"),
-	))
-	if region := s3Region(values); region != "" {
-		config.WithRegion(region)
-	}
-	if endpoint := s3Endpoint(values); endpoint != "" {
-		config.WithEndpoint(endpoint).WithS3ForcePathStyle(true)
-	}
-	sess, err := session.NewSession(config)
+	cfg, err := config.LoadDefaultConfig(ctx,
+		config.WithRegion(s3Region(values)),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
+			values.Get("access-key"),
+			values.Get("secret-access-key"),
+			values.Get("session-token"),
+		)),
+	)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	return s3.New(sess), nil
+
+	opts := s3ClientOptions(values)
+	client := s3.NewFromConfig(cfg, opts...)
+	if configuredS3Region(values) != "" || !shouldDetectS3BucketRegion(values) {
+		return client, nil
+	}
+
+	region, err := manager.GetBucketRegion(ctx, client, uri.Host, func(o *s3.Options) {
+		if client.Options().Credentials != nil {
+			o.Credentials = client.Options().Credentials
+		}
+		if s3Endpoint(values) != "" {
+			o.UsePathStyle = client.Options().UsePathStyle
+		}
+	})
+	if err != nil {
+		return nil, errors.Annotatef(err, "detect s3 bucket region %s", uri.Host)
+	}
+	if region == "" {
+		region = defaultS3Region
+	}
+	if region != cfg.Region {
+		cfg.Region = region
+		client = s3.NewFromConfig(cfg, opts...)
+	}
+	return client, nil
 }
 
-func s3Region(values url.Values) string {
+func s3ClientOptions(values url.Values) []func(*s3.Options) {
+	var opts []func(*s3.Options)
+	if endpoint := s3Endpoint(values); endpoint != "" {
+		opts = append(opts, func(o *s3.Options) {
+			o.BaseEndpoint = aws.String(endpoint)
+			o.UsePathStyle = true
+		})
+	}
+	return opts
+}
+
+func configuredS3Region(values url.Values) string {
 	if region := values.Get("s3.region"); region != "" {
 		return region
 	}
-	if region := values.Get("region"); region != "" {
+	return values.Get("region")
+}
+
+func s3Region(values url.Values) string {
+	if region := configuredS3Region(values); region != "" {
 		return region
 	}
 	return defaultS3Region
+}
+
+func shouldDetectS3BucketRegion(values url.Values) bool {
+	provider := values.Get("s3.provider")
+	if provider == "" {
+		provider = values.Get("provider")
+	}
+	if provider != "" && provider != "aws" {
+		return false
+	}
+	return s3Endpoint(values) == "" || provider == "aws"
 }
 
 func s3Endpoint(values url.Values) string {

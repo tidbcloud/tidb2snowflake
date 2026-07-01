@@ -17,14 +17,14 @@ func TestBuildChangefeedConfigCloudStorageCSV(t *testing.T) {
 	storageURI, err := url.Parse("s3://bucket/path/increment?access-key=AKIA&secret-access-key=secret")
 	require.NoError(t, err)
 
-	cfg, err := BuildChangefeedConfig(ChangefeedConfigOptions{
+	cfg := BuildChangefeedConfig(ChangefeedConfigOptions{
+		ChangefeedID:  "tidb2snowflake-123",
 		Tables:        []string{"db1.t1", "db2.t2"},
 		StorageURI:    storageURI,
 		StartTSO:      449023000000000000,
 		FlushInterval: 60 * time.Second,
 		FileSizeMiB:   64,
 	})
-	require.NoError(t, err)
 
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	require.NoError(t, err)
@@ -37,6 +37,7 @@ func TestBuildChangefeedConfigCloudStorageCSV(t *testing.T) {
 	require.Equal(t, "1m0s", sinkURI.Query().Get("flush-interval"))
 	require.Equal(t, "67108864", sinkURI.Query().Get("file-size"))
 
+	require.Equal(t, "tidb2snowflake-123", cfg.ID)
 	require.Equal(t, uint64(449023000000000000), cfg.StartTs)
 	require.Equal(t, []string{"db1.t1", "db2.t2"}, cfg.ReplicaConfig.Filter.Rules)
 	require.True(t, cfg.ReplicaConfig.Sink.CSVConfig.IncludeCommitTs)

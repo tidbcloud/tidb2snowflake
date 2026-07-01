@@ -3,7 +3,7 @@ package cmd
 import (
 	"context"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/tidbcloud/tidb2snowflake/incremental"
@@ -24,7 +24,7 @@ func run(ctx context.Context, opt *Option) error {
 	if err := opt.validate(); err != nil {
 		return err
 	}
-	cred := &credentials.Value{
+	cred := &aws.Credentials{
 		AccessKeyID:     opt.AWSAccessKey,
 		SecretAccessKey: opt.AWSSecretKey,
 	}

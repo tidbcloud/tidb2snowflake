@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
@@ -16,8 +16,8 @@ import (
 	"github.com/tidbcloud/tidb2snowflake/source/storage"
 )
 
-func testCred() *credentials.Value {
-	return &credentials.Value{AccessKeyID: "AKIA", SecretAccessKey: "secret"}
+func testCred() *aws.Credentials {
+	return &aws.Credentials{AccessKeyID: "AKIA", SecretAccessKey: "secret"}
 }
 
 func baseConfig() Config {

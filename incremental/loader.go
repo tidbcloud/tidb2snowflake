@@ -71,15 +71,15 @@ func (loader *loader) run(ctx context.Context, pool *workerpool.Pool) error {
 		if err != nil {
 			return errors.Trace(err)
 		}
-		if bounds.metadataCheckpointTs > bounds.checkpointTs {
-			if err := loader.state.SetCheckpointTS(ctx, bounds.metadataCheckpointTs); err != nil {
+		if bounds.targetCheckpointTs > bounds.checkpointTs {
+			if err := loader.state.SetCheckpointTS(ctx, bounds.targetCheckpointTs); err != nil {
 				return errors.Trace(err)
 			}
 		}
 		log.Info("incremental scan completed",
 			zap.Uint64("checkpointTs", bounds.checkpointTs),
-			zap.Uint64("metadataCheckpointTs", bounds.metadataCheckpointTs),
-			zap.Int("tablesWithWork", summary.activeTables),
+			zap.Uint64("targetCheckpointTs", bounds.targetCheckpointTs),
+			zap.Int("activeTables", summary.activeTables),
 			zap.Uint64("loadedFiles", summary.loadedFiles),
 			zap.Duration("duration", time.Since(startedAt)))
 	}
@@ -100,8 +100,8 @@ type incrementalScanStats struct {
 }
 
 type scanBounds struct {
-	checkpointTs         uint64
-	metadataCheckpointTs uint64
+	checkpointTs       uint64
+	targetCheckpointTs uint64
 }
 
 type scanSummary struct {
@@ -228,7 +228,7 @@ func (loader *loader) beginScan(ctx context.Context) (scanBounds, bool, error) {
 	if !ok {
 		return scanBounds{checkpointTs: checkpointTs}, false, nil
 	}
-	return scanBounds{checkpointTs: checkpointTs, metadataCheckpointTs: metadataCheckpointTs}, true, nil
+	return scanBounds{checkpointTs: checkpointTs, targetCheckpointTs: metadataCheckpointTs}, true, nil
 }
 
 func (loader *loader) readMetadata(ctx context.Context) (uint64, bool, error) {
@@ -334,7 +334,7 @@ func (loader *loader) parseSchemaFilePath(
 	schemaKey.Parse(filePath)
 	// TiCDC metadata checkpoint is a confirmed flush lower bound. Use it only
 	// to avoid applying schema versions that TiCDC has not confirmed visible.
-	if schemaKey.TableVersion > bounds.metadataCheckpointTs {
+	if schemaKey.TableVersion > bounds.targetCheckpointTs {
 		return
 	}
 	schemaFilePaths[schemaKey.TableVersion] = objectPath
@@ -539,7 +539,7 @@ func (loader *loader) parseDMLIndexFile(
 	}
 
 	// Ignore index files for table versions newer than TiCDC's confirmed flush bound.
-	if dmlKey.TableVersion > bounds.metadataCheckpointTs {
+	if dmlKey.TableVersion > bounds.targetCheckpointTs {
 		return 0, nil
 	}
 

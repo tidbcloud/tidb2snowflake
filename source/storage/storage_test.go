@@ -2,16 +2,17 @@ package storage
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/stretchr/testify/require"
 )
 
-func testCred() *credentials.Value {
-	return &credentials.Value{AccessKeyID: "AKIA", SecretAccessKey: "secret"}
+func testCred() *aws.Credentials {
+	return &aws.Credentials{AccessKeyID: "AKIA", SecretAccessKey: "secret"}
 }
 
 func TestCleanSubURI(t *testing.T) {
@@ -42,11 +43,29 @@ func TestNewS3ClientDefaultsRegion(t *testing.T) {
 	uri, err := url.Parse("s3://bucket/path?endpoint=http://127.0.0.1:9000&access-key=AKIA&secret-access-key=secret")
 	require.NoError(t, err)
 
-	client, err := newS3Client(uri)
+	client, err := newS3Client(context.Background(), uri)
 	require.NoError(t, err)
-	require.Equal(t, defaultS3Region, aws.StringValue(client.Config.Region))
-	require.Equal(t, "http://127.0.0.1:9000", aws.StringValue(client.Config.Endpoint))
-	require.True(t, aws.BoolValue(client.Config.S3ForcePathStyle))
+	opts := client.Options()
+	require.Equal(t, defaultS3Region, opts.Region)
+	require.Equal(t, "http://127.0.0.1:9000", *opts.BaseEndpoint)
+	require.True(t, opts.UsePathStyle)
+}
+
+func TestNewS3ClientDetectsAWSBucketRegion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodHead, r.Method)
+		require.Equal(t, "/bucket", r.URL.Path)
+		w.Header().Set("x-amz-bucket-region", "us-west-2")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	uri, err := url.Parse("s3://bucket/path?endpoint=" + url.QueryEscape(server.URL) + "&provider=aws&access-key=AKIA&secret-access-key=secret")
+	require.NoError(t, err)
+
+	client, err := newS3Client(context.Background(), uri)
+	require.NoError(t, err)
+	require.Equal(t, "us-west-2", client.Options().Region)
 }
 
 func TestS3RegionPrefersExplicitValues(t *testing.T) {

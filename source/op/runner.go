@@ -49,6 +49,7 @@ func NewRunner(cfg Config, store *storage.Storage, state state.Manager) *Runner 
 }
 
 func (r *Runner) EnsureSnapshot(ctx context.Context) error {
+	start := time.Now()
 	stateSnapshot := r.stateManager.Snapshot()
 	if stateSnapshot.SnapshotFinished && stateSnapshot.CheckpointTS != 0 {
 		log.Info("snapshot already finished in state, skipping OP Dumpling snapshot dump",
@@ -66,9 +67,9 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 		if err != nil {
 			return errors.Trace(err)
 		}
-		log.Info("snapshot metadata already exists in storage, skipping OP Dumpling snapshot dump",
-			zap.String("metadata", metadataPath),
-			zap.Uint64("snapshotTSO", snapshotTSO))
+		log.Info("snapshot prepare finished, skip it since found metadata",
+			zap.Uint64("snapshotTSO", snapshotTSO), zap.String("metadata", metadataPath),
+			zap.Duration("duration", time.Since(start)))
 		return nil
 	}
 
@@ -101,9 +102,8 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	log.Info("OP Dumpling snapshot dump finished, snapshot metadata loaded",
-		zap.String("metadata", path.Join(storage.SnapshotDirName, "metadata")),
-		zap.Uint64("snapshotTSO", snapshotTSO))
+	log.Info("snapshot prepare finished", zap.Uint64("snapshotTSO", snapshotTSO),
+		zap.String("metadata", metadataPath), zap.Duration("duration", time.Since(start)))
 	return nil
 }
 
@@ -142,16 +142,15 @@ func (r *Runner) createChangefeed(ctx context.Context) (string, uint64, error) {
 		return "", 0, errors.Trace(err)
 	}
 
-	req, err := ticdc.BuildChangefeedConfig(ticdc.ChangefeedConfigOptions{
+	changefeedID := "tidb2snowflake-" + strconv.FormatInt(time.Now().UnixMilli(), 10)
+	req := ticdc.BuildChangefeedConfig(ticdc.ChangefeedConfigOptions{
+		ChangefeedID:  changefeedID,
 		Tables:        r.cfg.Tables,
 		StorageURI:    r.cfg.IncrementURI,
 		StartTSO:      startTSO,
 		FlushInterval: r.cfg.ChangefeedFlushInterval,
 		FileSizeMiB:   r.cfg.ChangefeedFileSizeMiB,
 	})
-	if err != nil {
-		return "", 0, errors.Trace(err)
-	}
 	cf, err := client.CreateChangefeed(ctx, req)
 	if err != nil {
 		return "", 0, errors.Trace(err)

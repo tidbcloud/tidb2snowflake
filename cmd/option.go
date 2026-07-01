@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/tidbcloud/tidb2snowflake/incremental"
@@ -119,7 +119,7 @@ func (opt *Option) snowflakeConfig() *snowflake.Config {
 }
 
 func (opt *Option) prepareRequest(
-	cred *credentials.Value,
+	cred *aws.Credentials,
 	snapshotURI *url.URL,
 	incrementURI *url.URL,
 ) source.Request {
@@ -157,14 +157,14 @@ type loadRequest struct {
 	LoadIncremental bool
 
 	Snowflake   *snowflake.Config
-	Credential  *credentials.Value
+	Credential  *aws.Credentials
 	StorageURI  *url.URL
 	Snapshot    snapshot.Config
 	Incremental incremental.Config
 }
 
 func (opt *Option) loadRequest(
-	cred *credentials.Value,
+	cred *aws.Credentials,
 	storageURI *url.URL,
 ) loadRequest {
 	return loadRequest{
