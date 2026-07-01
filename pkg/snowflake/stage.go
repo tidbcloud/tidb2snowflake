@@ -24,7 +24,7 @@ func (sc *Connector) CreateStage(ctx context.Context, storageURI *url.URL, cred 
 	// A Snowflake named stage must belong to a schema. Keep it in an internal
 	// schema so business schemas can stay mapped from upstream databases.
 	// The full stage name is:
-	// "<target_database>"."TIDB2SNOWFLAKE_INTERNAL"."tidb2snowflake_external".
+	// "<target_database>"."TIDB2SNOWFLAKE_INTERNAL"."TIDB2SNOWFLAKE_EXTERNAL".
 	if _, err := sc.db.ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s;", quoteQualifiedIdent(sc.TargetDatabase, InternalSchemaName))); err != nil {
 		return errors.Annotate(err, "Failed to create internal schema")
 	}
