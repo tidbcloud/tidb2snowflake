@@ -26,10 +26,10 @@ func TestSnowflakeCmdOnlyExposesConfigFlag(t *testing.T) {
 }
 
 func TestSnowflakeCmdLoadsTiDBCloudConfig(t *testing.T) {
-	t.Setenv(envTiDBCloudClusterID, "cluster-from-env")
-	t.Setenv(envTiDBCloudPublicKey, "public-from-env")
-	t.Setenv(envTiDBCloudPrivateKey, "private-from-env")
-	t.Setenv(envTiDBCloudHost, " api.env.example.com ")
+	t.Setenv("TIDBCLOUD_CLUSTER_ID", "cluster-from-env")
+	t.Setenv("TIDBCLOUD_PUBLIC_KEY", "public-from-env")
+	t.Setenv("TIDBCLOUD_PRIVATE_KEY", "private-from-env")
+	t.Setenv("TIDBCLOUD_HOST", "api.env.example.com")
 
 	var captured *Option
 	cmd := newSnowflakeCmdWithRun(func(_ context.Context, opt *Option) error {
@@ -54,6 +54,12 @@ account-id = "org-account"
 user = "sf-user"
 pass = "sf-pass"
 database = "SNOW"
+
+[tidbcloud]
+cluster-id = "cluster-from-config"
+public-key = "public-from-config"
+private-key = "private-from-config"
+host = " api.config.example.com "
 `)})
 
 	require.NoError(t, cmd.Execute())
@@ -63,10 +69,10 @@ database = "SNOW"
 	require.Equal(t, sourceModeTiDBCloud, captured.SourceMode)
 	require.Equal(t, runModeFull, captured.Mode)
 	require.Equal(t, "COMPUTE_WH", captured.SnowflakeWarehouse)
-	require.Equal(t, "cluster-from-env", captured.TiDBCloudClusterID)
-	require.Equal(t, "public-from-env", captured.TiDBCloudPublicKey)
-	require.Equal(t, "private-from-env", captured.TiDBCloudPrivateKey)
-	require.Equal(t, "api.env.example.com", captured.TiDBCloudHost)
+	require.Equal(t, "cluster-from-config", captured.TiDBCloudClusterID)
+	require.Equal(t, "public-from-config", captured.TiDBCloudPublicKey)
+	require.Equal(t, "private-from-config", captured.TiDBCloudPrivateKey)
+	require.Equal(t, "api.config.example.com", captured.TiDBCloudHost)
 }
 
 func TestSnowflakeCmdLoadsOPConfig(t *testing.T) {

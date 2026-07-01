@@ -1,0 +1,79 @@
+# Example config for:
+#   ./bin/tidb2snowflake snowflake --config config.example.toml
+#
+# The config loader rejects unknown keys. Keep new settings inside the sections
+# and key names shown in this file.
+
+# Supported values: "full", "snapshot-only", "incremental-only".
+# Default: "full".
+mode = "full"
+
+# Supported values: "tidbcloud", "op".
+# Default: "tidbcloud".
+source = "tidbcloud"
+
+# Source tables to replicate. At least one table is required.
+tables = [
+  "app.orders",
+  "app.customers",
+]
+
+[storage]
+# S3 path shared by snapshot export, incremental CDC files, and loader state.
+uri = "s3://my-bucket/tidb2snowflake/prod?region=us-west-2"
+access-key = "AKIA..."
+secret-key = "..."
+
+[snowflake]
+account-id = "org-account"
+user = "TIDB2SNOWFLAKE"
+pass = "..."
+database = "ODS_DB"
+warehouse = "COMPUTE_WH"
+
+# Used when source = "tidbcloud" and the tool needs to create or wait on
+# managed TiDB Cloud export/changefeed jobs.
+[tidbcloud]
+cluster-id = "1234567890123456789"
+public-key = "..."
+private-key = "..."
+# Optional. Leave empty to use the TiDB Cloud client default endpoint.
+host = ""
+
+# Used when source = "op"; ignored by TiDB Cloud source mode.
+[tidb]
+host = "127.0.0.1"
+port = 4000
+user = "root"
+pass = ""
+tls = false
+ssl-ca = ""
+
+# Required when source = "op" and mode is "full" or "incremental-only".
+# Not used by TiDB Cloud source mode.
+[ticdc]
+address = "http://127.0.0.1:8300"
+
+[snapshot]
+# Optional TiDB TSO string. Leave empty to use the current snapshot/export TSO.
+tso = ""
+# Supported values: "none", "gzip". Default: "none".
+compression = "none"
+# Dumpling concurrency in OP source mode. Default: 8 for OP mode.
+concurrency = 8
+
+[changefeed]
+# Go duration string. Default: "60s".
+flush-interval = "60s"
+# Target changefeed file size in MiB. Default: 64.
+file-size = 64
+
+[increment]
+# Go duration string. Default: "1m".
+scan-interval = "1m"
+
+[log]
+# Empty level defaults to "info".
+level = "info"
+# Empty file keeps the logger default output.
+file = ""

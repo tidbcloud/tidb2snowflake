@@ -18,12 +18,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	envTiDBCloudClusterID  = "TIDBCLOUD_CLUSTER_ID"
-	envTiDBCloudPublicKey  = "TIDBCLOUD_PUBLIC_KEY"
-	envTiDBCloudPrivateKey = "TIDBCLOUD_PRIVATE_KEY"
-)
-
 type Config struct {
 	ClusterID               string
 	PublicKey               string
@@ -239,16 +233,16 @@ func (r *Runner) tidbCloudClient() (*tidbcloud.Client, error) {
 func validateTiDBCloudConfig(cfg Config) error {
 	var missing []string
 	if cfg.ClusterID == "" {
-		missing = append(missing, envTiDBCloudClusterID)
+		missing = append(missing, "tidbcloud.cluster-id")
 	}
 	if cfg.PublicKey == "" {
-		missing = append(missing, envTiDBCloudPublicKey)
+		missing = append(missing, "tidbcloud.public-key")
 	}
 	if cfg.PrivateKey == "" {
-		missing = append(missing, envTiDBCloudPrivateKey)
+		missing = append(missing, "tidbcloud.private-key")
 	}
 	if len(missing) > 0 {
-		return errors.Errorf("missing TiDB Cloud API environment variable(s): %s", strings.Join(missing, ", "))
+		return errors.Errorf("missing TiDB Cloud API config option(s): %s", strings.Join(missing, ", "))
 	}
 	return nil
 }
