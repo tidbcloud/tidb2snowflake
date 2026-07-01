@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/pingcap/log"
@@ -13,11 +14,17 @@ import (
 )
 
 func main() {
+	var schema string
 	var table string
 	var timeout time.Duration
+	flag.StringVar(&schema, "schema", "", "source database / Snowflake target schema")
 	flag.StringVar(&table, "table", "", "table name")
 	flag.DurationVar(&timeout, "timeout", 5*time.Minute, "poll timeout")
 	flag.Parse()
+	if schema == "" {
+		fmt.Fprintln(os.Stderr, "--schema is required")
+		os.Exit(2)
+	}
 	if table == "" {
 		fmt.Fprintln(os.Stderr, "--table is required")
 		os.Exit(2)
@@ -29,7 +36,6 @@ func main() {
 		User:      os.Getenv("SNOWFLAKE_USER"),
 		Pass:      os.Getenv("SNOWFLAKE_PASS"),
 		Database:  os.Getenv("SNOWFLAKE_DATABASE"),
-		Schema:    os.Getenv("SNOWFLAKE_SCHEMA"),
 	}
 	db, err := snowflake.OpenDB(cfg)
 	if err != nil {
@@ -37,6 +43,7 @@ func main() {
 	}
 	defer db.Close()
 
+	targetTable := quoteSnowflakeIdent(cfg.Database) + "." + quoteSnowflakeIdent(schema) + "." + quoteSnowflakeIdent(table)
 	deadline := time.Now().Add(timeout)
 	var last string
 	for time.Now().Before(deadline) {
@@ -46,7 +53,7 @@ func main() {
 		var enumVal sql.NullString
 		var vectorVal sql.NullString
 		var deleted int
-		err = db.QueryRow(fmt.Sprintf("SELECT COUNT(*), COALESCE(MAX(IFF(id=2, amount, NULL)), -1), COALESCE(MAX(IFF(id=2, c_year, NULL)), -1), COALESCE(MAX(IFF(id=2, c_enum, NULL)), ''), COALESCE(MAX(IFF(id=2, c_vector, NULL)), ''), SUM(IFF(id=3, 1, 0)) FROM %s", table)).
+		err = db.QueryRow(fmt.Sprintf("SELECT COUNT(*), COALESCE(MAX(IFF(id=2, amount, NULL)), -1), COALESCE(MAX(IFF(id=2, c_year, NULL)), -1), COALESCE(MAX(IFF(id=2, c_enum, NULL)), ''), COALESCE(MAX(IFF(id=2, c_vector, NULL)), ''), SUM(IFF(id=3, 1, 0)) FROM %s", targetTable)).
 			Scan(&count, &amount, &year, &enumVal, &vectorVal, &deleted)
 		if err == nil {
 			last = fmt.Sprintf("count=%d id2_amount=%d id2_year=%d id2_enum=%s id2_vector=%s id3_rows=%d", count, amount.Int64, year.Int64, enumVal.String, vectorVal.String, deleted)
@@ -65,4 +72,8 @@ func main() {
 		time.Sleep(5 * time.Second)
 	}
 	log.Panic("Snowflake assertion did not pass before timeout", zap.String("last", last))
+}
+
+func quoteSnowflakeIdent(ident string) string {
+	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
 }

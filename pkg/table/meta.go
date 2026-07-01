@@ -2,6 +2,7 @@ package table
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/pingcap/errors"
@@ -16,10 +17,25 @@ import (
 	"go.uber.org/zap"
 )
 
-const SchemaFileSuffix = "-schema.sql"
+const (
+	SchemaFileSuffix       = "-schema.sql"
+	SchemaCreateFileSuffix = "-schema-create.sql"
+)
+
+var dumplingFilenameEscapeRegexp = regexp.MustCompile(`[\x00-\x1f%"*./:<>?\\|]|-(?i:schema)`)
 
 func SchemaFilePath(database, table string) string {
-	return fmt.Sprintf("%s.%s%s", database, table, SchemaFileSuffix)
+	return fmt.Sprintf("%s.%s%s", dumplingFilenameEscape(database), dumplingFilenameEscape(table), SchemaFileSuffix)
+}
+
+func SchemaCreateFilePath(database string) string {
+	return fmt.Sprintf("%s%s", dumplingFilenameEscape(database), SchemaCreateFileSuffix)
+}
+
+func dumplingFilenameEscape(name string) string {
+	return dumplingFilenameEscapeRegexp.ReplaceAllStringFunc(name, func(match string) string {
+		return fmt.Sprintf("%%%02X%s", match[0], match[1:])
+	})
 }
 
 type Column struct {
@@ -111,10 +127,6 @@ func BuildSchema(database, table, createTableDDL string) *Meta {
 		Columns:     columns,
 		PrimaryKeys: primaryKeys,
 	}
-}
-
-func (m *Meta) SnowflakeTableName() string {
-	return fmt.Sprintf("%s.%s", m.Schema, m.Table)
 }
 
 func findCreateTableStmt(stmts []ast.StmtNode, database, table string) *ast.CreateTableStmt {

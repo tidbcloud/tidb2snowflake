@@ -62,7 +62,6 @@ func newSnowflakeCmdWithRun(run func(context.Context, *Option) error) *cobra.Com
 	f.StringVar(&opt.SnowflakePass, "snowflake.pass", opt.SnowflakePass, "Snowflake password")
 	f.StringVar(&opt.SnowflakeWarehouse, "snowflake.warehouse", opt.SnowflakeWarehouse, "Snowflake warehouse")
 	f.StringVar(&opt.SnowflakeDatabase, "snowflake.database", opt.SnowflakeDatabase, "Snowflake database")
-	f.StringVar(&opt.SnowflakeSchema, "snowflake.schema", opt.SnowflakeSchema, "Snowflake schema")
 
 	// tables and storage
 	f.StringArrayVarP(&opt.Tables, "table", "t", opt.Tables, "fully qualified table name, repeatable, e.g. -t db1.t1 -t db2.t2")

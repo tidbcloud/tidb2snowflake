@@ -30,11 +30,24 @@ func TestLoadSnapshotEscapesFilePath(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	conn := &Connector{db: db}
-	mock.ExpectExec(regexp.QuoteMeta(`FILES = ('dir/a\'b.csv')`)).
+	conn := &Connector{db: db, TargetDatabase: "ODS_DB"}
+	mock.ExpectExec(regexp.QuoteMeta(`COPY INTO "ODS_DB"."db"."target" FROM @"ODS_DB"."TIDB2SNOWFLAKE_INTERNAL"."tidb2snowflake_external" FILES = ('dir/a\'b.csv')`)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	require.NoError(t, conn.LoadSnapshot(context.Background(), "target", "dir/a'b.csv", "none"))
+	require.NoError(t, conn.LoadSnapshot(context.Background(), "db", "target", "dir/a'b.csv", "none"))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateSchemaUsesTargetDatabaseAndSourceDatabase(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	conn := &Connector{db: db, TargetDatabase: "ODS_DB"}
+	mock.ExpectExec(regexp.QuoteMeta(`CREATE SCHEMA IF NOT EXISTS "ODS_DB"."source";`)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	require.NoError(t, conn.CreateSchema(context.Background(), "source"))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -48,10 +61,10 @@ func TestGenMergeIntoEscapesIdentifiersAndFilePath(t *testing.T) {
 		PrimaryKeys: []string{"id"},
 	}
 
-	got := genMergeIntoSQL(meta, "dir/a'b.csv", IncrementStageName, 100)
+	got := genMergeIntoSQL("ODS_DB", meta, "dir/a'b.csv", 100)
 
-	require.Contains(t, got, `MERGE INTO "db.""target" AS T`)
-	require.Contains(t, got, `FROM '@increment_external/dir/a\'b.csv'`)
+	require.Contains(t, got, `MERGE INTO "ODS_DB"."db"."""target" AS T`)
+	require.Contains(t, got, `FROM '@"ODS_DB"."TIDB2SNOWFLAKE_INTERNAL"."tidb2snowflake_external"/dir/a\'b.csv'`)
 	require.Contains(t, got, `WHERE TO_NUMBER($4) > 100`)
 	require.NotContains(t, got, `<=`)
 	require.Contains(t, got, `T."id" = S."id"`)
@@ -62,7 +75,7 @@ func TestLoadIncrementMergesRowsAfterCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	conn := &Connector{db: db}
+	conn := &Connector{db: db, TargetDatabase: "ODS_DB"}
 	meta := &table.Meta{
 		Schema: "db",
 		Table:  "tbl",
@@ -89,6 +102,6 @@ CREATE TABLE `+"`bank0`"+` (
   `+"`created_at`"+` datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`+"`id`"+`)
 	);`)
-	got := buildCreateTableSQL(tableSchema)
-	require.Equal(t, `CREATE OR REPLACE TABLE "test.bank0" ("id" NUMBER NOT NULL, "balance" NUMBER(10, 0), "name" VARCHAR(30) DEFAULT 'Z', "created_at" DATETIME(0) DEFAULT CURRENT_TIMESTAMP(), PRIMARY KEY ("id"))`, got)
+	got := buildCreateTableSQL("ODS_DB", tableSchema)
+	require.Equal(t, `CREATE OR REPLACE TABLE "ODS_DB"."test"."bank0" ("id" NUMBER NOT NULL, "balance" NUMBER(10, 0), "name" VARCHAR(30) DEFAULT 'Z', "created_at" DATETIME(0) DEFAULT CURRENT_TIMESTAMP(), PRIMARY KEY ("id"))`, got)
 }

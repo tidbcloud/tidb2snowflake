@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"path"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
@@ -33,9 +31,7 @@ const (
 )
 
 type Config struct {
-	Credential   *credentials.Value
 	Tables       []string
-	StorageURI   *url.URL
 	StorageDir   string
 	ScanInterval time.Duration
 }
@@ -43,11 +39,6 @@ type Config struct {
 func Load(ctx context.Context, cfg Config, store *storage.Storage, stateManager state.Manager, pool *workerpool.Pool, conn *snowflake.Connector) error {
 	log.Info("starting Snowflake incremental load phase",
 		zap.Int("tableCount", len(cfg.Tables)), zap.Duration("scanInterval", cfg.ScanInterval))
-
-	if err := conn.CreateStage(ctx, snowflake.IncrementStageName, cfg.StorageURI, cfg.Credential); err != nil {
-		return errors.Trace(err)
-	}
-	defer conn.DropStage(context.WithoutCancel(ctx), snowflake.IncrementStageName)
 
 	loader := newLoader(cfg, store, conn, stateManager)
 	if err := loader.run(ctx, pool); err != nil {
@@ -712,7 +703,7 @@ func (loader *loader) applyDDL(
 	newMeta *table.Meta,
 	action model.ActionType,
 ) error {
-	ddls, err := snowflake.GenDDLViaTiDBDDL(tbl.currentMeta, newMeta, action, schemaFile.Query)
+	ddls, err := snowflake.GenDDLViaTiDBDDL(loader.conn.TargetDatabase, tbl.currentMeta, newMeta, action, schemaFile.Query)
 	if err != nil {
 		return errors.Trace(err)
 	}

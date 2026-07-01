@@ -71,7 +71,6 @@ type Option struct {
 	SnowflakePass      string
 	SnowflakeWarehouse string
 	SnowflakeDatabase  string
-	SnowflakeSchema    string
 
 	Tables []string
 
@@ -124,7 +123,6 @@ func (opt *Option) snowflakeConfig() *snowflake.Config {
 		User:      opt.SnowflakeUser,
 		Pass:      opt.SnowflakePass,
 		Database:  opt.SnowflakeDatabase,
-		Schema:    opt.SnowflakeSchema,
 	}
 }
 
@@ -167,6 +165,8 @@ type loadRequest struct {
 	LoadIncremental bool
 
 	Snowflake   *snowflake.Config
+	Credential  *credentials.Value
+	StorageURI  *url.URL
 	Snapshot    snapshot.Config
 	Incremental incremental.Config
 }
@@ -175,22 +175,19 @@ func (opt *Option) loadRequest(
 	cred *credentials.Value,
 	storageURI *url.URL,
 ) loadRequest {
-	snowflakeCfg := opt.snowflakeConfig()
 	return loadRequest{
 		LoadSnapshot:    opt.Mode != runModeIncrementalOnly,
 		LoadIncremental: opt.Mode != runModeSnapshotOnly,
-		Snowflake:       snowflakeCfg,
+		Snowflake:       opt.snowflakeConfig(),
+		Credential:      cred,
+		StorageURI:      storageURI,
 		Snapshot: snapshot.Config{
-			Credential:  cred,
 			Tables:      opt.Tables,
-			StorageURI:  storageURI,
 			StorageDir:  storage.SnapshotDirName,
 			Compression: opt.SnapshotCompression,
 		},
 		Incremental: incremental.Config{
-			Credential:   cred,
 			Tables:       opt.Tables,
-			StorageURI:   storageURI,
 			StorageDir:   storage.IncrementDirName,
 			ScanInterval: opt.IncrementScanInterval,
 		},
@@ -279,8 +276,8 @@ func (opt *Option) validate() error {
 		return errors.New("--aws.access-key and --aws.secret-key are required")
 	}
 
-	if opt.SnowflakeDatabase == "" || opt.SnowflakeSchema == "" {
-		return errors.New("--snowflake.database and --snowflake.schema are required")
+	if opt.SnowflakeDatabase == "" {
+		return errors.New("--snowflake.database is required")
 	}
 
 	if len(opt.Tables) == 0 {
@@ -321,8 +318,7 @@ func (opt *Option) logSummary() {
 		zap.Duration("incrementScanInterval", opt.IncrementScanInterval),
 		zap.Bool("tidbCloudConfigured", opt.TiDBCloudClusterID != ""),
 		zap.String("ticdcAddress", opt.TiCDCAddress),
-		zap.String("snowflakeDatabase", opt.SnowflakeDatabase),
-		zap.String("snowflakeSchema", opt.SnowflakeSchema))
+		zap.String("snowflakeDatabase", opt.SnowflakeDatabase))
 }
 
 func envDefault(name string) string {
