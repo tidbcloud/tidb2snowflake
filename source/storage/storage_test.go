@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/stretchr/testify/require"
 )
@@ -35,6 +36,28 @@ func TestGetS3URIWithCredentials(t *testing.T) {
 
 	_, err = GetS3URIWithCredentials("gcs://bucket/path", testCred())
 	require.Error(t, err)
+}
+
+func TestNewS3ClientDefaultsRegion(t *testing.T) {
+	uri, err := url.Parse("s3://bucket/path?endpoint=http://127.0.0.1:9000&access-key=AKIA&secret-access-key=secret")
+	require.NoError(t, err)
+
+	client, err := newS3Client(uri)
+	require.NoError(t, err)
+	require.Equal(t, defaultS3Region, aws.StringValue(client.Config.Region))
+	require.Equal(t, "http://127.0.0.1:9000", aws.StringValue(client.Config.Endpoint))
+	require.True(t, aws.BoolValue(client.Config.S3ForcePathStyle))
+}
+
+func TestS3RegionPrefersExplicitValues(t *testing.T) {
+	values := url.Values{"region": []string{"us-west-2"}}
+	require.Equal(t, "us-west-2", s3Region(values))
+
+	values = url.Values{
+		"region":    []string{"us-west-2"},
+		"s3.region": []string{"eu-central-1"},
+	}
+	require.Equal(t, "eu-central-1", s3Region(values))
 }
 
 func TestDirHasObjects(t *testing.T) {

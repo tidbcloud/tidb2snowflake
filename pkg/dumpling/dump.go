@@ -29,7 +29,7 @@ type Config struct {
 	OnProgress   func(dumpedRows, totalRows int64)
 }
 
-func buildConfig(store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) (*export.Config, error) {
+func buildConfig(tidbCfg *tidb.Config, cfg Config) (*export.Config, error) {
 	conf := export.DefaultConfig()
 	conf.Logger = log.L()
 	conf.User = tidbCfg.User
@@ -49,6 +49,9 @@ func buildConfig(store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) (*exp
 	conf.CsvOutputDialect = export.CSVDialectSnowflake
 	conf.Rows = 1
 
+	if cfg.StorageURI == nil {
+		return nil, errors.New("storage uri is required")
+	}
 	conf.OutputDirPath = cfg.StorageURI.String()
 	conf.ReadTimeout = cfg.ReadTimeout
 	if cfg.SnapshotTSO != "" {
@@ -70,7 +73,6 @@ func buildConfig(store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) (*exp
 		return nil, errors.Trace(err)
 	}
 	conf.Tables = tables
-	conf.ExtStorage = store
 	return conf, nil
 }
 
@@ -86,8 +88,8 @@ func dumplingCompression(compression string) string {
 	}
 }
 
-func Run(ctx context.Context, store storeapi.Storage, tidbCfg *tidb.Config, cfg Config) error {
-	dumpConfig, err := buildConfig(store, tidbCfg, cfg)
+func Run(ctx context.Context, tidbCfg *tidb.Config, cfg Config) error {
+	dumpConfig, err := buildConfig(tidbCfg, cfg)
 	if err != nil {
 		return errors.Trace(err)
 	}

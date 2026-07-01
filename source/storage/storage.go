@@ -24,6 +24,7 @@ const (
 	SnapshotDirName  = "snapshot"
 	IncrementDirName = "increment"
 	CSVFileExtension = ".csv"
+	defaultS3Region  = "us-east-1"
 )
 
 type Storage struct {
@@ -186,7 +187,10 @@ func s3Region(values url.Values) string {
 	if region := values.Get("s3.region"); region != "" {
 		return region
 	}
-	return values.Get("region")
+	if region := values.Get("region"); region != "" {
+		return region
+	}
+	return defaultS3Region
 }
 
 func s3Endpoint(values url.Values) string {

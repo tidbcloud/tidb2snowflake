@@ -81,7 +81,7 @@ func (r *Runner) EnsureSnapshot(ctx context.Context) error {
 	}
 
 	log.Info("dumping OP TiDB snapshot with Dumpling")
-	if err := dumpling.Run(ctx, r.store, r.cfg.TiDB, dumpling.Config{
+	if err := dumpling.Run(ctx, r.cfg.TiDB, dumpling.Config{
 		Concurrency:  r.cfg.SnapshotConcurrency,
 		StorageURI:   r.cfg.SnapshotURI,
 		SnapshotTSO:  r.cfg.SnapshotTSO,
