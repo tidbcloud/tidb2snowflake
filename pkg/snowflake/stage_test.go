@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,7 +17,7 @@ func TestCreateStageUsesInternalSchemaAndSingleStage(t *testing.T) {
 	defer db.Close()
 
 	conn := &Connector{db: db, TargetDatabase: "ODS_DB"}
-	cred := &credentials.Value{
+	cred := &aws.Credentials{
 		AccessKeyID:     "ak",
 		SecretAccessKey: "sk",
 		SessionToken:    "token",

@@ -75,7 +75,7 @@ func TestGetNewFilesScansMetadataPrefixes(t *testing.T) {
 		tableFQN:                 "db.t",
 	}
 
-	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 110, metadataCheckpointTs: 130}, table)
+	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 110, targetCheckpointTs: 130}, table)
 	require.NoError(t, err)
 
 	require.Equal(t, indexRange{start: 2, end: 3}, scan.dmlFileMap[cloudstorage.DMLPathKey{
@@ -110,7 +110,7 @@ func TestGetNewFilesDoesNotScheduleSchemaAtCheckpoint(t *testing.T) {
 		tableFQN:                 "db.t",
 	}
 
-	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 100, metadataCheckpointTs: 130}, table)
+	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 100, targetCheckpointTs: 130}, table)
 	require.NoError(t, err)
 
 	require.Contains(t, scan.schemaFilePaths, uint64(100))
@@ -152,7 +152,7 @@ func TestGetNewFilesSkipsDatesBeforeActiveDate(t *testing.T) {
 		tableFQN:                 "db.t",
 	}
 
-	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 100, metadataCheckpointTs: 130}, table)
+	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 100, targetCheckpointTs: 130}, table)
 	require.NoError(t, err)
 
 	require.NotContains(t, scan.dmlFileMap, cloudstorage.DMLPathKey{
@@ -198,7 +198,7 @@ func TestGetNewFilesScansPartitionDateDirs(t *testing.T) {
 		tableFQN:                 "db.t",
 	}
 
-	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 100, metadataCheckpointTs: 130}, table)
+	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 100, targetCheckpointTs: 130}, table)
 	require.NoError(t, err)
 
 	require.NotContains(t, scan.dmlFileMap, cloudstorage.DMLPathKey{

@@ -30,8 +30,9 @@ func TestPrepareFullUsesSnapshotMetadataForChangefeedStart(t *testing.T) {
 
 	var events []string
 	var createReq struct {
-		StartTS uint64 `json:"start_ts"`
-		SinkURI string `json:"sink_uri"`
+		ChangefeedID string `json:"changefeed_id"`
+		StartTS      uint64 `json:"start_ts"`
+		SinkURI      string `json:"sink_uri"`
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
@@ -68,6 +69,7 @@ func TestPrepareFullUsesSnapshotMetadataForChangefeedStart(t *testing.T) {
 	require.Equal(t, []string{"changefeed"}, events)
 	require.Zero(t, manager.Snapshot().CheckpointTS)
 	require.Equal(t, "cf-1", manager.Snapshot().TaskInfo.ChangefeedID)
+	require.Regexp(t, `^tidb2snowflake-\d+$`, createReq.ChangefeedID)
 	require.Equal(t, uint64(466924115091783691), createReq.StartTS)
 	sinkURI, err := url.Parse(createReq.SinkURI)
 	require.NoError(t, err)

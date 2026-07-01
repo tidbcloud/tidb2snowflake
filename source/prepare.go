@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
@@ -36,7 +36,7 @@ type Request struct {
 	ChangefeedFileSizeMiB   int
 	SnapshotCompression     string
 
-	Credential   *credentials.Value
+	Credential   *aws.Credentials
 	SnapshotURI  *url.URL
 	IncrementURI *url.URL
 }
@@ -51,7 +51,6 @@ func Prepare(ctx context.Context, request Request, store *storage.Storage, state
 	log.Info("starting source prepare phase",
 		zap.Bool("prepareSnapshot", request.PrepareSnapshot),
 		zap.Bool("prepareChangefeed", request.PrepareChangefeed),
-		zap.Bool("useOPSource", request.UseOPSource),
 		zap.Int("tableCount", len(request.Tables)))
 	if request.UseOPSource {
 		if request.PrepareSnapshot && request.SnapshotURI == nil {
@@ -66,7 +65,6 @@ func Prepare(ctx context.Context, request Request, store *storage.Storage, state
 		if err := runner.EnsureSnapshot(ctx); err != nil {
 			return errors.Trace(err)
 		}
-		log.Info("source prepare snapshot finished", zap.Duration("duration", time.Since(start)))
 	}
 	if request.PrepareChangefeed {
 		if err := runner.EnsureChangefeed(ctx); err != nil {
