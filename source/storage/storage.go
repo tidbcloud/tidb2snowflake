@@ -10,12 +10,9 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/client"
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -27,8 +24,7 @@ const (
 	SnapshotDirName  = "snapshot"
 	IncrementDirName = "increment"
 	CSVFileExtension = ".csv"
-
-	defaultS3RegionHint = "us-east-1"
+	defaultS3Region  = "us-east-1"
 )
 
 type Storage struct {
@@ -47,7 +43,7 @@ func New(ctx context.Context, uri *url.URL) (*Storage, error) {
 		uri:     uri,
 	}
 	if uri.Scheme == "s3" {
-		client, err := newS3Client(ctx, uri)
+		client, err := newS3Client(uri)
 		if err != nil {
 			store.Close()
 			return nil, errors.Trace(err)
@@ -167,32 +163,17 @@ func (s *Storage) s3Prefix(subDir string) string {
 	return prefix
 }
 
-type s3BucketRegionDetector func(aws.Context, client.ConfigProvider, string, string, ...request.Option) (string, error)
-
-var getS3BucketRegion s3BucketRegionDetector = s3manager.GetBucketRegion
-
-func newS3Client(ctx context.Context, uri *url.URL) (*s3.S3, error) {
+func newS3Client(uri *url.URL) (*s3.S3, error) {
 	values := uri.Query()
 	config := aws.NewConfig().WithCredentials(credentials.NewStaticCredentials(
 		values.Get("access-key"),
 		values.Get("secret-access-key"),
 		values.Get("session-token"),
 	))
-	endpoint := s3Endpoint(values)
-	region := s3Region(values)
-	if region == "" {
-		if endpoint != "" {
-			region = defaultS3RegionHint
-		} else {
-			detected, err := detectS3BucketRegion(ctx, config, uri.Host)
-			if err != nil {
-				return nil, errors.Annotate(err, "detect s3 bucket region")
-			}
-			region = detected
-		}
+	if region := s3Region(values); region != "" {
+		config.WithRegion(region)
 	}
-	config.WithRegion(region)
-	if endpoint != "" {
+	if endpoint := s3Endpoint(values); endpoint != "" {
 		config.WithEndpoint(endpoint).WithS3ForcePathStyle(true)
 	}
 	sess, err := session.NewSession(config)
@@ -202,24 +183,14 @@ func newS3Client(ctx context.Context, uri *url.URL) (*s3.S3, error) {
 	return s3.New(sess), nil
 }
 
-func detectS3BucketRegion(ctx context.Context, config *aws.Config, bucket string) (string, error) {
-	discoveryConfig := config.Copy().WithRegion(defaultS3RegionHint)
-	sess, err := session.NewSession(discoveryConfig)
-	if err != nil {
-		return "", errors.Trace(err)
-	}
-	region, err := getS3BucketRegion(ctx, sess, bucket, defaultS3RegionHint)
-	if err != nil {
-		return "", errors.Trace(err)
-	}
-	return region, nil
-}
-
 func s3Region(values url.Values) string {
 	if region := values.Get("s3.region"); region != "" {
 		return region
 	}
-	return values.Get("region")
+	if region := values.Get("region"); region != "" {
+		return region
+	}
+	return defaultS3Region
 }
 
 func s3Endpoint(values url.Values) string {
