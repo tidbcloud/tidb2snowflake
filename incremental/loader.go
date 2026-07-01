@@ -1,9 +1,12 @@
 package incremental
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path"
 	"slices"
 	"strconv"
@@ -66,7 +69,7 @@ func (loader *loader) run(ctx context.Context, pool *workerpool.Pool) error {
 			log.Info("incremental skip scan", zap.Uint64("checkpointTs", bounds.checkpointTs))
 			continue
 		}
-		startedAt := time.Now()
+		start := time.Now()
 		summary, err := loader.processTables(ctx, bounds, pool)
 		if err != nil {
 			return errors.Trace(err)
@@ -81,7 +84,7 @@ func (loader *loader) run(ctx context.Context, pool *workerpool.Pool) error {
 			zap.Uint64("targetCheckpointTs", bounds.targetCheckpointTs),
 			zap.Int("activeTables", summary.activeTables),
 			zap.Uint64("loadedFiles", summary.loadedFiles),
-			zap.Duration("duration", time.Since(startedAt)))
+			zap.Duration("duration", time.Since(start)))
 	}
 }
 
@@ -109,6 +112,18 @@ type scanSummary struct {
 	activeTables int
 	// loadedFiles is the number of DML files fully loaded into Snowflake.
 	loadedFiles uint64
+}
+
+type dmlFileStats struct {
+	rowCount                 uint64
+	minCommitTs              uint64
+	maxCommitTs              uint64
+	rowsAtOrBelowCheckpoint  uint64
+	rowsAfterCheckpoint      uint64
+	insertRows               uint64
+	updateRows               uint64
+	deleteRows               uint64
+	unknownOperationTypeRows uint64
 }
 
 type tableScan struct {
@@ -221,14 +236,14 @@ func (loader *loader) beginScan(ctx context.Context) (scanBounds, bool, error) {
 	st := loader.state.Snapshot()
 	checkpointTs := st.CheckpointTS
 
-	metadataCheckpointTs, ok, err := loader.readMetadata(ctx)
+	targetCheckpointTs, ok, err := loader.readMetadata(ctx)
 	if err != nil {
 		return scanBounds{}, false, err
 	}
 	if !ok {
 		return scanBounds{checkpointTs: checkpointTs}, false, nil
 	}
-	return scanBounds{checkpointTs: checkpointTs, targetCheckpointTs: metadataCheckpointTs}, true, nil
+	return scanBounds{checkpointTs: checkpointTs, targetCheckpointTs: targetCheckpointTs}, true, nil
 }
 
 func (loader *loader) readMetadata(ctx context.Context) (uint64, bool, error) {
@@ -472,16 +487,16 @@ func (loader *loader) getNewFiles(
 			scan.dmlFileMap[key] = indexRange{start: consumedIdx + 1, end: fileIdx}
 		}
 	}
-	if len(scan.dmlFileMap) > 0 || stats.pendingFiles > 0 {
-		log.Info("increment storage scan completed",
-			zap.String("table", table.tableFQN),
-			zap.Int("newRanges", len(scan.dmlFileMap)),
-			zap.Int("objectFiles", stats.objectFiles),
-			zap.Int("schemaFiles", stats.schemaFiles),
-			zap.Int("indexFiles", stats.indexFiles),
-			zap.Int("skippedDateDirs", stats.skippedDateDirs),
-			zap.Int("pendingFiles", stats.pendingFiles))
-	}
+	log.Info("increment storage scan completed",
+		zap.String("table", table.tableFQN),
+		zap.Uint64("checkpointTs", bounds.checkpointTs),
+		zap.Uint64("targetCheckpointTs", bounds.targetCheckpointTs),
+		zap.Int("newRanges", len(scan.dmlFileMap)),
+		zap.Int("objectFiles", stats.objectFiles),
+		zap.Int("schemaFiles", stats.schemaFiles),
+		zap.Int("indexFiles", stats.indexFiles),
+		zap.Int("skippedDateDirs", stats.skippedDateDirs),
+		zap.Int("pendingFiles", stats.pendingFiles))
 	return scan, nil
 }
 
@@ -555,14 +570,30 @@ func (loader *loader) parseDMLIndexFile(
 	if fileIndex.EnableTableAcrossNodes {
 		return 0, errors.Errorf("table-across-nodes index files are not supported: %s", filePath)
 	}
+	consumedIdx := table.tableDMLIdxMap[dmlKey]
+	pendingStartIdx := uint64(0)
+	pendingEndIdx := uint64(0)
+	pendingFiles := 0
+	if fileIndex.Idx > consumedIdx {
+		pendingStartIdx = consumedIdx + 1
+		pendingEndIdx = fileIndex.Idx
+		pendingFiles = int(fileIndex.Idx - consumedIdx)
+	}
+	log.Info("increment index scanned",
+		zap.String("table", table.tableFQN),
+		zap.String("indexPath", objectPath),
+		zap.String("latestFileName", fileName),
+		zap.Uint64("latestFileIndex", fileIndex.Idx),
+		zap.Uint64("consumedFileIndex", consumedIdx),
+		zap.Uint64("pendingStartFileIndex", pendingStartIdx),
+		zap.Uint64("pendingEndFileIndex", pendingEndIdx),
+		zap.Int("pendingFiles", pendingFiles),
+		zap.Uint64("checkpointTs", bounds.checkpointTs),
+		zap.Uint64("targetCheckpointTs", bounds.targetCheckpointTs))
 	if fileIndex.Idx > seenDMLIdxMap[dmlKey] {
 		seenDMLIdxMap[dmlKey] = fileIndex.Idx
 	}
-	consumedIdx := table.tableDMLIdxMap[dmlKey]
-	if fileIndex.Idx <= consumedIdx {
-		return 0, nil
-	}
-	return int(fileIndex.Idx - consumedIdx), nil
+	return pendingFiles, nil
 }
 
 func (loader *loader) loadSchemaFiles(ctx context.Context, tbl *tableState, scan *tableScan) error {
@@ -651,6 +682,26 @@ func (loader *loader) syncExecDMLEvents(
 	}, storage.CSVFileExtension, config.DefaultFileIndexWidth)
 	objectPath := path.Join(loader.storageDir, filePath)
 
+	if stats, err := loader.inspectDMLFile(ctx, objectPath, bounds.checkpointTs); err != nil {
+		log.Warn("failed to inspect DML file before load",
+			zap.String("filePath", objectPath),
+			zap.Uint64("checkpointTsUsedByMerge", bounds.checkpointTs),
+			zap.Error(err))
+	} else {
+		log.Info("DML file inspected before load",
+			zap.String("filePath", objectPath),
+			zap.Uint64("checkpointTsUsedByMerge", bounds.checkpointTs),
+			zap.Uint64("rowCount", stats.rowCount),
+			zap.Uint64("minCommitTs", stats.minCommitTs),
+			zap.Uint64("maxCommitTs", stats.maxCommitTs),
+			zap.Uint64("rowsAtOrBelowCheckpoint", stats.rowsAtOrBelowCheckpoint),
+			zap.Uint64("rowsAfterCheckpoint", stats.rowsAfterCheckpoint),
+			zap.Uint64("insertRows", stats.insertRows),
+			zap.Uint64("updateRows", stats.updateRows),
+			zap.Uint64("deleteRows", stats.deleteRows),
+			zap.Uint64("unknownOperationTypeRows", stats.unknownOperationTypeRows))
+	}
+
 	err := loader.conn.LoadIncrement(ctx, table.FromSchemaFile(schemaFile), objectPath, bounds.checkpointTs)
 	if err != nil {
 		log.Error("failed to load DML file into data warehouse",
@@ -664,6 +715,59 @@ func (loader *loader) syncExecDMLEvents(
 		return errors.Trace(err)
 	}
 	return nil
+}
+
+func (loader *loader) inspectDMLFile(ctx context.Context, objectPath string, checkpointTs uint64) (dmlFileStats, error) {
+	data, err := loader.storage.ReadFile(ctx, objectPath)
+	if err != nil {
+		return dmlFileStats{}, errors.Trace(err)
+	}
+
+	reader := csv.NewReader(bytes.NewReader(data))
+	reader.FieldsPerRecord = -1
+
+	var stats dmlFileStats
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return stats, errors.Trace(err)
+		}
+		if len(record) < 4 {
+			return stats, errors.Errorf("DML CSV row has %d columns, expected at least 4", len(record))
+		}
+
+		commitTs, err := strconv.ParseUint(record[3], 10, 64)
+		if err != nil {
+			return stats, errors.Annotatef(err, "parse DML CSV commit ts %q", record[3])
+		}
+		stats.rowCount++
+		if stats.minCommitTs == 0 || commitTs < stats.minCommitTs {
+			stats.minCommitTs = commitTs
+		}
+		if commitTs > stats.maxCommitTs {
+			stats.maxCommitTs = commitTs
+		}
+		if commitTs <= checkpointTs {
+			stats.rowsAtOrBelowCheckpoint++
+		} else {
+			stats.rowsAfterCheckpoint++
+		}
+
+		switch record[0] {
+		case "I":
+			stats.insertRows++
+		case "U":
+			stats.updateRows++
+		case "D":
+			stats.deleteRows++
+		default:
+			stats.unknownOperationTypeRows++
+		}
+	}
+	return stats, nil
 }
 
 func (loader *loader) execDDL(ctx context.Context, tbl *tableState, schemaFile cloudstorage.SchemaFile) error {

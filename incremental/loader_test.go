@@ -213,6 +213,34 @@ func TestGetNewFilesScansPartitionDateDirs(t *testing.T) {
 	}])
 }
 
+func TestInspectDMLFile(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
+	require.NoError(t, err)
+	defer store.Close()
+
+	const objectPath = "inc/db/t/100/2026-07-01/CDC000000000000001.csv"
+	require.NoError(t, store.WriteFile(ctx, objectPath, []byte(
+		"I,t,db,100,1\n"+
+			"U,t,db,101,1\n"+
+			"D,t,db,99,2\n",
+	)))
+
+	loader := &loader{storage: store}
+	stats, err := loader.inspectDMLFile(ctx, objectPath, 100)
+	require.NoError(t, err)
+
+	require.Equal(t, uint64(3), stats.rowCount)
+	require.Equal(t, uint64(99), stats.minCommitTs)
+	require.Equal(t, uint64(101), stats.maxCommitTs)
+	require.Equal(t, uint64(2), stats.rowsAtOrBelowCheckpoint)
+	require.Equal(t, uint64(1), stats.rowsAfterCheckpoint)
+	require.Equal(t, uint64(1), stats.insertRows)
+	require.Equal(t, uint64(1), stats.updateRows)
+	require.Equal(t, uint64(1), stats.deleteRows)
+	require.Zero(t, stats.unknownOperationTypeRows)
+}
+
 func writeSchemaFile(t *testing.T, ctx context.Context, store *storage.Storage, storageDir string, tableVersion uint64) {
 	t.Helper()
 	writeSchemaFileForTable(t, ctx, store, storageDir, "db", "t", tableVersion, "", 0)
