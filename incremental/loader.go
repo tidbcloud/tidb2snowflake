@@ -298,14 +298,10 @@ func (loader *loader) processTable(
 }
 
 func (loader *loader) processTables(ctx context.Context, bounds scanBounds, pool *workerpool.Pool) (scanSummary, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	summaries := make([]scanSummary, len(loader.tables))
-	futures := make([]*workerpool.Future, 0, len(loader.tables))
+	group := pool.NewGroup(ctx, 0)
 	var first error
 	for i, table := range loader.tables {
-		i := i
 		task := workerpool.TaskFunc(func(ctx context.Context) error {
 			summary, err := loader.processTable(ctx, bounds, table)
 			if err != nil {
@@ -314,20 +310,13 @@ func (loader *loader) processTables(ctx context.Context, bounds scanBounds, pool
 			summaries[i] = summary
 			return nil
 		})
-		future, err := pool.Submit(ctx, task)
-		if err != nil {
+		if err := group.Submit(task); err != nil {
 			first = err
-			cancel()
 			break
 		}
-		futures = append(futures, future)
 	}
-
-	for _, future := range futures {
-		if err := future.Wait(); err != nil && first == nil {
-			first = err
-			cancel()
-		}
+	if err := group.Wait(); err != nil && first == nil {
+		first = err
 	}
 	if first != nil {
 		return scanSummary{}, errors.Trace(first)

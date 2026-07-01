@@ -25,6 +25,16 @@ func (future *Future) Wait() error {
 	return <-future.done
 }
 
+// Group submits related tasks and cancels the rest after the first error.
+type Group struct {
+	pool    *Pool
+	ctx     context.Context
+	cancel  context.CancelFunc
+	limit   int
+	futures []*Future
+	first   error
+}
+
 type Pool struct {
 	concurrency int
 	tasks       chan poolTask
@@ -72,6 +82,58 @@ func (pool *Pool) Submit(ctx context.Context, task Task) (*Future, error) {
 	case pool.tasks <- poolTask{ctx: ctx, task: task, future: future}:
 		return future, nil
 	}
+}
+
+func (pool *Pool) NewGroup(ctx context.Context, limit int) *Group {
+	ctx, cancel := context.WithCancel(ctx)
+	return &Group{
+		pool:   pool,
+		ctx:    ctx,
+		cancel: cancel,
+		limit:  limit,
+	}
+}
+
+func (group *Group) Submit(task Task) error {
+	if group.first != nil {
+		return group.first
+	}
+	if group.limit > 0 && len(group.futures) >= group.limit {
+		if err := group.drain(); err != nil {
+			return err
+		}
+	}
+	future, err := group.pool.Submit(group.ctx, task)
+	if err != nil {
+		return group.capture(err)
+	}
+	group.futures = append(group.futures, future)
+	return nil
+}
+
+func (group *Group) Wait() error {
+	defer group.cancel()
+	return group.drain()
+}
+
+func (group *Group) Cancel() {
+	group.cancel()
+}
+
+func (group *Group) drain() error {
+	for _, future := range group.futures {
+		group.capture(future.Wait())
+	}
+	group.futures = group.futures[:0]
+	return group.first
+}
+
+func (group *Group) capture(err error) error {
+	if err != nil && group.first == nil {
+		group.first = err
+		group.cancel()
+	}
+	return group.first
 }
 
 func (pool *Pool) Close() {

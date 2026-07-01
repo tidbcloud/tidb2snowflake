@@ -1,16 +1,15 @@
 -- Derived from tidb-fivetran-connector/e2e-test/test.sql.
 -- These cases are intentionally not executed by tidb2snowflake's local matrix
--- smoke test because the current project does not support them, or the current
--- replication semantics explicitly reject them.
+-- smoke test because the fixture has not been expanded to cover them yet, or
+-- the current replication semantics explicitly reject them.
 
--- Type mappings not implemented by tidb2snowflake today. Some of these are
--- supported by tidb-fivetran-connector, but still need an explicit Snowflake
--- target policy and value encoding in this project before we execute them here:
+-- Type mappings supported by tidb2snowflake but not executed by this smoke
+-- fixture yet:
 --   BIT / BIT(n)
 --   JSON
 --   SET
---   MEDIUMBLOB / LONGBLOB (Snowflake BINARY is limited to 8 MB)
---   DECIMAL precision greater than Snowflake's max precision 38
+--   MEDIUMBLOB / LONGBLOB (Snowflake BINARY is limited to 64 MB)
+--   UNSIGNED DECIMAL precision greater than Snowflake's max precision 38
 --   Tables whose primary key contains BIT(n>1)
 
 -- Unsupported or intentionally rejected DDL semantics today:
