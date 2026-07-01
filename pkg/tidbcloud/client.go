@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/icholy/digest"
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 const (
@@ -154,21 +156,31 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			lastErr = fmt.Errorf("tidbcloud: %s %s: %w", method, path, err)
+			lastErr = fmt.Errorf("tidbcloud: %s %s: %s", method, sanitizeLogText(path), sanitizeLogText(err.Error()))
+			if attempt == c.maxRetries {
+				logTiDBCloudRequestFailed(method, path, url, attempt, c.maxRetries, reqBody, req, nil, nil, lastErr)
+				return lastErr
+			}
 			continue
 		}
 
 		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
-			lastErr = fmt.Errorf("tidbcloud: read response body: %w", readErr)
+			lastErr = fmt.Errorf("tidbcloud: read response body: %s", sanitizeLogText(readErr.Error()))
+			if attempt == c.maxRetries {
+				logTiDBCloudRequestFailed(method, path, url, attempt, c.maxRetries, reqBody, req, resp, nil, lastErr)
+				return lastErr
+			}
 			continue
 		}
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			if out != nil && len(respBody) > 0 {
 				if err := json.Unmarshal(respBody, out); err != nil {
-					return fmt.Errorf("tidbcloud: decode response: %w", err)
+					decodeErr := fmt.Errorf("tidbcloud: decode response: %w", err)
+					logTiDBCloudResponseDecodeFailed(method, path, url, attempt, c.maxRetries, reqBody, req, resp, respBody, decodeErr)
+					return decodeErr
 				}
 			}
 			return nil
@@ -179,9 +191,48 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 			lastErr = apiErr
 			continue
 		}
+		logTiDBCloudRequestFailed(method, path, url, attempt, c.maxRetries, reqBody, req, resp, respBody, apiErr)
 		return apiErr
 	}
 	return lastErr
+}
+
+func logTiDBCloudRequestFailed(method, path, rawURL string, attempt, maxRetries int, reqBody []byte, req *http.Request, resp *http.Response, respBody []byte, err error) {
+	log.Error("TiDB Cloud request failed", tidbCloudRequestResponseLogFields(method, path, rawURL, attempt, maxRetries, reqBody, req, resp, respBody, err)...)
+}
+
+func logTiDBCloudResponseDecodeFailed(method, path, rawURL string, attempt, maxRetries int, reqBody []byte, req *http.Request, resp *http.Response, respBody []byte, err error) {
+	log.Error("TiDB Cloud response decode failed", tidbCloudRequestResponseLogFields(method, path, rawURL, attempt, maxRetries, reqBody, req, resp, respBody, err)...)
+}
+
+func tidbCloudRequestResponseLogFields(method, path, rawURL string, attempt, maxRetries int, reqBody []byte, req *http.Request, resp *http.Response, respBody []byte, err error) []zap.Field {
+	fields := []zap.Field{
+		zap.String("method", method),
+		zap.String("path", sanitizeLogText(path)),
+		zap.String("url", sanitizeURLString(rawURL)),
+		zap.Int("attempt", attempt+1),
+		zap.Int("maxAttempts", maxRetries+1),
+		zap.String("requestBody", sanitizeHTTPBody(reqBody)),
+	}
+	requestForHeaders := req
+	if resp != nil && resp.Request != nil {
+		requestForHeaders = resp.Request
+	}
+	if requestForHeaders != nil {
+		fields = append(fields, zap.Any("requestHeaders", sanitizeHTTPHeaders(requestForHeaders.Header)))
+	}
+	if resp != nil {
+		fields = append(fields,
+			zap.Int("statusCode", resp.StatusCode),
+			zap.String("status", resp.Status),
+			zap.Any("responseHeaders", sanitizeHTTPHeaders(resp.Header)),
+			zap.String("responseBody", sanitizeHTTPBody(respBody)),
+		)
+	}
+	if err != nil {
+		fields = append(fields, zap.String("error", sanitizeLogText(err.Error())))
+	}
+	return fields
 }
 
 func backoff(attempt int) time.Duration {

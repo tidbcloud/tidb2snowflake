@@ -28,13 +28,14 @@ func parseAPIError(status int, body []byte) *APIError {
 	e := &APIError{StatusCode: status}
 	if len(body) > 0 {
 		// Best-effort decode; fall back to the raw body as the message.
-		_ = json.Unmarshal(body, e)
+		_ = json.Unmarshal([]byte(sanitizeHTTPBody(body)), e)
 	}
 	if e.Message == "" {
-		e.Message = strings.TrimSpace(string(body))
+		e.Message = sanitizeLogText(strings.TrimSpace(string(body)))
 		if e.Message == "" {
 			e.Message = http.StatusText(status)
 		}
 	}
+	e.Message = sanitizeLogText(e.Message)
 	return e
 }
