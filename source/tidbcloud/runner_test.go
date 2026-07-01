@@ -122,6 +122,17 @@ func TestBuildChangefeedRequestFromTSO(t *testing.T) {
 	require.Equal(t, "449023000000000000", req.StartPosition.TSO)
 }
 
+func TestValidateTiDBCloudConfigReportsConfigKeys(t *testing.T) {
+	err := validateTiDBCloudConfig(Config{})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tidbcloud.cluster-id")
+	require.Contains(t, err.Error(), "tidbcloud.public-key")
+	require.Contains(t, err.Error(), "tidbcloud.private-key")
+	require.NotContains(t, err.Error(), "TIDBCLOUD_CLUSTER_ID")
+	require.NotContains(t, err.Error(), "environment variable")
+}
+
 func newTestStateManager(t *testing.T, ctx context.Context, store storeapi.Storage) state.Manager {
 	t.Helper()
 	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"}, false)

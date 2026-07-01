@@ -141,7 +141,7 @@ func (c *e2eConfig) snowflakeDB(t *testing.T) *sql.DB {
 func runTool(ctx context.Context, t *testing.T, cfg *e2eConfig, mode, storagePath, table string) error {
 	t.Helper()
 	cmd := exec.CommandContext(ctx, toolBinary, toolArgs(t, cfg, mode, storagePath, table)...)
-	cmd.Env = toolEnv(cfg)
+	cmd.Env = os.Environ()
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -156,7 +156,7 @@ func startTool(t *testing.T, cfg *e2eConfig, mode, storagePath, table string) (s
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, toolBinary, toolArgs(t, cfg, mode, storagePath, table)...)
-	cmd.Env = toolEnv(cfg)
+	cmd.Env = os.Environ()
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -199,25 +199,17 @@ func writeToolConfig(t *testing.T, cfg *e2eConfig, mode, storagePath, table stri
 	fmt.Fprintf(&buf, "pass = %s\n", strconv.Quote(cfg.SFPass))
 	fmt.Fprintf(&buf, "warehouse = %s\n", strconv.Quote(cfg.SFWarehouse))
 	fmt.Fprintf(&buf, "database = %s\n\n", strconv.Quote(cfg.SFDatabase))
+	fmt.Fprintf(&buf, "[tidbcloud]\n")
+	fmt.Fprintf(&buf, "cluster-id = %s\n", strconv.Quote(cfg.ClusterID))
+	fmt.Fprintf(&buf, "public-key = %s\n", strconv.Quote(cfg.PublicKey))
+	fmt.Fprintf(&buf, "private-key = %s\n", strconv.Quote(cfg.PrivateKey))
+	fmt.Fprintf(&buf, "host = %s\n\n", strconv.Quote(cfg.APIHost))
 	fmt.Fprintf(&buf, "[log]\n")
 	fmt.Fprintf(&buf, "level = %s\n", strconv.Quote("info"))
 	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
 		t.Fatalf("write tool config: %v", err)
 	}
 	return path
-}
-
-func toolEnv(cfg *e2eConfig) []string {
-	env := append([]string{}, os.Environ()...)
-	env = append(env,
-		"TIDBCLOUD_CLUSTER_ID="+cfg.ClusterID,
-		"TIDBCLOUD_PUBLIC_KEY="+cfg.PublicKey,
-		"TIDBCLOUD_PRIVATE_KEY="+cfg.PrivateKey,
-	)
-	if cfg.APIHost != "" {
-		env = append(env, "TIDBCLOUD_HOST="+cfg.APIHost)
-	}
-	return env
 }
 
 // ---- assertions ----
