@@ -2,6 +2,7 @@ package workerpool
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -44,5 +45,66 @@ func TestPoolContextCancellationCompletesFuture(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	require.ErrorIs(t, future.Wait(), context.Canceled)
+	require.False(t, ran.Load())
+}
+
+func TestGroupCancelsSiblingsOnFirstError(t *testing.T) {
+	ctx := context.Background()
+	pool := New(2)
+	pool.Go(ctx)
+	defer pool.Close()
+
+	group := pool.NewGroup(ctx, 0)
+	want := errors.New("task failed")
+	firstCanReturn := make(chan struct{})
+	secondStarted := make(chan struct{})
+	secondDone := make(chan struct{})
+
+	require.NoError(t, group.Submit(TaskFunc(func(context.Context) error {
+		<-firstCanReturn
+		return want
+	})))
+	require.NoError(t, group.Submit(TaskFunc(func(ctx context.Context) error {
+		close(secondStarted)
+		<-ctx.Done()
+		close(secondDone)
+		return ctx.Err()
+	})))
+
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "second task did not start")
+	}
+
+	close(firstCanReturn)
+	require.ErrorIs(t, group.Wait(), want)
+
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		require.FailNow(t, "second task was not cancelled")
+	}
+}
+
+func TestGroupLimitStopsSubmittingAfterFailedBatch(t *testing.T) {
+	ctx := context.Background()
+	pool := New(1)
+	pool.Go(ctx)
+	defer pool.Close()
+
+	group := pool.NewGroup(ctx, 1)
+	want := errors.New("task failed")
+
+	require.NoError(t, group.Submit(TaskFunc(func(context.Context) error {
+		return want
+	})))
+
+	var ran atomic.Bool
+	require.ErrorIs(t, group.Submit(TaskFunc(func(context.Context) error {
+		ran.Store(true)
+		return nil
+	})), want)
+	require.ErrorIs(t, group.Wait(), want)
 	require.False(t, ran.Load())
 }
