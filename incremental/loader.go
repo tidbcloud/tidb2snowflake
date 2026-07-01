@@ -66,7 +66,7 @@ func (loader *loader) run(ctx context.Context, pool *workerpool.Pool) error {
 			log.Info("incremental skip scan", zap.Uint64("checkpointTs", bounds.checkpointTs))
 			continue
 		}
-		startedAt := time.Now()
+		start := time.Now()
 		summary, err := loader.processTables(ctx, bounds, pool)
 		if err != nil {
 			return errors.Trace(err)
@@ -81,7 +81,7 @@ func (loader *loader) run(ctx context.Context, pool *workerpool.Pool) error {
 			zap.Uint64("targetCheckpointTs", bounds.targetCheckpointTs),
 			zap.Int("activeTables", summary.activeTables),
 			zap.Uint64("loadedFiles", summary.loadedFiles),
-			zap.Duration("duration", time.Since(startedAt)))
+			zap.Duration("duration", time.Since(start)))
 	}
 }
 
@@ -221,14 +221,14 @@ func (loader *loader) beginScan(ctx context.Context) (scanBounds, bool, error) {
 	st := loader.state.Snapshot()
 	checkpointTs := st.CheckpointTS
 
-	metadataCheckpointTs, ok, err := loader.readMetadata(ctx)
+	targetCheckpointTs, ok, err := loader.readMetadata(ctx)
 	if err != nil {
 		return scanBounds{}, false, err
 	}
 	if !ok {
 		return scanBounds{checkpointTs: checkpointTs}, false, nil
 	}
-	return scanBounds{checkpointTs: checkpointTs, targetCheckpointTs: metadataCheckpointTs}, true, nil
+	return scanBounds{checkpointTs: checkpointTs, targetCheckpointTs: targetCheckpointTs}, true, nil
 }
 
 func (loader *loader) readMetadata(ctx context.Context) (uint64, bool, error) {
@@ -472,16 +472,16 @@ func (loader *loader) getNewFiles(
 			scan.dmlFileMap[key] = indexRange{start: consumedIdx + 1, end: fileIdx}
 		}
 	}
-	if len(scan.dmlFileMap) > 0 || stats.pendingFiles > 0 {
-		log.Info("increment storage scan completed",
-			zap.String("table", table.tableFQN),
-			zap.Int("newRanges", len(scan.dmlFileMap)),
-			zap.Int("objectFiles", stats.objectFiles),
-			zap.Int("schemaFiles", stats.schemaFiles),
-			zap.Int("indexFiles", stats.indexFiles),
-			zap.Int("skippedDateDirs", stats.skippedDateDirs),
-			zap.Int("pendingFiles", stats.pendingFiles))
-	}
+	log.Info("increment storage scan completed",
+		zap.String("table", table.tableFQN),
+		zap.Uint64("checkpointTs", bounds.checkpointTs),
+		zap.Uint64("targetCheckpointTs", bounds.targetCheckpointTs),
+		zap.Int("newRanges", len(scan.dmlFileMap)),
+		zap.Int("objectFiles", stats.objectFiles),
+		zap.Int("schemaFiles", stats.schemaFiles),
+		zap.Int("indexFiles", stats.indexFiles),
+		zap.Int("skippedDateDirs", stats.skippedDateDirs),
+		zap.Int("pendingFiles", stats.pendingFiles))
 	return scan, nil
 }
 
@@ -555,14 +555,30 @@ func (loader *loader) parseDMLIndexFile(
 	if fileIndex.EnableTableAcrossNodes {
 		return 0, errors.Errorf("table-across-nodes index files are not supported: %s", filePath)
 	}
+	consumedIdx := table.tableDMLIdxMap[dmlKey]
+	pendingStartIdx := uint64(0)
+	pendingEndIdx := uint64(0)
+	pendingFiles := 0
+	if fileIndex.Idx > consumedIdx {
+		pendingStartIdx = consumedIdx + 1
+		pendingEndIdx = fileIndex.Idx
+		pendingFiles = int(fileIndex.Idx - consumedIdx)
+	}
+	log.Info("increment index scanned",
+		zap.String("table", table.tableFQN),
+		zap.String("indexPath", objectPath),
+		zap.String("latestFileName", fileName),
+		zap.Uint64("latestFileIndex", fileIndex.Idx),
+		zap.Uint64("consumedFileIndex", consumedIdx),
+		zap.Uint64("pendingStartFileIndex", pendingStartIdx),
+		zap.Uint64("pendingEndFileIndex", pendingEndIdx),
+		zap.Int("pendingFiles", pendingFiles),
+		zap.Uint64("checkpointTs", bounds.checkpointTs),
+		zap.Uint64("targetCheckpointTs", bounds.targetCheckpointTs))
 	if fileIndex.Idx > seenDMLIdxMap[dmlKey] {
 		seenDMLIdxMap[dmlKey] = fileIndex.Idx
 	}
-	consumedIdx := table.tableDMLIdxMap[dmlKey]
-	if fileIndex.Idx <= consumedIdx {
-		return 0, nil
-	}
-	return int(fileIndex.Idx - consumedIdx), nil
+	return pendingFiles, nil
 }
 
 func (loader *loader) loadSchemaFiles(ctx context.Context, tbl *tableState, scan *tableScan) error {
@@ -663,6 +679,9 @@ func (loader *loader) syncExecDMLEvents(
 			zap.Uint64("fileIndex", fileIdx))
 		return errors.Trace(err)
 	}
+	log.Info("DML file loaded into data warehouse",
+		zap.String("filePath", objectPath),
+		zap.Uint64("checkpointTsUsedByMerge", bounds.checkpointTs))
 	return nil
 }
 
