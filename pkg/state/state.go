@@ -34,7 +34,10 @@ type TaskInfo struct {
 }
 
 type TableState struct {
-	// DDLTableVersionWatermark records the highest applied schema table version.
+	// DDLTableVersionWatermark is the per-table sync lower bound.
+	// When it is V, rows with commit_ts <= V are considered loaded for this table.
+	// Schema versions below V are stale; schema version V is applied but may still
+	// have DML with commit_ts > V to consume.
 	DDLTableVersionWatermark uint64 `json:"ddl_table_version_watermark"`
 	// DMLCursors record the last consumed date and file index for each DML stream.
 	DMLCursors map[string]DMLCursor `json:"dml_cursors"`

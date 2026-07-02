@@ -2,6 +2,7 @@ package incremental
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"path"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
+	"github.com/tidbcloud/tidb2snowflake/pkg/state"
 	"github.com/tidbcloud/tidb2snowflake/source/storage"
 )
 
@@ -75,7 +77,7 @@ func TestGetNewFilesScansMetadataPrefixes(t *testing.T) {
 		tableFQN:                 "db.t",
 	}
 
-	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 110, targetCheckpointTs: 130}, table)
+	scan, err := loader.getNewFiles(ctx, 110, table)
 	require.NoError(t, err)
 
 	require.Equal(t, indexRange{start: 2, end: 3}, scan.dmlFileMap[cloudstorage.DMLPathKey{
@@ -91,6 +93,41 @@ func TestGetNewFilesScansMetadataPrefixes(t *testing.T) {
 		Table:        "t",
 		TableVersion: 120,
 	}))
+}
+
+func TestBeginScanOnlyScansWhenTargetCheckpointAdvances(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
+	require.NoError(t, err)
+	defer store.Close()
+
+	stateManager, err := state.Open(ctx, store, []string{"db.t"}, true)
+	require.NoError(t, err)
+	require.NoError(t, stateManager.SetCheckpointTS(ctx, 100))
+
+	loader := &loader{
+		storage:    store,
+		storageDir: "inc",
+		state:      stateManager,
+	}
+
+	require.NoError(t, writeIncrementMetadata(ctx, store, "inc", 100))
+	bounds, hasScan, err := loader.beginScan(ctx)
+	require.NoError(t, err)
+	require.False(t, hasScan)
+	require.Equal(t, scanBounds{checkpointTs: 100, targetCheckpointTs: 100}, bounds)
+
+	require.NoError(t, writeIncrementMetadata(ctx, store, "inc", 99))
+	bounds, hasScan, err = loader.beginScan(ctx)
+	require.NoError(t, err)
+	require.False(t, hasScan)
+	require.Equal(t, scanBounds{checkpointTs: 100, targetCheckpointTs: 99}, bounds)
+
+	require.NoError(t, writeIncrementMetadata(ctx, store, "inc", 101))
+	bounds, hasScan, err = loader.beginScan(ctx)
+	require.NoError(t, err)
+	require.True(t, hasScan)
+	require.Equal(t, scanBounds{checkpointTs: 100, targetCheckpointTs: 101}, bounds)
 }
 
 func TestGetNewFilesDoesNotScheduleSchemaAtCheckpoint(t *testing.T) {
@@ -110,7 +147,7 @@ func TestGetNewFilesDoesNotScheduleSchemaAtCheckpoint(t *testing.T) {
 		tableFQN:                 "db.t",
 	}
 
-	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 100, targetCheckpointTs: 130}, table)
+	scan, err := loader.getNewFiles(ctx, 100, table)
 	require.NoError(t, err)
 
 	require.Contains(t, scan.schemaFilePaths, uint64(100))
@@ -119,6 +156,98 @@ func TestGetNewFilesDoesNotScheduleSchemaAtCheckpoint(t *testing.T) {
 		Table:        "t",
 		TableVersion: 100,
 	}))
+}
+
+func TestGetNewFilesKeepsOnlyLatestAppliedBaselineSchema(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
+	require.NoError(t, err)
+	defer store.Close()
+
+	writeSchemaFile(t, ctx, store, "inc", 80)
+	writeSchemaFile(t, ctx, store, "inc", 90)
+	writeSchemaFile(t, ctx, store, "inc", 100)
+
+	loader := &loader{storage: store, storageDir: "inc"}
+	table := &tableState{
+		tableDMLIdxMap:           make(map[cloudstorage.DMLPathKey]uint64),
+		ddlTableVersionWatermark: 100,
+		sourceDatabase:           "db",
+		sourceTable:              "t",
+		tableFQN:                 "db.t",
+	}
+
+	scan, err := loader.getNewFiles(ctx, 100, table)
+	require.NoError(t, err)
+
+	require.NotContains(t, scan.schemaFilePaths, uint64(80))
+	require.NotContains(t, scan.schemaFilePaths, uint64(90))
+	require.Contains(t, scan.schemaFilePaths, uint64(100))
+}
+
+func TestGetNewFilesScansVisibleWorkBeyondTargetCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
+	require.NoError(t, err)
+	defer store.Close()
+
+	writeSchemaFile(t, ctx, store, "inc", 100)
+	writeSchemaFile(t, ctx, store, "inc", 150)
+	writeIndexFile(t, ctx, store, "inc", 150, "2026-07-02", 2)
+
+	loader := &loader{storage: store, storageDir: "inc"}
+	table := &tableState{
+		tableDMLIdxMap:           make(map[cloudstorage.DMLPathKey]uint64),
+		ddlTableVersionWatermark: 100,
+		sourceDatabase:           "db",
+		sourceTable:              "t",
+		tableFQN:                 "db.t",
+	}
+
+	scan, err := loader.getNewFiles(ctx, 110, table)
+	require.NoError(t, err)
+
+	require.Contains(t, scan.dmlFileMap, cloudstorage.NewSchemaFileDMLPathKey(cloudstorage.SchemaPathKey{
+		Schema:       "db",
+		Table:        "t",
+		TableVersion: 150,
+	}))
+	require.Equal(t, indexRange{start: 1, end: 2}, scan.dmlFileMap[cloudstorage.DMLPathKey{
+		SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "db", Table: "t", TableVersion: 150},
+		Date:          "2026-07-02",
+	}])
+}
+
+func TestGetNewFilesDoesNotRescheduleAppliedDDLAfterCheckpointLag(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
+	require.NoError(t, err)
+	defer store.Close()
+
+	writeSchemaFile(t, ctx, store, "inc", 120)
+	writeIndexFile(t, ctx, store, "inc", 120, "2026-07-02", 1)
+
+	loader := &loader{storage: store, storageDir: "inc"}
+	table := &tableState{
+		tableDMLIdxMap:           make(map[cloudstorage.DMLPathKey]uint64),
+		ddlTableVersionWatermark: 120,
+		sourceDatabase:           "db",
+		sourceTable:              "t",
+		tableFQN:                 "db.t",
+	}
+
+	scan, err := loader.getNewFiles(ctx, 100, table)
+	require.NoError(t, err)
+
+	require.NotContains(t, scan.dmlFileMap, cloudstorage.NewSchemaFileDMLPathKey(cloudstorage.SchemaPathKey{
+		Schema:       "db",
+		Table:        "t",
+		TableVersion: 120,
+	}))
+	require.Equal(t, indexRange{start: 1, end: 1}, scan.dmlFileMap[cloudstorage.DMLPathKey{
+		SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "db", Table: "t", TableVersion: 120},
+		Date:          "2026-07-02",
+	}])
 }
 
 func TestGetNewFilesSkipsDatesBeforeActiveDate(t *testing.T) {
@@ -152,7 +281,7 @@ func TestGetNewFilesSkipsDatesBeforeActiveDate(t *testing.T) {
 		tableFQN:                 "db.t",
 	}
 
-	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 100, targetCheckpointTs: 130}, table)
+	scan, err := loader.getNewFiles(ctx, 100, table)
 	require.NoError(t, err)
 
 	require.NotContains(t, scan.dmlFileMap, cloudstorage.DMLPathKey{
@@ -198,7 +327,7 @@ func TestGetNewFilesScansPartitionDateDirs(t *testing.T) {
 		tableFQN:                 "db.t",
 	}
 
-	scan, err := loader.getNewFiles(ctx, scanBounds{checkpointTs: 100, targetCheckpointTs: 130}, table)
+	scan, err := loader.getNewFiles(ctx, 100, table)
 	require.NoError(t, err)
 
 	require.NotContains(t, scan.dmlFileMap, cloudstorage.DMLPathKey{
@@ -213,37 +342,13 @@ func TestGetNewFilesScansPartitionDateDirs(t *testing.T) {
 	}])
 }
 
-func TestInspectDMLFile(t *testing.T) {
-	ctx := context.Background()
-	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
-	require.NoError(t, err)
-	defer store.Close()
-
-	const objectPath = "inc/db/t/100/2026-07-01/CDC000000000000001.csv"
-	require.NoError(t, store.WriteFile(ctx, objectPath, []byte(
-		"I,t,db,100,1\n"+
-			"U,t,db,101,1\n"+
-			"D,t,db,99,2\n",
-	)))
-
-	loader := &loader{storage: store}
-	stats, err := loader.inspectDMLFile(ctx, objectPath, 100)
-	require.NoError(t, err)
-
-	require.Equal(t, uint64(3), stats.rowCount)
-	require.Equal(t, uint64(99), stats.minCommitTs)
-	require.Equal(t, uint64(101), stats.maxCommitTs)
-	require.Equal(t, uint64(2), stats.rowsAtOrBelowCheckpoint)
-	require.Equal(t, uint64(1), stats.rowsAfterCheckpoint)
-	require.Equal(t, uint64(1), stats.insertRows)
-	require.Equal(t, uint64(1), stats.updateRows)
-	require.Equal(t, uint64(1), stats.deleteRows)
-	require.Zero(t, stats.unknownOperationTypeRows)
-}
-
 func writeSchemaFile(t *testing.T, ctx context.Context, store *storage.Storage, storageDir string, tableVersion uint64) {
 	t.Helper()
 	writeSchemaFileForTable(t, ctx, store, storageDir, "db", "t", tableVersion, "", 0)
+}
+
+func writeIncrementMetadata(ctx context.Context, store *storage.Storage, storageDir string, checkpointTs uint64) error {
+	return store.WriteFile(ctx, path.Join(storageDir, metadataFileName), []byte(fmt.Sprintf(`{"checkpoint-ts":%d}`, checkpointTs)))
 }
 
 func writeSchemaFileForTable(
