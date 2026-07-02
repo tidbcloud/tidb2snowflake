@@ -66,8 +66,8 @@ func (sc *Connector) LoadIncrement(ctx context.Context, tableMeta *table.Meta, f
 	if err != nil {
 		return errors.Trace(err)
 	}
+
 	rowsAffected := int64(-1)
-	rowsAffectedAvailable := false
 	if result != nil {
 		affected, err := result.RowsAffected()
 		if err != nil {
@@ -77,14 +77,12 @@ func (sc *Connector) LoadIncrement(ctx context.Context, tableMeta *table.Meta, f
 				zap.Error(err))
 		} else {
 			rowsAffected = affected
-			rowsAffectedAvailable = true
 		}
 	}
 	log.Info("DML file loaded into data warehouse",
 		zap.String("filePath", filePath),
 		zap.Uint64("checkpointTsUsedByMerge", checkpointTs),
-		zap.Int64("rowsAffected", rowsAffected),
-		zap.Bool("rowsAffectedAvailable", rowsAffectedAvailable))
+		zap.Int64("rowsAffected", rowsAffected))
 	return nil
 }
 

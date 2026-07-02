@@ -677,7 +677,7 @@ func (loader *loader) parseDMLIndexFileIfExists(
 
 func (loader *loader) loadSchemaFiles(ctx context.Context, tbl *tableState, scan *tableScan) error {
 	requiredSchemaVersions := make(map[uint64]struct{})
-	needsCurrentMeta := false
+	var needsCurrentMeta bool
 	for key := range scan.dmlFileMap {
 		requiredSchemaVersions[key.TableVersion] = struct{}{}
 		if key.IsSchemaFileDMLPathKey() && key.TableVersion > tbl.ddlTableVersionWatermark {
@@ -708,12 +708,6 @@ func (loader *loader) loadSchemaFiles(ctx context.Context, tbl *tableState, scan
 		schemaFile, err := loader.readSchemaFile(ctx, objectPath)
 		if err != nil {
 			return errors.Trace(err)
-		}
-		if schemaFile.TableVersion != version {
-			return errors.Errorf("schema file metadata mismatch: table %s path %s", tbl.tableFQN, objectPath)
-		}
-		if schemaFile.Schema != tbl.sourceDatabase || schemaFile.Table != tbl.sourceTable {
-			return errors.Errorf("schema file metadata mismatch: table %s path %s", tbl.tableFQN, objectPath)
 		}
 		scan.schemaFiles[version] = schemaFile
 	}
@@ -761,25 +755,7 @@ func (loader *loader) syncExecDMLEvents(
 	}, storage.CSVFileExtension, config.DefaultFileIndexWidth)
 	objectPath := path.Join(loader.storageDir, filePath)
 
-	if stats, err := loader.inspectDMLFile(ctx, objectPath, checkpointTs); err != nil {
-		log.Warn("failed to inspect DML file before load",
-			zap.String("filePath", objectPath),
-			zap.Uint64("checkpointTsUsedByMerge", checkpointTs),
-			zap.Error(err))
-	} else {
-		log.Info("DML file inspected before load",
-			zap.String("filePath", objectPath),
-			zap.Uint64("checkpointTsUsedByMerge", checkpointTs),
-			zap.Uint64("rowCount", stats.rowCount),
-			zap.Uint64("minCommitTs", stats.minCommitTs),
-			zap.Uint64("maxCommitTs", stats.maxCommitTs),
-			zap.Uint64("rowsAtOrBelowCheckpoint", stats.rowsAtOrBelowCheckpoint),
-			zap.Uint64("rowsAfterCheckpoint", stats.rowsAfterCheckpoint),
-			zap.Uint64("insertRows", stats.insertRows),
-			zap.Uint64("updateRows", stats.updateRows),
-			zap.Uint64("deleteRows", stats.deleteRows),
-			zap.Uint64("unknownOperationTypeRows", stats.unknownOperationTypeRows))
-	}
+	inspectDMLFile(ctx, loader.storage, objectPath, checkpointTs)
 
 	err := loader.conn.LoadIncrement(ctx, table.FromSchemaFile(schemaFile), objectPath, checkpointTs)
 	if err != nil {
@@ -796,10 +772,14 @@ func (loader *loader) syncExecDMLEvents(
 	return nil
 }
 
-func (loader *loader) inspectDMLFile(ctx context.Context, objectPath string, checkpointTs uint64) (dmlFileStats, error) {
-	data, err := loader.storage.ReadFile(ctx, objectPath)
+func inspectDMLFile(ctx context.Context, storage *storage.Storage, objectPath string, checkpointTs uint64) {
+	data, err := storage.ReadFile(ctx, objectPath)
 	if err != nil {
-		return dmlFileStats{}, errors.Trace(err)
+		log.Warn("failed to inspect DML file before load",
+			zap.String("filePath", objectPath),
+			zap.Uint64("checkpointTsUsedByMerge", checkpointTs),
+			zap.Error(err))
+		return
 	}
 
 	reader := csv.NewReader(bytes.NewReader(data))
@@ -812,15 +792,15 @@ func (loader *loader) inspectDMLFile(ctx context.Context, objectPath string, che
 			break
 		}
 		if err != nil {
-			return stats, errors.Trace(err)
+			return
 		}
 		if len(record) < 4 {
-			return stats, errors.Errorf("DML CSV row has %d columns, expected at least 4", len(record))
+			return
 		}
 
 		commitTs, err := strconv.ParseUint(record[3], 10, 64)
 		if err != nil {
-			return stats, errors.Annotatef(err, "parse DML CSV commit ts %q", record[3])
+			return
 		}
 		stats.rowCount++
 		if stats.minCommitTs == 0 || commitTs < stats.minCommitTs {
@@ -846,7 +826,18 @@ func (loader *loader) inspectDMLFile(ctx context.Context, objectPath string, che
 			stats.unknownOperationTypeRows++
 		}
 	}
-	return stats, nil
+	log.Info("DML file inspected before load",
+		zap.String("filePath", objectPath),
+		zap.Uint64("checkpointTsUsedByMerge", checkpointTs),
+		zap.Uint64("rowCount", stats.rowCount),
+		zap.Uint64("minCommitTs", stats.minCommitTs),
+		zap.Uint64("maxCommitTs", stats.maxCommitTs),
+		zap.Uint64("rowsAtOrBelowCheckpoint", stats.rowsAtOrBelowCheckpoint),
+		zap.Uint64("rowsAfterCheckpoint", stats.rowsAfterCheckpoint),
+		zap.Uint64("insertRows", stats.insertRows),
+		zap.Uint64("updateRows", stats.updateRows),
+		zap.Uint64("deleteRows", stats.deleteRows),
+		zap.Uint64("unknownOperationTypeRows", stats.unknownOperationTypeRows))
 }
 
 func (loader *loader) execDDL(ctx context.Context, tbl *tableState, schemaFile cloudstorage.SchemaFile) error {
