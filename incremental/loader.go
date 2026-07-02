@@ -66,18 +66,18 @@ func (loader *loader) run(ctx context.Context, pool *workerpool.Pool) error {
 			return errors.Trace(err)
 		}
 		if !hasScan {
-			log.Info("incremental skip scan", zap.Uint64("checkpointTs", bounds.checkpointTs))
 			continue
 		}
 		start := time.Now()
-		summary, err := loader.processTables(ctx, bounds, pool)
+		summary, err := loader.processTables(ctx, bounds.checkpointTs, pool)
 		if err != nil {
 			return errors.Trace(err)
 		}
-		if bounds.targetCheckpointTs > bounds.checkpointTs {
-			if err := loader.state.SetCheckpointTS(ctx, bounds.targetCheckpointTs); err != nil {
-				return errors.Trace(err)
-			}
+		if err := loader.state.SetCheckpointTS(ctx, bounds.targetCheckpointTs); err != nil {
+			log.Error("incremental scan completed, but set target checkpoint to state failed",
+				zap.Uint64("checkpointTs", bounds.checkpointTs), zap.Uint64("targetCheckpointTs", bounds.targetCheckpointTs),
+				zap.Error(err))
+			return errors.Trace(err)
 		}
 		log.Info("incremental scan completed",
 			zap.Uint64("checkpointTs", bounds.checkpointTs),
@@ -95,8 +95,6 @@ type indexRange struct {
 }
 
 type incrementalScanStats struct {
-	objectFiles     int
-	schemaFiles     int
 	indexFiles      int
 	skippedDateDirs int
 	pendingFiles    int
@@ -143,11 +141,14 @@ type loader struct {
 
 type tableState struct {
 	// tableDMLIdxMap records the in-memory contiguous DML file prefix fully consumed for each path.
-	tableDMLIdxMap           map[cloudstorage.DMLPathKey]uint64
-	activeDateByDMLScope     map[dmlScope]string
-	dmlCursors               map[string]state.DMLCursor
-	dirtyDMLCursors          map[string]state.DMLCursor
-	currentMeta              *table.Meta
+	tableDMLIdxMap       map[cloudstorage.DMLPathKey]uint64
+	activeDateByDMLScope map[dmlScope]string
+	dmlCursors           map[string]state.DMLCursor
+	dirtyDMLCursors      map[string]state.DMLCursor
+	currentMeta          *table.Meta
+	// ddlTableVersionWatermark mirrors the persisted per-table sync lower bound.
+	// Schema versions below it are skipped; the equal version is the current
+	// applied schema and may still have DML with commit_ts above the watermark.
 	ddlTableVersionWatermark uint64
 	sourceDatabase           string
 	sourceTable              string
@@ -243,7 +244,20 @@ func (loader *loader) beginScan(ctx context.Context) (scanBounds, bool, error) {
 	if !ok {
 		return scanBounds{checkpointTs: checkpointTs}, false, nil
 	}
-	return scanBounds{checkpointTs: checkpointTs, targetCheckpointTs: targetCheckpointTs}, true, nil
+	bounds := scanBounds{checkpointTs: checkpointTs, targetCheckpointTs: targetCheckpointTs}
+	if targetCheckpointTs < checkpointTs {
+		log.Warn("incremental metadata checkpoint is behind state checkpoint, this should not happen",
+			zap.Uint64("checkpointTs", checkpointTs),
+			zap.Uint64("targetCheckpointTs", targetCheckpointTs))
+		return bounds, false, nil
+	}
+	if targetCheckpointTs == checkpointTs {
+		log.Warn("targetCheckpoint is stuck, skip the scan",
+			zap.Uint64("checkpointTs", bounds.checkpointTs),
+			zap.Uint64("targetCheckpointTs", bounds.targetCheckpointTs))
+		return bounds, false, nil
+	}
+	return bounds, true, nil
 }
 
 func (loader *loader) readMetadata(ctx context.Context) (uint64, bool, error) {
@@ -270,10 +284,10 @@ func (loader *loader) readMetadata(ctx context.Context) (uint64, bool, error) {
 
 func (loader *loader) processTable(
 	ctx context.Context,
-	bounds scanBounds,
+	checkpointTs uint64,
 	table *tableState,
 ) (scanSummary, error) {
-	scan, err := loader.getNewFiles(ctx, bounds, table)
+	scan, err := loader.getNewFiles(ctx, checkpointTs, table)
 	if err != nil {
 		metrics.AddCounter(metrics.ErrorCounter, 1, table.tableFQN)
 		log.Error("incremental scan failed", zap.String("table", table.tableFQN), zap.Error(err))
@@ -288,7 +302,7 @@ func (loader *loader) processTable(
 		return scanSummary{}, errors.Trace(err)
 	}
 
-	summary, err := loader.handleNewFiles(ctx, bounds, table, scan)
+	summary, err := loader.handleNewFiles(ctx, checkpointTs, table, scan)
 	if err != nil {
 		metrics.AddCounter(metrics.ErrorCounter, 1, table.tableFQN)
 		log.Error("incremental load failed", zap.String("table", table.tableFQN), zap.Error(err))
@@ -303,13 +317,13 @@ func (loader *loader) processTable(
 	return summary, nil
 }
 
-func (loader *loader) processTables(ctx context.Context, bounds scanBounds, pool *workerpool.Pool) (scanSummary, error) {
+func (loader *loader) processTables(ctx context.Context, checkpointTs uint64, pool *workerpool.Pool) (scanSummary, error) {
 	summaries := make([]scanSummary, len(loader.tables))
 	group := pool.NewGroup(ctx, 0)
 	var first error
 	for i, table := range loader.tables {
 		task := workerpool.TaskFunc(func(ctx context.Context) error {
-			summary, err := loader.processTable(ctx, bounds, table)
+			summary, err := loader.processTable(ctx, checkpointTs, table)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -337,8 +351,6 @@ func (loader *loader) processTables(ctx context.Context, bounds scanBounds, pool
 }
 
 func (loader *loader) parseSchemaFilePath(
-	bounds scanBounds,
-	table *tableState,
 	objectPath string,
 	schemaFilePaths map[uint64]string,
 	seenDMLIdxMap map[cloudstorage.DMLPathKey]uint64,
@@ -347,31 +359,33 @@ func (loader *loader) parseSchemaFilePath(
 
 	var schemaKey cloudstorage.SchemaPathKey
 	schemaKey.Parse(filePath)
-	// TiCDC metadata checkpoint is a confirmed flush lower bound. Use it only
-	// to avoid applying schema versions that TiCDC has not confirmed visible.
-	if schemaKey.TableVersion > bounds.targetCheckpointTs {
-		return
-	}
 	schemaFilePaths[schemaKey.TableVersion] = objectPath
-	// Schema versions at or below the durable checkpoint are already reflected
-	// in the loaded snapshot/incremental state. Keep them only as baseline meta.
-	if schemaKey.TableVersion <= bounds.checkpointTs {
-		return
-	}
-	// ddlTableVersionWatermark tracks schema versions already handled; keep the
-	// path for baseline recovery, but do not schedule this schema as new work.
-	if schemaKey.TableVersion <= table.ddlTableVersionWatermark {
-		return
-	}
 
 	dmlkey := cloudstorage.NewSchemaFileDMLPathKey(schemaKey)
 	seenDMLIdxMap[dmlkey] = 0
 }
 
+func parseSchemaFileVersion(objectPath string) (uint64, error) {
+	name := path.Base(objectPath)
+	if !strings.HasPrefix(name, "schema_") || !strings.HasSuffix(name, ".json") {
+		return 0, errors.Errorf("invalid schema file path %s", objectPath)
+	}
+	versionPart := strings.TrimSuffix(strings.TrimPrefix(name, "schema_"), ".json")
+	versionText, _, ok := strings.Cut(versionPart, "_")
+	if !ok {
+		return 0, errors.Errorf("invalid schema file path %s", objectPath)
+	}
+	version, err := strconv.ParseUint(versionText, 10, 64)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	return version, nil
+}
+
 // getNewFiles returns newly created dml files in specific ranges.
 func (loader *loader) getNewFiles(
 	ctx context.Context,
-	bounds scanBounds,
+	checkpointTs uint64,
 	table *tableState,
 ) (*tableScan, error) {
 	scan := &tableScan{
@@ -379,39 +393,97 @@ func (loader *loader) getNewFiles(
 		schemaFilePaths: make(map[uint64]string),
 		schemaFiles:     make(map[uint64]cloudstorage.SchemaFile),
 	}
-	seenDMLIdxMap := make(map[cloudstorage.DMLPathKey]uint64)
+	newDMLIdxMap := make(map[cloudstorage.DMLPathKey]uint64)
 	stats := incrementalScanStats{}
+
+	var (
+		// Before a table-level watermark exists, the latest schema at or below
+		// the global checkpoint is only a baseline used to rebuild currentMeta
+		// before applying the first incremental DDL.
+		baselineSchemaVersion uint64
+		baselineSchemaPath    string
+		currentSchemaFound    bool
+	)
 	schemaMetaDir := path.Join(loader.storageDir, table.sourceDatabase, table.sourceTable, "meta")
 	err := loader.storage.WalkDir(ctx, &storeapi.WalkOption{
 		SubDir:    schemaMetaDir,
 		ObjPrefix: "schema_",
 	}, func(objectPath string, _ int64) error {
-		stats.objectFiles++
-		stats.schemaFiles++
-		loader.parseSchemaFilePath(bounds, table, objectPath, scan.schemaFilePaths, seenDMLIdxMap)
+		schemaVersion, err := parseSchemaFileVersion(objectPath)
+		if err != nil {
+			return errors.Trace(err)
+		}
+
+		if table.ddlTableVersionWatermark > 0 {
+			// Once the table watermark exists, it is the per-table sync lower
+			// bound. Older schema epochs are already crossed and must not be
+			// scanned again, even if the global checkpoint is lower.
+			if schemaVersion < table.ddlTableVersionWatermark {
+				return nil
+			}
+			// The schema at the watermark is the current applied schema. Keep
+			// its path so DML under this epoch can be decoded, but do not add a
+			// synthetic DDL key because the DDL has already been applied.
+			if schemaVersion == table.ddlTableVersionWatermark {
+				scan.schemaFilePaths[schemaVersion] = objectPath
+				currentSchemaFound = true
+				return nil
+			}
+			// Newer schema files represent pending DDLs. parseSchemaFilePath
+			// records the schema path and adds a synthetic DML key so replay
+			// orders the DDL before DML in that schema epoch.
+			loader.parseSchemaFilePath(objectPath, scan.schemaFilePaths, newDMLIdxMap)
+			return nil
+		}
+
+		if schemaVersion <= checkpointTs {
+			// No table watermark means the table has not crossed any incremental
+			// schema epoch yet. Keep only the latest checkpoint-covered schema
+			// as the snapshot baseline; older schema files are not needed.
+			if schemaVersion > baselineSchemaVersion {
+				baselineSchemaVersion = schemaVersion
+				baselineSchemaPath = objectPath
+			}
+			return nil
+		}
+
+		loader.parseSchemaFilePath(objectPath, scan.schemaFilePaths, newDMLIdxMap)
 		return nil
 	})
 	if err != nil {
 		return scan, err
 	}
+	if table.ddlTableVersionWatermark > 0 && !currentSchemaFound {
+		// The persisted watermark says this schema epoch is current. Falling
+		// back to an older schema would violate the table-level lower bound.
+		return scan, errors.Errorf("current schema file for table %s watermark %d not found",
+			table.tableFQN, table.ddlTableVersionWatermark)
+	}
+	if baselineSchemaPath != "" {
+		scan.schemaFilePaths[baselineSchemaVersion] = baselineSchemaPath
+	}
 
-	var activeVersion uint64
+	// schemaFilePaths already contains exactly the schema epochs this scan may
+	// need:
+	//   - without a table watermark: the snapshot baseline plus pending DDLs
+	//   - with a table watermark: the current schema epoch plus pending DDLs
+	//
+	// Therefore every key in schemaFilePaths should be scanned. Older schema
+	// epochs were filtered out while walking schema files, so do not re-derive
+	// an active version from the global checkpoint here.
 	schemaVersions := make([]uint64, 0, len(scan.schemaFilePaths))
 	for version := range scan.schemaFilePaths {
-		if version <= bounds.checkpointTs {
-			if version > activeVersion {
-				activeVersion = version
-			}
-			continue
-		}
 		schemaVersions = append(schemaVersions, version)
 	}
-	if activeVersion != 0 {
-		schemaVersions = append(schemaVersions, activeVersion)
-	}
 	slices.Sort(schemaVersions)
-	schemaVersions = slices.Compact(schemaVersions)
 
+	// For each selected schema epoch, discover the latest CDC.index under every
+	// active output stream. Non-partitioned tables write:
+	//   <schema>/<table>/<tableVersion>/<date>/meta/CDC.index
+	// Partitioned tables write:
+	//   <schema>/<table>/<tableVersion>/<partition>/<date>/meta/CDC.index
+	// The index file gives the highest data-file sequence visible for that
+	// stream; later we compare it with the persisted DML cursor to build ranges.
 	for _, tableVersion := range schemaVersions {
 		versionDir := path.Join(
 			loader.storageDir,
@@ -425,6 +497,9 @@ func (loader *loader) getNewFiles(
 		}
 		for _, dir := range firstLevelDirs {
 			if isDateDir(dir) {
+				// Non-partitioned layout: the first level below tableVersion is
+				// already a date directory. Skip dates older than the active
+				// cursor date for this schema epoch.
 				scope := dmlScope{tableVersion: tableVersion}
 				if activeDate := table.activeDateByDMLScope[scope]; activeDate != "" && dir < activeDate {
 					stats.skippedDateDirs++
@@ -432,10 +507,10 @@ func (loader *loader) getNewFiles(
 				}
 				pending, err := loader.parseDMLIndexFileIfExists(
 					ctx,
-					bounds,
+					checkpointTs,
 					table,
-					path.Join(versionDir, dir, "meta", dmlIndexFileName),
-					seenDMLIdxMap,
+					path.Join(versionDir, dir),
+					newDMLIdxMap,
 					&stats,
 				)
 				if err != nil {
@@ -445,6 +520,8 @@ func (loader *loader) getNewFiles(
 				continue
 			}
 
+			// Partitioned layout: the first level is a physical partition id,
+			// and each partition has its own date directories and DML cursor.
 			partitionNum, err := strconv.ParseInt(dir, 10, 64)
 			if err != nil {
 				return scan, errors.Trace(err)
@@ -461,12 +538,13 @@ func (loader *loader) getNewFiles(
 					stats.skippedDateDirs++
 					continue
 				}
+				streamDir := path.Join(partitionDir, dateDir)
 				pending, err := loader.parseDMLIndexFileIfExists(
 					ctx,
-					bounds,
+					checkpointTs,
 					table,
-					path.Join(partitionDir, dateDir, "meta", dmlIndexFileName),
-					seenDMLIdxMap,
+					streamDir,
+					newDMLIdxMap,
 					&stats,
 				)
 				if err != nil {
@@ -477,7 +555,7 @@ func (loader *loader) getNewFiles(
 		}
 	}
 
-	for key, fileIdx := range seenDMLIdxMap {
+	for key, fileIdx := range newDMLIdxMap {
 		if key.IsSchemaFileDMLPathKey() {
 			scan.dmlFileMap[key] = indexRange{}
 			continue
@@ -489,11 +567,8 @@ func (loader *loader) getNewFiles(
 	}
 	log.Info("increment storage scan completed",
 		zap.String("table", table.tableFQN),
-		zap.Uint64("checkpointTs", bounds.checkpointTs),
-		zap.Uint64("targetCheckpointTs", bounds.targetCheckpointTs),
+		zap.Uint64("checkpointTs", checkpointTs),
 		zap.Int("newRanges", len(scan.dmlFileMap)),
-		zap.Int("objectFiles", stats.objectFiles),
-		zap.Int("schemaFiles", stats.schemaFiles),
 		zap.Int("indexFiles", stats.indexFiles),
 		zap.Int("skippedDateDirs", stats.skippedDateDirs),
 		zap.Int("pendingFiles", stats.pendingFiles))
@@ -520,48 +595,45 @@ func isDateDir(dir string) bool {
 	return err == nil
 }
 
+// parseDMLIndexFileIfExists checks the CDC.index file under one TiCDC DML
+// stream directory. Missing index files are normal: a schema/date/partition
+// stream may not have produced data yet, so absence means there is no new range.
+// CDC.index contains the latest data file name, for example CDC000010.csv; the
+// consumer expands that into the contiguous pending range after comparing with
+// the persisted DML cursor.
 func (loader *loader) parseDMLIndexFileIfExists(
 	ctx context.Context,
-	bounds scanBounds,
+	checkpointTs uint64,
 	table *tableState,
-	objectPath string,
+	streamDir string,
 	seenDMLIdxMap map[cloudstorage.DMLPathKey]uint64,
 	stats *incrementalScanStats,
 ) (int, error) {
-	exists, err := loader.storage.FileExists(ctx, objectPath)
+	indexPath := path.Join(streamDir, "meta", dmlIndexFileName)
+	exists, err := loader.storage.FileExists(ctx, indexPath)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
 	if !exists {
 		return 0, nil
 	}
-	stats.objectFiles++
 	stats.indexFiles++
-	return loader.parseDMLIndexFile(ctx, bounds, table, objectPath, seenDMLIdxMap)
-}
-
-func (loader *loader) parseDMLIndexFile(
-	ctx context.Context,
-	bounds scanBounds,
-	table *tableState,
-	objectPath string,
-	seenDMLIdxMap map[cloudstorage.DMLPathKey]uint64,
-) (int, error) {
-	filePath := strings.TrimPrefix(objectPath, loader.storageDir+"/")
+	// TiCDC's path parser expects a path relative to the incremental storage root,
+	// <schema>/<table>/<tableVersion>/<date>/meta/CDC.index
+	// <schema>/<table>/<tableVersion>/<partition>/<date>/meta/CDC.index
+	// for example source/t/150/2026-07-01/meta/CDC.index.
+	filePath := strings.TrimPrefix(indexPath, loader.storageDir+"/")
 	var dmlKey cloudstorage.DMLPathKey
 	if err := dmlKey.ParseIndexFilePath(config.DateSeparatorDay.String(), filePath); err != nil {
 		return 0, errors.Trace(err)
 	}
 
-	// Ignore index files for table versions newer than TiCDC's confirmed flush bound.
-	if dmlKey.TableVersion > bounds.targetCheckpointTs {
-		return 0, nil
-	}
-
-	data, err := loader.storage.ReadFile(ctx, objectPath)
+	data, err := loader.storage.ReadFile(ctx, indexPath)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
+	// TiCDC writes the latest data file name into CDC.index after the data file
+	// is durable. The file index tells us the upper bound of visible files.
 	fileName := strings.TrimSpace(string(data))
 	fileIndex, err := cloudstorage.ParseFileIndexFromFileName(fileName, storage.CSVFileExtension)
 	if err != nil {
@@ -570,30 +642,37 @@ func (loader *loader) parseDMLIndexFile(
 	if fileIndex.EnableTableAcrossNodes {
 		return 0, errors.Errorf("table-across-nodes index files are not supported: %s", filePath)
 	}
+
 	consumedIdx := table.tableDMLIdxMap[dmlKey]
-	pendingStartIdx := uint64(0)
-	pendingEndIdx := uint64(0)
-	pendingFiles := 0
+	var (
+		pendingStartIdx uint64
+		pendingEndIdx   uint64
+
+		pendingFilesCount int
+	)
 	if fileIndex.Idx > consumedIdx {
 		pendingStartIdx = consumedIdx + 1
 		pendingEndIdx = fileIndex.Idx
-		pendingFiles = int(fileIndex.Idx - consumedIdx)
+		pendingFilesCount = int(fileIndex.Idx - consumedIdx)
 	}
 	log.Info("increment index scanned",
 		zap.String("table", table.tableFQN),
-		zap.String("indexPath", objectPath),
+		zap.String("indexPath", indexPath),
 		zap.String("latestFileName", fileName),
 		zap.Uint64("latestFileIndex", fileIndex.Idx),
 		zap.Uint64("consumedFileIndex", consumedIdx),
 		zap.Uint64("pendingStartFileIndex", pendingStartIdx),
 		zap.Uint64("pendingEndFileIndex", pendingEndIdx),
-		zap.Int("pendingFiles", pendingFiles),
-		zap.Uint64("checkpointTs", bounds.checkpointTs),
-		zap.Uint64("targetCheckpointTs", bounds.targetCheckpointTs))
+		zap.Int("pendingFilesCount", pendingFilesCount),
+		zap.Uint64("checkpointTs", checkpointTs))
 	if fileIndex.Idx > seenDMLIdxMap[dmlKey] {
+		// A normal TiCDC layout has only one CDC.index for a DML key in a scan.
+		// Keep this as a max update so duplicate discovery or future index
+		// sources cannot move the visible upper bound backward before
+		// getNewFiles compares it with the persisted cursor.
 		seenDMLIdxMap[dmlKey] = fileIndex.Idx
 	}
-	return pendingFiles, nil
+	return pendingFilesCount, nil
 }
 
 func (loader *loader) loadSchemaFiles(ctx context.Context, tbl *tableState, scan *tableScan) error {
@@ -671,7 +750,7 @@ func (scan *tableScan) schemaFile(table *tableState, tableVersion uint64) clouds
 
 func (loader *loader) syncExecDMLEvents(
 	ctx context.Context,
-	bounds scanBounds,
+	checkpointTs uint64,
 	tbl *tableState,
 	schemaFile cloudstorage.SchemaFile,
 	key cloudstorage.DMLPathKey,
@@ -682,15 +761,15 @@ func (loader *loader) syncExecDMLEvents(
 	}, storage.CSVFileExtension, config.DefaultFileIndexWidth)
 	objectPath := path.Join(loader.storageDir, filePath)
 
-	if stats, err := loader.inspectDMLFile(ctx, objectPath, bounds.checkpointTs); err != nil {
+	if stats, err := loader.inspectDMLFile(ctx, objectPath, checkpointTs); err != nil {
 		log.Warn("failed to inspect DML file before load",
 			zap.String("filePath", objectPath),
-			zap.Uint64("checkpointTsUsedByMerge", bounds.checkpointTs),
+			zap.Uint64("checkpointTsUsedByMerge", checkpointTs),
 			zap.Error(err))
 	} else {
 		log.Info("DML file inspected before load",
 			zap.String("filePath", objectPath),
-			zap.Uint64("checkpointTsUsedByMerge", bounds.checkpointTs),
+			zap.Uint64("checkpointTsUsedByMerge", checkpointTs),
 			zap.Uint64("rowCount", stats.rowCount),
 			zap.Uint64("minCommitTs", stats.minCommitTs),
 			zap.Uint64("maxCommitTs", stats.maxCommitTs),
@@ -702,7 +781,7 @@ func (loader *loader) syncExecDMLEvents(
 			zap.Uint64("unknownOperationTypeRows", stats.unknownOperationTypeRows))
 	}
 
-	err := loader.conn.LoadIncrement(ctx, table.FromSchemaFile(schemaFile), objectPath, bounds.checkpointTs)
+	err := loader.conn.LoadIncrement(ctx, table.FromSchemaFile(schemaFile), objectPath, checkpointTs)
 	if err != nil {
 		log.Error("failed to load DML file into data warehouse",
 			zap.Error(err),
@@ -848,7 +927,12 @@ func ddlExecutionErrorMessage(table string, failedIndex int, ddls []string) stri
 		table)
 }
 
-func (loader *loader) handleNewFiles(ctx context.Context, bounds scanBounds, table *tableState, scan *tableScan) (scanSummary, error) {
+func (loader *loader) handleNewFiles(
+	ctx context.Context,
+	checkpointTs uint64,
+	table *tableState,
+	scan *tableScan,
+) (scanSummary, error) {
 	if len(scan.dmlFileMap) == 0 {
 		return scanSummary{}, nil
 	}
@@ -884,7 +968,7 @@ func (loader *loader) handleNewFiles(ctx context.Context, bounds scanBounds, tab
 			zap.Uint64("startFileIndex", fileRange.start),
 			zap.Uint64("endFileIndex", fileRange.end))
 		for i := fileRange.start; i <= fileRange.end; i++ {
-			if err := loader.syncExecDMLEvents(ctx, bounds, table, schemaFile, key, i); err != nil {
+			if err := loader.syncExecDMLEvents(ctx, checkpointTs, table, schemaFile, key, i); err != nil {
 				return summary, errors.Trace(err)
 			}
 			summary.loadedFiles++
