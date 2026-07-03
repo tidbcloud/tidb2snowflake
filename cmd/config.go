@@ -26,18 +26,18 @@ type configFile struct {
 }
 
 type storageConfig struct {
-	URI       string `toml:"uri"`
-	AccessKey string `toml:"access-key"`
-	SecretKey string `toml:"secret-key"`
+	URI             string `toml:"uri"`
+	AccessKey       string `toml:"access-key"`
+	SecretAccessKey string `toml:"secret-access-key"`
 }
 
 type tidbConfig struct {
-	Host  string `toml:"host"`
-	Port  int    `toml:"port"`
-	User  string `toml:"user"`
-	Pass  string `toml:"pass"`
-	TLS   bool   `toml:"tls"`
-	SSLCA string `toml:"ssl-ca"`
+	Host     string `toml:"host"`
+	Port     int    `toml:"port"`
+	User     string `toml:"user"`
+	Password string `toml:"password"`
+	TLS      bool   `toml:"tls"`
+	SSLCA    string `toml:"ssl-ca"`
 }
 
 type tidbCloudConfig struct {
@@ -54,7 +54,7 @@ type ticdcConfig struct {
 type snowflakeConfig struct {
 	AccountID string `toml:"account-id"`
 	User      string `toml:"user"`
-	Pass      string `toml:"pass"`
+	Password  string `toml:"password"`
 	Warehouse string `toml:"warehouse"`
 	Database  string `toml:"database"`
 }
@@ -68,6 +68,7 @@ type snapshotConfig struct {
 type changefeedConfig struct {
 	FlushInterval string `toml:"flush-interval"`
 	FileSizeMiB   int    `toml:"file-size"`
+	RCU           int    `toml:"rcu"`
 }
 
 type incrementConfig struct {
@@ -103,12 +104,12 @@ func loadConfig(path string) (*Option, *logger.Config, error) {
 
 	opt.StoragePath = cfg.Storage.URI
 	opt.AWSAccessKey = cfg.Storage.AccessKey
-	opt.AWSSecretKey = cfg.Storage.SecretKey
+	opt.AWSSecretKey = cfg.Storage.SecretAccessKey
 
 	opt.TiDBHost = cfg.TiDB.Host
 	opt.TiDBPort = cfg.TiDB.Port
 	opt.TiDBUser = cfg.TiDB.User
-	opt.TiDBPass = cfg.TiDB.Pass
+	opt.TiDBPass = cfg.TiDB.Password
 	opt.TiDBTLS = cfg.TiDB.TLS
 	opt.TiDBSSLCA = cfg.TiDB.SSLCA
 
@@ -121,7 +122,7 @@ func loadConfig(path string) (*Option, *logger.Config, error) {
 
 	opt.SnowflakeAccountID = cfg.Snowflake.AccountID
 	opt.SnowflakeUser = cfg.Snowflake.User
-	opt.SnowflakePass = cfg.Snowflake.Pass
+	opt.SnowflakePass = cfg.Snowflake.Password
 	opt.SnowflakeWarehouse = cfg.Snowflake.Warehouse
 	opt.SnowflakeDatabase = cfg.Snowflake.Database
 
@@ -135,6 +136,7 @@ func loadConfig(path string) (*Option, *logger.Config, error) {
 	}
 	opt.ChangefeedFlushInterval = flushInterval
 	opt.ChangefeedFileSizeMiB = cfg.Changefeed.FileSizeMiB
+	opt.ChangefeedRCU = cfg.Changefeed.RCU
 
 	scanInterval, err := parseConfigDuration(cfg.Increment.ScanInterval, "increment.scan-interval")
 	if err != nil {

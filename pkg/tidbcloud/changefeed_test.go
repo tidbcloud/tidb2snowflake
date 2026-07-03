@@ -52,6 +52,7 @@ func TestCreateChangefeedCloudStorageBody(t *testing.T) {
 			Mode: StartModeFromTSO,
 			TSO:  "449023000000000000",
 		},
+		RCU: 8,
 	}
 	cf, err := c.CreateChangefeed(context.Background(), "10", req)
 	require.NoError(t, err)
@@ -76,8 +77,37 @@ func TestCreateChangefeedCloudStorageBody(t *testing.T) {
 	startPosition := gotBody["startPosition"].(map[string]any)
 	require.Equal(t, string(StartModeFromTSO), startPosition["mode"])
 	require.Equal(t, "449023000000000000", startPosition["tso"])
+	require.Equal(t, float64(8), gotBody["rcu"])
 
 	require.Equal(t, "cf-1", cf.ChangefeedID)
+}
+
+func TestListChangefeedSpecifications(t *testing.T) {
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "items": [
+    {"name": "3rcu", "rcu": 3, "rpsLimit": 5000},
+    {"name": "8rcu", "rcu": 8, "rpsLimit": 20000}
+  ],
+  "total": 2
+}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	specs, err := c.ListChangefeedSpecifications(context.Background(), "10")
+	require.NoError(t, err)
+
+	require.Equal(t, http.MethodGet, gotMethod)
+	require.Equal(t, "/v1beta1/clusters/10/changefeeds:listSpecifications", gotPath)
+	require.Equal(t, []ChangefeedSpecification{
+		{Name: "3rcu", RCU: 3, RPSLimit: 5000},
+		{Name: "8rcu", RCU: 8, RPSLimit: 20000},
+	}, specs.Items)
+	require.Equal(t, 2, specs.Total)
 }
 
 func TestWaitChangefeedReturnsRunningChangefeed(t *testing.T) {

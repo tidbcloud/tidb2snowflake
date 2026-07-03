@@ -87,28 +87,30 @@ loader also creates one internal external stage at
 
 ## Configuration
 
-The `snowflake` command reads runtime settings from a TOML file:
+The `create` command reads runtime settings from a TOML file:
 
 ```bash
-./bin/tidb2snowflake snowflake --config config.toml
+./bin/tidb2snowflake create --config config.toml
+# or
+./bin/tidb2snowflake create -c config.toml
 ```
 
 Minimal TiDB Cloud config:
 
 ```toml
-mode = "full"
+mode = "all"
 source = "tidbcloud"
 tables = ["db1.t1"]
 
 [storage]
 uri = "s3://bucket/path?region=us-west-2"
 access-key = "..."
-secret-key = "..."
+secret-access-key = "..."
 
 [snowflake]
 account-id = "org-account"
 user = "..."
-pass = "..."
+password = "..."
 database = "ODS_DB"
 warehouse = "COMPUTE_WH"
 
@@ -137,20 +139,20 @@ host = ""
 OpenAPI. Add TiDB and TiCDC sections to the config file:
 
 ```toml
-mode = "full"
+mode = "all"
 source = "op"
 tables = ["db1.t1"]
 
 [storage]
 uri = "s3://bucket/path?region=us-west-2"
 access-key = "..."
-secret-key = "..."
+secret-access-key = "..."
 
 [tidb]
 host = "tidb.example.com"
 port = 4000
 user = "root"
-pass = ""
+password = ""
 tls = false
 ssl-ca = ""
 
@@ -160,16 +162,31 @@ address = "http://ticdc.example.com:8300"
 [snowflake]
 account-id = "org-account"
 user = "..."
-pass = "..."
+password = "..."
 database = "ODS_DB"
 warehouse = "COMPUTE_WH"
 ```
 
-In full OP mode, the tool records a TiDB TSO, creates a TiCDC cloud-storage
+In OP mode with `mode = "all"`, the tool records a TiDB TSO, creates a TiCDC cloud-storage
 changefeed from that TSO, waits for the changefeed to become running, then dumps
 the snapshot with Dumpling. After Dumpling finishes, `snapshot/metadata` `Pos`
 is read back as the final snapshot TSO. `snapshot.concurrency` controls Dumpling
 snapshot dump concurrency in OP mode.
+
+Set `changefeed.rcu` to request a TiDB Cloud changefeed RCU tier. When it is
+non-zero, the tool fetches the cluster's available changefeed specifications
+before creating the changefeed and fails fast if the requested value is not
+available.
+
+To delete the changefeed associated with the task recorded in
+`replication-state.json`, use the same config file. The command asks for `y/N`
+confirmation before it deletes anything:
+
+```bash
+./bin/tidb2snowflake delete --config config.toml
+# or
+./bin/tidb2snowflake delete -c config.toml
+```
 
 ## Reusing an existing export / changefeed
 

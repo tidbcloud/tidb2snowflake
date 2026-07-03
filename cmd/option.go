@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	runModeFull            = "full"
+	runModeAll             = "all"
 	runModeSnapshotOnly    = "snapshot-only"
 	runModeIncrementalOnly = "incremental-only"
 )
@@ -70,6 +70,7 @@ type Option struct {
 
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int
+	ChangefeedRCU           int
 	IncrementScanInterval   time.Duration
 	SnapshotCompression     string
 	SnapshotCSVNullValue    string
@@ -93,7 +94,7 @@ func NewOption() *Option {
 		SnapshotCompression:     snapshotCompressionNone,
 		SnapshotCSVNullValue:    snapshotCSVNullValue,
 		SourceMode:              sourceModeTiDBCloud,
-		Mode:                    runModeFull,
+		Mode:                    runModeAll,
 	}
 }
 
@@ -143,6 +144,7 @@ func (opt *Option) prepareRequest(
 
 		ChangefeedFlushInterval: opt.ChangefeedFlushInterval,
 		ChangefeedFileSizeMiB:   opt.ChangefeedFileSizeMiB,
+		ChangefeedRCU:           opt.ChangefeedRCU,
 
 		SnapshotCompression: opt.SnapshotCompression,
 
@@ -232,7 +234,7 @@ func (opt *Option) adjust() {
 
 	opt.Mode = strings.ToLower(strings.TrimSpace(opt.Mode))
 	switch opt.Mode {
-	case runModeFull, runModeSnapshotOnly, runModeIncrementalOnly:
+	case runModeAll, runModeSnapshotOnly, runModeIncrementalOnly:
 	default:
 		opt.Mode = defaults.Mode
 	}
@@ -268,7 +270,7 @@ func (opt *Option) validate() error {
 		return errors.New("storage.uri is required")
 	}
 	if opt.AWSAccessKey == "" || opt.AWSSecretKey == "" {
-		return errors.New("storage.access-key and storage.secret-key are required")
+		return errors.New("storage.access-key and storage.secret-access-key are required")
 	}
 
 	if opt.SnowflakeAccountID == "" {
@@ -278,7 +280,7 @@ func (opt *Option) validate() error {
 		return errors.New("snowflake.user is required")
 	}
 	if opt.SnowflakePass == "" {
-		return errors.New("snowflake.pass is required")
+		return errors.New("snowflake.password is required")
 	}
 
 	if opt.SnowflakeDatabase == "" {
@@ -287,6 +289,9 @@ func (opt *Option) validate() error {
 
 	if len(opt.Tables) == 0 {
 		return errors.New("tables is required")
+	}
+	if opt.ChangefeedRCU < 0 {
+		return errors.New("changefeed.rcu must be greater than 0")
 	}
 	if opt.SnapshotTSO != "" {
 		tso, err := strconv.ParseUint(opt.SnapshotTSO, 10, 64)
@@ -320,6 +325,7 @@ func (opt *Option) logSummary() {
 		zap.String("snapshotCompression", opt.SnapshotCompression),
 		zap.Duration("changefeedFlushInterval", opt.ChangefeedFlushInterval),
 		zap.Int("changefeedFileSizeMiB", opt.ChangefeedFileSizeMiB),
+		zap.Int("changefeedRCU", opt.ChangefeedRCU),
 		zap.Duration("incrementScanInterval", opt.IncrementScanInterval),
 		zap.Bool("tidbCloudConfigured", opt.TiDBCloudClusterID != ""),
 		zap.String("ticdcAddress", opt.TiCDCAddress),

@@ -19,7 +19,7 @@ source tables are cleaned up afterwards.
 | Test | Mode | Flow |
 |------|------|------|
 | `TestSnapshotOnly` | `snapshot-only` | seed 3 rows → export + load → assert 3 rows in Snowflake |
-| `TestFullReplication` | `full` | snapshot loads, then INSERT/UPDATE/DELETE replicate via the changefeed → assert final state |
+| `TestFullReplication` | `all` | snapshot loads, then INSERT/UPDATE/DELETE replicate via the changefeed → assert final state |
 | `TestIncrementalOnly` | `snapshot-only` then `incremental-only` | establish snapshot, then stream increments → assert |
 
 Baseline rows have ids `1,2,3`. The incremental step inserts `4,5`, updates

@@ -104,6 +104,20 @@ type Changefeed struct {
 	Sink          *Sink             `json:"sink,omitempty"`
 	Filter        *ChangefeedFilter `json:"filter,omitempty"`
 	StartPosition *StartPosition    `json:"startPosition,omitempty"`
+	RCU           int               `json:"rcu,omitempty"`
+}
+
+// ChangefeedSpecification is one RCU tier available to a cluster.
+type ChangefeedSpecification struct {
+	Name     string `json:"name,omitempty"`
+	RCU      int    `json:"rcu,omitempty"`
+	RPSLimit int    `json:"rpsLimit,omitempty"`
+}
+
+// ListChangefeedSpecificationsResponse contains the available RCU tiers.
+type ListChangefeedSpecificationsResponse struct {
+	Items []ChangefeedSpecification `json:"items,omitempty"`
+	Total int                       `json:"total,omitempty"`
 }
 
 // Sink is the changefeed sink configuration.
@@ -186,6 +200,10 @@ func changefeedPath(clusterID, changefeedID string) string {
 	return changefeedsPath(clusterID) + "/" + url.PathEscape(changefeedID)
 }
 
+func changefeedSpecificationsPath(clusterID string) string {
+	return changefeedsPath(clusterID) + ":listSpecifications"
+}
+
 // CreateChangefeed creates a new changefeed.
 func (c *Client) CreateChangefeed(ctx context.Context, clusterID string, req *CreateChangefeedRequest) (*Changefeed, error) {
 	var out Changefeed
@@ -193,6 +211,15 @@ func (c *Client) CreateChangefeed(ctx context.Context, clusterID string, req *Cr
 		return nil, err
 	}
 	normalizeChangefeedID(&out)
+	return &out, nil
+}
+
+// ListChangefeedSpecifications lists the RCU tiers available for a cluster.
+func (c *Client) ListChangefeedSpecifications(ctx context.Context, clusterID string) (*ListChangefeedSpecificationsResponse, error) {
+	var out ListChangefeedSpecificationsResponse
+	if err := c.do(ctx, http.MethodGet, changefeedSpecificationsPath(clusterID), nil, &out); err != nil {
+		return nil, err
+	}
 	return &out, nil
 }
 

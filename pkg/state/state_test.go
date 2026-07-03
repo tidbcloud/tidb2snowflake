@@ -123,6 +123,33 @@ func TestStateMutationsPersist(t *testing.T) {
 	require.Equal(t, DMLCursor{Date: "2026-06-30", FileIndex: 12}, st.Tables["db.t"].DMLCursors["449/0/CDC"])
 }
 
+func TestOpenExistingRequiresStateFile(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	_, err := OpenExisting(ctx, store)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "state file replication-state.json does not exist")
+}
+
+func TestClearChangefeedIDPersists(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	manager, err := Open(ctx, store, []string{"db.t"}, false)
+	require.NoError(t, err)
+	require.NoError(t, manager.SetChangefeedID(ctx, "cf-1"))
+
+	existing, err := OpenExisting(ctx, store)
+	require.NoError(t, err)
+	require.Equal(t, "cf-1", existing.Snapshot().TaskInfo.ChangefeedID)
+
+	require.NoError(t, existing.ClearChangefeedID(ctx))
+
+	reopened, err := OpenExisting(ctx, store)
+	require.NoError(t, err)
+	require.Empty(t, reopened.Snapshot().TaskInfo.ChangefeedID)
+}
+
 func TestSnapshotReturnsDeepCopy(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
