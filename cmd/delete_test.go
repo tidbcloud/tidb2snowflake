@@ -8,22 +8,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestConfirmChangefeedDeletionAcceptsExactID(t *testing.T) {
+func TestConfirmChangefeedDeletionAcceptsYes(t *testing.T) {
 	var out bytes.Buffer
 
-	err := confirmChangefeedDeletion(strings.NewReader("cf-1\n"), &out, "cf-1")
+	err := confirmChangefeedDeletion(strings.NewReader("y\n"), &out)
 
 	require.NoError(t, err)
-	require.Contains(t, out.String(), "Type the changefeed id to confirm")
-	require.Contains(t, out.String(), "cf-1")
+	require.Contains(t, out.String(), "Delete the changefeed recorded in state?")
+	require.Contains(t, out.String(), "[y/N]")
+	require.NotContains(t, out.String(), "cf-1")
 }
 
-func TestConfirmChangefeedDeletionRejectsMismatch(t *testing.T) {
+func TestConfirmChangefeedDeletionRejectsNo(t *testing.T) {
 	var out bytes.Buffer
 
-	err := confirmChangefeedDeletion(strings.NewReader("yes\n"), &out, "cf-1")
+	err := confirmChangefeedDeletion(strings.NewReader("n\n"), &out)
 
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "delete confirmation failed")
-	require.Contains(t, out.String(), "Type the changefeed id to confirm")
+	require.Contains(t, err.Error(), "delete canceled")
+	require.Contains(t, out.String(), "Delete the changefeed recorded in state?")
+}
+
+func TestConfirmChangefeedDeletionRejectsEmptyInput(t *testing.T) {
+	var out bytes.Buffer
+
+	err := confirmChangefeedDeletion(strings.NewReader("\n"), &out)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "delete canceled")
+	require.Contains(t, out.String(), "Delete the changefeed recorded in state?")
 }
