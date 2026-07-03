@@ -178,8 +178,9 @@ non-zero, the tool fetches the cluster's available changefeed specifications
 before creating the changefeed and fails fast if the requested value is not
 available.
 
-To delete the changefeed recorded in `replication-state.json`, use the same
-config file. The command asks for `y/N` confirmation before it deletes anything:
+To delete the changefeed associated with the task recorded in
+`replication-state.json`, use the same config file. The command asks for `y/N`
+confirmation before it deletes anything:
 
 ```bash
 ./bin/tidb2snowflake delete --config config.toml
