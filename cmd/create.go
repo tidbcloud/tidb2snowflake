@@ -47,7 +47,7 @@ func newCreateCmdWithRun(run func(context.Context, *Option) error) *cobra.Comman
 	}
 
 	f := cmd.Flags()
-	f.StringVar(&configPath, "config", "", "TOML config file path")
+	f.StringVarP(&configPath, "config", "c", "", "TOML config file path")
 
 	return cmd
 }
