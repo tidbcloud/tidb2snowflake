@@ -68,7 +68,7 @@ func loadIntoSnowflake(
 	stateSnapshot := stateManager.Snapshot()
 	loadSnapshot := req.LoadSnapshot && !stateSnapshot.SnapshotFinished
 	if req.LoadIncremental && !loadSnapshot && !stateSnapshot.SnapshotFinished {
-		return errors.New("snapshot is not finished; run full mode before incremental")
+		return errors.New("snapshot is not finished; run all mode before incremental")
 	}
 	if !loadSnapshot && !req.LoadIncremental {
 		return nil

@@ -3,6 +3,7 @@ package tidbcloud
 import (
 	"context"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ type Config struct {
 	Tables                  []string
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int
+	ChangefeedRCU           int
 	SnapshotCompression     tidbcloud.ExportCompression
 	SnapshotTSO             string
 
@@ -160,6 +162,9 @@ func (r *Runner) createChangefeed(ctx context.Context) (string, uint64, error) {
 	if err != nil {
 		return "", 0, err
 	}
+	if err := r.validateChangefeedRCU(ctx, c); err != nil {
+		return "", 0, err
+	}
 	cleanIncrementURI := r.store.CleanSubURI(storage.IncrementDirName)
 	startTSO, err := r.changefeedStartTSO(ctx)
 	if err != nil {
@@ -171,6 +176,34 @@ func (r *Runner) createChangefeed(ctx context.Context) (string, uint64, error) {
 		return "", 0, err
 	}
 	return cf.ChangefeedID, startTSO, nil
+}
+
+func (r *Runner) validateChangefeedRCU(ctx context.Context, c *tidbcloud.Client) error {
+	if r.cfg.ChangefeedRCU == 0 {
+		return nil
+	}
+	specs, err := c.ListChangefeedSpecifications(ctx, r.cfg.ClusterID)
+	if err != nil {
+		return errors.Annotate(err, "list TiDB Cloud changefeed specifications")
+	}
+	available := make([]int, 0, len(specs.Items))
+	for _, spec := range specs.Items {
+		if spec.RCU == r.cfg.ChangefeedRCU {
+			return nil
+		}
+		available = append(available, spec.RCU)
+	}
+	sort.Ints(available)
+	return errors.Errorf("changefeed.rcu %d is not available; available values: %s",
+		r.cfg.ChangefeedRCU, joinInts(available))
+}
+
+func joinInts(values []int) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.Itoa(value))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (r *Runner) changefeedStartTSO(ctx context.Context) (uint64, error) {
@@ -271,6 +304,7 @@ func buildChangefeedRequest(cfg Config, cleanIncrementURI string, cred *aws.Cred
 		},
 		Filter:        &tidbcloud.ChangefeedFilter{FilterRule: cfg.Tables, Mode: tidbcloud.TableModeForceSync},
 		StartPosition: &tidbcloud.StartPosition{Mode: tidbcloud.StartModeFromTSO, TSO: snapshotTSO},
+		RCU:           cfg.ChangefeedRCU,
 	}
 }
 

@@ -107,7 +107,7 @@ func TestSnapshotOnly(t *testing.T) {
 	waitForColValue(t, sf, sfTable, "amount", 2, 200, time.Minute)
 }
 
-// TestFullReplication runs the full pipeline (snapshot + streaming increment),
+// TestFullReplication runs the all-mode pipeline (snapshot + streaming increment),
 // applies DMLs while it streams, and verifies the final Snowflake state.
 func TestFullReplication(t *testing.T) {
 	cfg := loadE2EConfig(t)
@@ -122,7 +122,7 @@ func TestFullReplication(t *testing.T) {
 	seedSource(t, tidb, dbTable)
 	defer cleanup(t, cfg, sfTable, dbTable)
 
-	stop := startTool(t, cfg, "full", storagePath, dbTable)
+	stop := startTool(t, cfg, "all", storagePath, dbTable)
 	defer stop()
 
 	sf := cfg.snowflakeDB(t)

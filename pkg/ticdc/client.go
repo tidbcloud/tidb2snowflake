@@ -124,6 +124,12 @@ func (c *Client) GetChangefeed(ctx context.Context, changefeedID string) (*Chang
 	return &out, nil
 }
 
+func (c *Client) DeleteChangefeed(ctx context.Context, changefeedID string) error {
+	values := url.Values{}
+	values.Set("namespace", common.DefaultKeyspaceName)
+	return c.doJSON(ctx, http.MethodDelete, []string{"changefeeds", changefeedID}, nil, nil, withQuery(values))
+}
+
 func (c *Client) WaitChangefeed(ctx context.Context, changefeedID string) (*Changefeed, error) {
 	if changefeedID == "" {
 		return nil, errors.New("changefeed id is required")

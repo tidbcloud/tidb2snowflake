@@ -188,14 +188,14 @@ toml_escape() {
 
 write_tool_config() {
   cat >"$WORKDIR/tidb2snowflake.toml" <<TOML
-mode = "full"
+mode = "all"
 source = "tidbcloud"
 tables = ["$(toml_escape "$TABLE_FQN")"]
 
 [storage]
 uri = "$(toml_escape "$STORAGE_ROOT")"
 access-key = "$(toml_escape "$AWS_ACCESS_KEY_ID")"
-secret-key = "$(toml_escape "$AWS_SECRET_ACCESS_KEY")"
+secret-access-key = "$(toml_escape "$AWS_SECRET_ACCESS_KEY")"
 
 [tidb]
 host = "$(toml_escape "$TIDB_HOST")"
@@ -205,7 +205,7 @@ user = "root"
 [snowflake]
 account-id = "$(toml_escape "$SNOWFLAKE_ACCOUNT_ID")"
 user = "$(toml_escape "$SNOWFLAKE_USER")"
-pass = "$(toml_escape "$SNOWFLAKE_PASS")"
+password = "$(toml_escape "$SNOWFLAKE_PASS")"
 warehouse = "$(toml_escape "$SNOWFLAKE_WAREHOUSE")"
 database = "$(toml_escape "$SNOWFLAKE_DATABASE")"
 
@@ -296,9 +296,9 @@ DELETE FROM $TABLE_FQN WHERE id = 3;
 SQL
   wait_for_s3_objects "$STORAGE_ROOT/increment/$SOURCE_DB/$SOURCE_TABLE" 2
 
-  log "starting tidb2snowflake full loader"
+  log "starting tidb2snowflake all-mode loader"
   write_tool_config
-  "$ROOT/bin/tidb2snowflake" snowflake --config "$WORKDIR/tidb2snowflake.toml" >"$WORKDIR/tidb2snowflake.log" 2>&1 &
+  "$ROOT/bin/tidb2snowflake" create --config "$WORKDIR/tidb2snowflake.toml" >"$WORKDIR/tidb2snowflake.log" 2>&1 &
   TOOL_PID=$!
 
   log "waiting for Snowflake assertion"

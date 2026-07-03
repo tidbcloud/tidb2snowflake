@@ -10,16 +10,16 @@ import (
 	"go.uber.org/zap"
 )
 
-// NewSnowflakeCmd builds the `snowflake` subcommand.
-func NewSnowflakeCmd() *cobra.Command {
-	return newSnowflakeCmdWithRun(run)
+// NewCreateCmd builds the `create` subcommand.
+func NewCreateCmd() *cobra.Command {
+	return newCreateCmdWithRun(run)
 }
 
-func newSnowflakeCmdWithRun(run func(context.Context, *Option) error) *cobra.Command {
+func newCreateCmdWithRun(run func(context.Context, *Option) error) *cobra.Command {
 	var configPath string
 
 	cmd := &cobra.Command{
-		Use:   "snowflake --config config.toml",
+		Use:   "create --config config.toml",
 		Short: "Replicate snapshot and incremental data from TiDB to Snowflake",
 		RunE: func(c *cobra.Command, _ []string) error {
 			if configPath == "" {

@@ -2,6 +2,9 @@ package tidbcloud
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -94,6 +97,7 @@ func TestBuildExportRequestGzipCompression(t *testing.T) {
 
 func TestBuildChangefeedRequestFromTSO(t *testing.T) {
 	cfg := baseConfig()
+	cfg.ChangefeedRCU = 8
 	before := time.Now().UnixMilli()
 	req := buildChangefeedRequest(cfg, "s3://bucket/path/increment/", testCred(), "449023000000000000")
 	after := time.Now().UnixMilli()
@@ -120,6 +124,91 @@ func TestBuildChangefeedRequestFromTSO(t *testing.T) {
 	require.Equal(t, cloudapi.TableModeForceSync, req.Filter.Mode)
 	require.Equal(t, cloudapi.StartModeFromTSO, req.StartPosition.Mode)
 	require.Equal(t, "449023000000000000", req.StartPosition.TSO)
+	require.Equal(t, 8, req.RCU)
+}
+
+func TestCreateChangefeedValidatesConfiguredRCUAgainstSpecifications(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
+	require.NoError(t, err)
+	defer store.Close()
+	manager := newTestStateManager(t, ctx, store)
+
+	postCalled := false
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case http.MethodGet + " /v1beta1/clusters/10/changefeeds:listSpecifications":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"items":[{"name":"3rcu","rcu":3},{"name":"8rcu","rcu":8}],"total":2}`))
+		case http.MethodPost + " /v1beta1/clusters/10/changefeeds":
+			postCalled = true
+			http.Error(w, "create should not be called for invalid rcu", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	runner := NewRunner(Config{
+		ClusterID:               "10",
+		Tables:                  []string{"db1.t1"},
+		ChangefeedFlushInterval: time.Minute,
+		ChangefeedFileSizeMiB:   64,
+		ChangefeedRCU:           7,
+		Credential:              testCred(),
+	}, store, manager)
+	runner.client = newCloudAPITestClient(t, srv)
+
+	_, _, err = runner.createChangefeed(ctx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "changefeed.rcu 7 is not available")
+	require.Contains(t, err.Error(), "available values: 3, 8")
+	require.False(t, postCalled)
+}
+
+func TestCreateChangefeedSendsConfiguredRCUAfterValidation(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
+	require.NoError(t, err)
+	defer store.Close()
+	manager := newTestStateManager(t, ctx, store)
+
+	var events []string
+	var createReq struct {
+		RCU int `json:"rcu"`
+	}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case http.MethodGet + " /v1beta1/clusters/10/changefeeds:listSpecifications":
+			events = append(events, "list")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"items":[{"name":"3rcu","rcu":3},{"name":"8rcu","rcu":8}],"total":2}`))
+		case http.MethodPost + " /v1beta1/clusters/10/changefeeds":
+			events = append(events, "create")
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&createReq))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"changefeedId":"cf-1","state":"CREATING"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	runner := NewRunner(Config{
+		ClusterID:               "10",
+		Tables:                  []string{"db1.t1"},
+		ChangefeedFlushInterval: time.Minute,
+		ChangefeedFileSizeMiB:   64,
+		ChangefeedRCU:           8,
+		Credential:              testCred(),
+	}, store, manager)
+	runner.client = newCloudAPITestClient(t, srv)
+
+	changefeedID, _, err := runner.createChangefeed(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "cf-1", changefeedID)
+	require.Equal(t, []string{"list", "create"}, events)
+	require.Equal(t, 8, createReq.RCU)
 }
 
 func TestValidateTiDBCloudConfigReportsConfigKeys(t *testing.T) {
@@ -138,4 +227,16 @@ func newTestStateManager(t *testing.T, ctx context.Context, store storeapi.Stora
 	manager, err := state.Open(ctx, store, []string{"db1.t1", "db2.t2"}, false)
 	require.NoError(t, err)
 	return manager
+}
+
+func newCloudAPITestClient(t *testing.T, srv *httptest.Server) *cloudapi.Client {
+	t.Helper()
+	host := strings.TrimPrefix(srv.URL, "https://")
+	client, err := cloudapi.NewClient("public-key", "private-key",
+		cloudapi.WithHost(host),
+		cloudapi.WithBaseTransport(srv.Client().Transport),
+		cloudapi.WithMaxRetries(0),
+	)
+	require.NoError(t, err)
+	return client
 }

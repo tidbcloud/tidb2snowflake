@@ -11,9 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSnowflakeCmdOnlyExposesConfigFlag(t *testing.T) {
-	cmd := NewSnowflakeCmd()
+func TestCreateCmdOnlyExposesConfigFlag(t *testing.T) {
+	cmd := NewCreateCmd()
 
+	require.Contains(t, cmd.Use, "create")
 	require.NotNil(t, cmd.Flags().Lookup("config"))
 	require.Nil(t, cmd.Flags().Lookup("source.mode"))
 	require.Nil(t, cmd.Flags().Lookup("tidb.host"))
@@ -25,14 +26,14 @@ func TestSnowflakeCmdOnlyExposesConfigFlag(t *testing.T) {
 	require.Nil(t, cmd.Flags().Lookup("tidbcloud.public-key"))
 }
 
-func TestSnowflakeCmdLoadsTiDBCloudConfig(t *testing.T) {
+func TestCreateCmdLoadsTiDBCloudConfig(t *testing.T) {
 	t.Setenv("TIDBCLOUD_CLUSTER_ID", "cluster-from-env")
 	t.Setenv("TIDBCLOUD_PUBLIC_KEY", "public-from-env")
 	t.Setenv("TIDBCLOUD_PRIVATE_KEY", "private-from-env")
 	t.Setenv("TIDBCLOUD_HOST", "api.env.example.com")
 
 	var captured *Option
-	cmd := newSnowflakeCmdWithRun(func(_ context.Context, opt *Option) error {
+	cmd := newCreateCmdWithRun(func(_ context.Context, opt *Option) error {
 		require.NoError(t, opt.validate())
 		captured = opt
 		return nil
@@ -40,19 +41,19 @@ func TestSnowflakeCmdLoadsTiDBCloudConfig(t *testing.T) {
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	cmd.SetArgs([]string{"--config", writeConfigFile(t, `
-mode = "full"
+mode = "all"
 source = "tidbcloud"
 tables = ["db1.t1", "db2.t2"]
 
 [storage]
 uri = "s3://bucket/path?region=us-west-2"
 access-key = "AKIA"
-secret-key = "secret"
+secret-access-key = "secret"
 
 [snowflake]
 account-id = "org-account"
 user = "sf-user"
-pass = "sf-pass"
+password = "sf-pass"
 database = "SNOW"
 
 [tidbcloud]
@@ -60,6 +61,9 @@ cluster-id = "cluster-from-config"
 public-key = "public-from-config"
 private-key = "private-from-config"
 host = " api.config.example.com "
+
+[changefeed]
+rcu = 8
 `)})
 
 	require.NoError(t, cmd.Execute())
@@ -67,17 +71,18 @@ host = " api.config.example.com "
 	require.Equal(t, "s3://bucket/path?region=us-west-2", captured.StoragePath)
 	require.Equal(t, []string{"db1.t1", "db2.t2"}, captured.Tables)
 	require.Equal(t, sourceModeTiDBCloud, captured.SourceMode)
-	require.Equal(t, runModeFull, captured.Mode)
+	require.Equal(t, runModeAll, captured.Mode)
 	require.Equal(t, "COMPUTE_WH", captured.SnowflakeWarehouse)
 	require.Equal(t, "cluster-from-config", captured.TiDBCloudClusterID)
 	require.Equal(t, "public-from-config", captured.TiDBCloudPublicKey)
 	require.Equal(t, "private-from-config", captured.TiDBCloudPrivateKey)
 	require.Equal(t, "api.config.example.com", captured.TiDBCloudHost)
+	require.Equal(t, 8, captured.ChangefeedRCU)
 }
 
-func TestSnowflakeCmdLoadsOPConfig(t *testing.T) {
+func TestCreateCmdLoadsOPConfig(t *testing.T) {
 	var captured *Option
-	cmd := newSnowflakeCmdWithRun(func(_ context.Context, opt *Option) error {
+	cmd := newCreateCmdWithRun(func(_ context.Context, opt *Option) error {
 		require.NoError(t, opt.validate())
 		captured = opt
 		return nil
@@ -85,20 +90,20 @@ func TestSnowflakeCmdLoadsOPConfig(t *testing.T) {
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	cmd.SetArgs([]string{"--config", writeConfigFile(t, `
-mode = "full"
+mode = "all"
 source = "op"
 tables = ["db1.t1"]
 
 [storage]
 uri = "s3://bucket/path"
 access-key = "AKIA"
-secret-key = "secret"
+secret-access-key = "secret"
 
 [tidb]
 host = "tidb.example.com"
 port = 4400
 user = "tidb-user"
-pass = "tidb-pass"
+password = "tidb-pass"
 tls = true
 ssl-ca = "/tmp/ca.pem"
 
@@ -108,7 +113,7 @@ address = "http://127.0.0.1:8300"
 [snowflake]
 account-id = "org-account"
 user = "sf-user"
-pass = "sf-pass"
+password = "sf-pass"
 database = "SNOW"
 warehouse = "WH"
 
@@ -144,8 +149,8 @@ scan-interval = "5s"
 	require.Equal(t, 5*time.Second, captured.IncrementScanInterval)
 }
 
-func TestSnowflakeCmdRejectsOldBusinessFlags(t *testing.T) {
-	cmd := newSnowflakeCmdWithRun(func(context.Context, *Option) error {
+func TestCreateCmdRejectsOldBusinessFlags(t *testing.T) {
+	cmd := newCreateCmdWithRun(func(context.Context, *Option) error {
 		t.Fatal("run should not be called when old flags are passed")
 		return nil
 	})
@@ -158,8 +163,8 @@ func TestSnowflakeCmdRejectsOldBusinessFlags(t *testing.T) {
 	require.Contains(t, err.Error(), "unknown flag: --table")
 }
 
-func TestSnowflakeCmdRequiresConfig(t *testing.T) {
-	cmd := newSnowflakeCmdWithRun(func(context.Context, *Option) error {
+func TestCreateCmdRequiresConfig(t *testing.T) {
+	cmd := newCreateCmdWithRun(func(context.Context, *Option) error {
 		t.Fatal("run should not be called without config")
 		return nil
 	})
@@ -171,8 +176,8 @@ func TestSnowflakeCmdRequiresConfig(t *testing.T) {
 	require.Contains(t, err.Error(), "--config is required")
 }
 
-func TestSnowflakeCmdRejectsUnknownConfigKey(t *testing.T) {
-	cmd := newSnowflakeCmdWithRun(func(context.Context, *Option) error {
+func TestCreateCmdRejectsUnknownConfigKey(t *testing.T) {
+	cmd := newCreateCmdWithRun(func(context.Context, *Option) error {
 		t.Fatal("run should not be called for invalid config")
 		return nil
 	})
@@ -185,12 +190,12 @@ unknown = "value"
 [storage]
 uri = "s3://bucket/path"
 access-key = "AKIA"
-secret-key = "secret"
+secret-access-key = "secret"
 
 [snowflake]
 account-id = "org-account"
 user = "sf-user"
-pass = "sf-pass"
+password = "sf-pass"
 database = "SNOW"
 `)})
 
@@ -200,8 +205,8 @@ database = "SNOW"
 	require.Contains(t, err.Error(), "unknown")
 }
 
-func TestSnowflakeCmdRejectsInvalidDuration(t *testing.T) {
-	cmd := newSnowflakeCmdWithRun(func(context.Context, *Option) error {
+func TestCreateCmdRejectsInvalidDuration(t *testing.T) {
+	cmd := newCreateCmdWithRun(func(context.Context, *Option) error {
 		t.Fatal("run should not be called for invalid config")
 		return nil
 	})
@@ -213,12 +218,12 @@ tables = ["db1.t1"]
 [storage]
 uri = "s3://bucket/path"
 access-key = "AKIA"
-secret-key = "secret"
+secret-access-key = "secret"
 
 [snowflake]
 account-id = "org-account"
 user = "sf-user"
-pass = "sf-pass"
+password = "sf-pass"
 database = "SNOW"
 
 [changefeed]
@@ -228,6 +233,69 @@ flush-interval = "bad"
 	err := cmd.Execute()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "parse changefeed.flush-interval")
+}
+
+func TestDeleteCmdOnlyExposesConfigFlag(t *testing.T) {
+	cmd := NewDeleteCmd()
+
+	require.Contains(t, cmd.Use, "delete")
+	require.NotNil(t, cmd.Flags().Lookup("config"))
+	require.Nil(t, cmd.Flags().Lookup("source.mode"))
+	require.Nil(t, cmd.Flags().Lookup("tidb.host"))
+	require.Nil(t, cmd.Flags().Lookup("ticdc.address"))
+	require.Nil(t, cmd.Flags().Lookup("snowflake.database"))
+	require.Nil(t, cmd.Flags().Lookup("storage"))
+	require.Nil(t, cmd.Flags().Lookup("table"))
+	require.Nil(t, cmd.Flags().Lookup("aws.access-key"))
+	require.Nil(t, cmd.Flags().Lookup("tidbcloud.public-key"))
+}
+
+func TestDeleteCmdLoadsConfig(t *testing.T) {
+	var captured *Option
+	cmd := newDeleteCmdWithRun(func(_ context.Context, opt *Option) error {
+		require.NoError(t, opt.validateDelete())
+		captured = opt
+		return nil
+	})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--config", writeConfigFile(t, `
+source = "tidbcloud"
+
+[storage]
+uri = "s3://bucket/path?region=us-west-2"
+access-key = "AKIA"
+secret-access-key = "secret"
+
+[tidbcloud]
+cluster-id = "cluster-from-config"
+public-key = "public-from-config"
+private-key = "private-from-config"
+host = " api.config.example.com "
+`)})
+
+	require.NoError(t, cmd.Execute())
+	require.NotNil(t, captured)
+	require.Equal(t, "s3://bucket/path?region=us-west-2", captured.StoragePath)
+	require.Equal(t, "AKIA", captured.AWSAccessKey)
+	require.Equal(t, "secret", captured.AWSSecretKey)
+	require.Equal(t, "cluster-from-config", captured.TiDBCloudClusterID)
+	require.Equal(t, "public-from-config", captured.TiDBCloudPublicKey)
+	require.Equal(t, "private-from-config", captured.TiDBCloudPrivateKey)
+	require.Equal(t, "api.config.example.com", captured.TiDBCloudHost)
+}
+
+func TestDeleteCmdRequiresConfig(t *testing.T) {
+	cmd := newDeleteCmdWithRun(func(context.Context, *Option) error {
+		t.Fatal("run should not be called without config")
+		return nil
+	})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--config is required")
 }
 
 func writeConfigFile(t *testing.T, content string) string {

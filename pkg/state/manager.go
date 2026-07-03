@@ -23,6 +23,9 @@ type Manager interface {
 	// SetChangefeedID records the source changefeed job so a restarted process can resume waiting for it.
 	SetChangefeedID(context.Context, string) error
 
+	// ClearChangefeedID removes the source changefeed job from durable state after it is deleted.
+	ClearChangefeedID(context.Context) error
+
 	// SetDDLTableVersionWatermark records the latest schema table version applied to Snowflake for a table.
 	SetDDLTableVersionWatermark(context.Context, string, uint64) error
 
@@ -41,6 +44,14 @@ type manager struct {
 }
 
 func Open(ctx context.Context, store storeapi.Storage, tables []string, snapshotFinished bool) (Manager, error) {
+	return open(ctx, store, tables, snapshotFinished, true)
+}
+
+func OpenExisting(ctx context.Context, store storeapi.Storage) (Manager, error) {
+	return open(ctx, store, nil, false, false)
+}
+
+func open(ctx context.Context, store storeapi.Storage, tables []string, snapshotFinished bool, createIfMissing bool) (Manager, error) {
 	m := &manager{
 		store:  store,
 		tables: append([]string(nil), tables...),
@@ -51,6 +62,9 @@ func Open(ctx context.Context, store storeapi.Storage, tables []string, snapshot
 		return nil, errors.Annotatef(err, "check state file %s", stateFileName)
 	}
 	if !exists {
+		if !createIfMissing {
+			return nil, errors.Errorf("state file %s does not exist", stateFileName)
+		}
 		m.state = newState(tables, snapshotFinished)
 		if err := m.upload(ctx, m.state); err != nil {
 			return nil, err
@@ -126,6 +140,13 @@ func (m *manager) SetChangefeedID(ctx context.Context, changefeedID string) erro
 	}
 	return m.update(ctx, func(st *State) error {
 		st.TaskInfo.ChangefeedID = changefeedID
+		return nil
+	})
+}
+
+func (m *manager) ClearChangefeedID(ctx context.Context) error {
+	return m.update(ctx, func(st *State) error {
+		st.TaskInfo.ChangefeedID = ""
 		return nil
 	})
 }
