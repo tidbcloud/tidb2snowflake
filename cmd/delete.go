@@ -1,7 +1,12 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
+	"fmt"
+	"io"
+	"os"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/pingcap/errors"
@@ -17,7 +22,11 @@ import (
 
 // NewDeleteCmd builds the `delete` subcommand.
 func NewDeleteCmd() *cobra.Command {
-	return newDeleteCmdWithRun(runDelete)
+	var cmd *cobra.Command
+	cmd = newDeleteCmdWithRun(func(ctx context.Context, opt *Option) error {
+		return runDeleteWithIO(ctx, opt, cmd.InOrStdin(), cmd.OutOrStdout())
+	})
+	return cmd
 }
 
 func newDeleteCmdWithRun(run func(context.Context, *Option) error) *cobra.Command {
@@ -58,6 +67,10 @@ func newDeleteCmdWithRun(run func(context.Context, *Option) error) *cobra.Comman
 }
 
 func runDelete(ctx context.Context, opt *Option) error {
+	return runDeleteWithIO(ctx, opt, os.Stdin, os.Stdout)
+}
+
+func runDeleteWithIO(ctx context.Context, opt *Option, in io.Reader, out io.Writer) error {
 	if err := opt.validateDelete(); err != nil {
 		return err
 	}
@@ -83,6 +96,9 @@ func runDelete(ctx context.Context, opt *Option) error {
 	if changefeedID == "" {
 		return errors.New("state task_info.changefeed_id is empty")
 	}
+	if err := confirmChangefeedDeletion(in, out, changefeedID); err != nil {
+		return err
+	}
 
 	switch opt.SourceMode {
 	case sourceModeOP:
@@ -99,6 +115,20 @@ func runDelete(ctx context.Context, opt *Option) error {
 	log.Info("changefeed deleted and state cleared",
 		zap.String("sourceMode", opt.SourceMode),
 		zap.String("changefeedID", changefeedID))
+	return nil
+}
+
+func confirmChangefeedDeletion(in io.Reader, out io.Writer, changefeedID string) error {
+	if _, err := fmt.Fprintf(out, "About to delete changefeed %s. Type the changefeed id to confirm: ", changefeedID); err != nil {
+		return errors.Trace(err)
+	}
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !(errors.Cause(err) == io.EOF && line != "") {
+		return errors.Annotate(err, "read delete confirmation")
+	}
+	if strings.TrimSpace(line) != changefeedID {
+		return errors.New("delete confirmation failed")
+	}
 	return nil
 }
 

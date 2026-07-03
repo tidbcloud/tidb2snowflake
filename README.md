@@ -177,7 +177,8 @@ before creating the changefeed and fails fast if the requested value is not
 available.
 
 To delete the changefeed recorded in `replication-state.json`, use the same
-config file:
+config file. The command asks you to type the recorded changefeed id before it
+deletes anything:
 
 ```bash
 ./bin/tidb2snowflake delete --config config.toml
