@@ -96,7 +96,7 @@ func runDeleteWithIO(ctx context.Context, opt *Option, in io.Reader, out io.Writ
 	if changefeedID == "" {
 		return errors.New("state task_info.changefeed_id is empty")
 	}
-	if err := confirmChangefeedDeletion(in, out, changefeedID); err != nil {
+	if err := confirmChangefeedDeletion(in, out); err != nil {
 		return err
 	}
 
@@ -113,23 +113,24 @@ func runDeleteWithIO(ctx context.Context, opt *Option, in io.Reader, out io.Writ
 		return errors.Trace(err)
 	}
 	log.Info("changefeed deleted and state cleared",
-		zap.String("sourceMode", opt.SourceMode),
-		zap.String("changefeedID", changefeedID))
+		zap.String("sourceMode", opt.SourceMode))
 	return nil
 }
 
-func confirmChangefeedDeletion(in io.Reader, out io.Writer, changefeedID string) error {
-	if _, err := fmt.Fprintf(out, "About to delete changefeed %s. Type the changefeed id to confirm: ", changefeedID); err != nil {
+func confirmChangefeedDeletion(in io.Reader, out io.Writer) error {
+	if _, err := fmt.Fprint(out, "Delete the changefeed recorded in state? [y/N]: "); err != nil {
 		return errors.Trace(err)
 	}
 	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil && !(errors.Cause(err) == io.EOF && line != "") {
 		return errors.Annotate(err, "read delete confirmation")
 	}
-	if strings.TrimSpace(line) != changefeedID {
-		return errors.New("delete confirmation failed")
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return nil
+	default:
+		return errors.New("delete canceled")
 	}
-	return nil
 }
 
 func (opt *Option) validateDelete() error {
