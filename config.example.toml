@@ -1,12 +1,12 @@
 # Example config for:
-#   ./bin/tidb2snowflake snowflake --config config.example.toml
+#   ./bin/tidb2snowflake create --config config.example.toml
 #
 # The config loader rejects unknown keys. Keep new settings inside the sections
 # and key names shown in this file.
 
-# Supported values: "full", "snapshot-only", "incremental-only".
-# Default: "full".
-mode = "full"
+# Supported values: "all", "snapshot-only", "incremental-only".
+# Default: "all".
+mode = "all"
 
 # Supported values: "tidbcloud", "op".
 # Default: "tidbcloud".
@@ -22,12 +22,12 @@ tables = [
 # S3 path shared by snapshot export, incremental CDC files, and loader state.
 uri = "s3://my-bucket/tidb2snowflake/prod?region=us-west-2"
 access-key = "AKIA..."
-secret-key = "..."
+secret-access-key = "..."
 
 [snowflake]
 account-id = "org-account"
 user = "TIDB2SNOWFLAKE"
-pass = "..."
+password = "..."
 database = "ODS_DB"
 warehouse = "COMPUTE_WH"
 
@@ -45,11 +45,11 @@ host = ""
 host = "127.0.0.1"
 port = 4000
 user = "root"
-pass = ""
+password = ""
 tls = false
 ssl-ca = ""
 
-# Required when source = "op" and mode is "full" or "incremental-only".
+# Required when source = "op" and mode is "all" or "incremental-only".
 # Not used by TiDB Cloud source mode.
 [ticdc]
 address = "http://127.0.0.1:8300"
@@ -67,6 +67,8 @@ concurrency = 8
 flush-interval = "60s"
 # Target changefeed file size in MiB. Default: 64.
 file-size = 64
+# Optional TiDB Cloud changefeed RCU. Leave 0 to use the TiDB Cloud API default.
+rcu = 0
 
 [increment]
 # Go duration string. Default: "1m".

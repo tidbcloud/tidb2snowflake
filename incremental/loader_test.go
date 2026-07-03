@@ -7,12 +7,16 @@ import (
 	"path"
 	"testing"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
 	"github.com/tidbcloud/tidb2snowflake/source/storage"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestCountFilesInRangesSkipsSchemaKeys(t *testing.T) {
@@ -130,6 +134,18 @@ func TestBeginScanOnlyScansWhenTargetCheckpointAdvances(t *testing.T) {
 	require.Equal(t, scanBounds{checkpointTs: 100, targetCheckpointTs: 101}, bounds)
 }
 
+func TestLogIncrementalScanProgressIncludesCheckpoints(t *testing.T) {
+	logs := captureIncrementalLogs(t)
+
+	logIncrementalScanProgress(scanBounds{checkpointTs: 100, targetCheckpointTs: 101}, true)
+
+	entry := observedIncrementalLog(t, logs, "incremental scan progress")
+	fields := entry.ContextMap()
+	require.Equal(t, uint64(100), fields["checkpointTs"])
+	require.Equal(t, uint64(101), fields["targetCheckpointTs"])
+	require.Equal(t, true, fields["hasScan"])
+}
+
 func TestGetNewFilesDoesNotScheduleSchemaAtCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
@@ -156,6 +172,28 @@ func TestGetNewFilesDoesNotScheduleSchemaAtCheckpoint(t *testing.T) {
 		Table:        "t",
 		TableVersion: 100,
 	}))
+}
+
+func captureIncrementalLogs(t *testing.T) *observer.ObservedLogs {
+	t.Helper()
+	core, logs := observer.New(zapcore.InfoLevel)
+	restore := log.ReplaceGlobals(zap.New(core), &log.ZapProperties{
+		Core:  core,
+		Level: zap.NewAtomicLevelAt(zapcore.InfoLevel),
+	})
+	t.Cleanup(restore)
+	return logs
+}
+
+func observedIncrementalLog(t *testing.T, logs *observer.ObservedLogs, msg string) observer.LoggedEntry {
+	t.Helper()
+	for _, entry := range logs.All() {
+		if entry.Message == msg {
+			return entry
+		}
+	}
+	t.Fatalf("log message %q not found in %v", msg, logs.All())
+	return observer.LoggedEntry{}
 }
 
 func TestGetNewFilesKeepsOnlyLatestAppliedBaselineSchema(t *testing.T) {

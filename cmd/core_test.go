@@ -39,8 +39,9 @@ func TestNewOptionDefaults(t *testing.T) {
 	require.Equal(t, snapshotCompressionNone, opt.SnapshotCompression)
 	require.Equal(t, snapshotCSVNullValue, opt.SnapshotCSVNullValue)
 	require.Equal(t, sourceModeTiDBCloud, opt.SourceMode)
-	require.Equal(t, runModeFull, opt.Mode)
+	require.Equal(t, runModeAll, opt.Mode)
 	require.Empty(t, opt.SnapshotTSO)
+	require.Zero(t, opt.ChangefeedRCU)
 }
 
 func TestValidateConfig(t *testing.T) {
@@ -90,7 +91,7 @@ func TestValidateConfig(t *testing.T) {
 	}
 	err = opt.validate()
 	require.NoError(t, err)
-	require.Equal(t, runModeFull, opt.Mode)
+	require.Equal(t, runModeAll, opt.Mode)
 	require.Equal(t, sourceModeTiDBCloud, opt.SourceMode)
 	require.Equal(t, snapshotCompressionNone, opt.SnapshotCompression)
 	require.Equal(t, -1, opt.SnapshotConcurrency)
@@ -110,7 +111,7 @@ func TestValidateConfig(t *testing.T) {
 	}
 	err = opt.validate()
 	require.NoError(t, err)
-	require.Equal(t, runModeFull, opt.Mode)
+	require.Equal(t, runModeAll, opt.Mode)
 	require.Equal(t, sourceModeTiDBCloud, opt.SourceMode)
 	require.Equal(t, snapshotCompressionNone, opt.SnapshotCompression)
 	require.Equal(t, 0, opt.SnapshotConcurrency)
@@ -118,7 +119,7 @@ func TestValidateConfig(t *testing.T) {
 	opt = validationOption()
 	err = opt.validate()
 	require.NoError(t, err)
-	require.Equal(t, runModeFull, opt.Mode)
+	require.Equal(t, runModeAll, opt.Mode)
 	require.Equal(t, sourceModeTiDBCloud, opt.SourceMode)
 
 	opt = validationOption()
@@ -144,7 +145,7 @@ func TestValidateConfig(t *testing.T) {
 	opt.AWSAccessKey = ""
 	err = opt.validate()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "storage.access-key and storage.secret-key are required")
+	require.Contains(t, err.Error(), "storage.access-key and storage.secret-access-key are required")
 
 	opt = validationOption()
 	opt.Tables = nil
@@ -174,7 +175,13 @@ func TestValidateConfig(t *testing.T) {
 	opt.SnowflakePass = ""
 	err = opt.validate()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "snowflake.pass is required")
+	require.Contains(t, err.Error(), "snowflake.password is required")
+
+	opt = validationOption()
+	opt.ChangefeedRCU = -1
+	err = opt.validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "changefeed.rcu must be greater than 0")
 }
 
 func TestMarkSnapshotFinishedSetsCheckpoint(t *testing.T) {
