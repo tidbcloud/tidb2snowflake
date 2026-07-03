@@ -65,6 +65,7 @@ func (loader *loader) run(ctx context.Context, pool *workerpool.Pool) error {
 		if err != nil {
 			return errors.Trace(err)
 		}
+		logIncrementalScanProgress(bounds, hasScan)
 		if !hasScan {
 			continue
 		}
@@ -86,6 +87,13 @@ func (loader *loader) run(ctx context.Context, pool *workerpool.Pool) error {
 			zap.Uint64("loadedFiles", summary.loadedFiles),
 			zap.Duration("duration", time.Since(start)))
 	}
+}
+
+func logIncrementalScanProgress(bounds scanBounds, hasScan bool) {
+	log.Info("incremental scan progress",
+		zap.Uint64("checkpointTs", bounds.checkpointTs),
+		zap.Uint64("targetCheckpointTs", bounds.targetCheckpointTs),
+		zap.Bool("hasScan", hasScan))
 }
 
 // indexRange defines a range of files. eg. CDC000002.csv ~ CDC000005.csv

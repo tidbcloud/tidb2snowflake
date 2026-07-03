@@ -34,6 +34,7 @@ type Request struct {
 	Tables                  []string
 	ChangefeedFlushInterval time.Duration
 	ChangefeedFileSizeMiB   int
+	ChangefeedRCU           int
 	SnapshotCompression     string
 
 	Credential   *aws.Credentials
@@ -116,6 +117,7 @@ func (request Request) tidbCloudConfig() tidbcloud.Config {
 		Tables:                  request.Tables,
 		ChangefeedFlushInterval: request.ChangefeedFlushInterval,
 		ChangefeedFileSizeMiB:   request.ChangefeedFileSizeMiB,
+		ChangefeedRCU:           request.ChangefeedRCU,
 		SnapshotCompression:     compression,
 		SnapshotTSO:             request.SnapshotTSO,
 		Credential:              request.Credential,

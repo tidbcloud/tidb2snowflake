@@ -173,7 +173,7 @@ func startTool(t *testing.T, cfg *e2eConfig, mode, storagePath, table string) (s
 
 func toolArgs(t *testing.T, cfg *e2eConfig, mode, storagePath, table string) []string {
 	t.Helper()
-	return []string{"snowflake", "--config", writeToolConfig(t, cfg, mode, storagePath, table)}
+	return []string{"create", "--config", writeToolConfig(t, cfg, mode, storagePath, table)}
 }
 
 func writeToolConfig(t *testing.T, cfg *e2eConfig, mode, storagePath, table string) string {
@@ -186,17 +186,17 @@ func writeToolConfig(t *testing.T, cfg *e2eConfig, mode, storagePath, table stri
 	fmt.Fprintf(&buf, "[storage]\n")
 	fmt.Fprintf(&buf, "uri = %s\n", strconv.Quote(storagePath))
 	fmt.Fprintf(&buf, "access-key = %s\n", strconv.Quote(cfg.AWSAccessKey))
-	fmt.Fprintf(&buf, "secret-key = %s\n\n", strconv.Quote(cfg.AWSSecretKey))
+	fmt.Fprintf(&buf, "secret-access-key = %s\n\n", strconv.Quote(cfg.AWSSecretKey))
 	fmt.Fprintf(&buf, "[tidb]\n")
 	fmt.Fprintf(&buf, "host = %s\n", strconv.Quote(cfg.TiDBHost))
 	fmt.Fprintf(&buf, "port = %d\n", cfg.TiDBPort)
 	fmt.Fprintf(&buf, "user = %s\n", strconv.Quote(cfg.TiDBUser))
-	fmt.Fprintf(&buf, "pass = %s\n", strconv.Quote(cfg.TiDBPass))
+	fmt.Fprintf(&buf, "password = %s\n", strconv.Quote(cfg.TiDBPass))
 	fmt.Fprintf(&buf, "tls = true\n\n")
 	fmt.Fprintf(&buf, "[snowflake]\n")
 	fmt.Fprintf(&buf, "account-id = %s\n", strconv.Quote(cfg.SFAccountID))
 	fmt.Fprintf(&buf, "user = %s\n", strconv.Quote(cfg.SFUser))
-	fmt.Fprintf(&buf, "pass = %s\n", strconv.Quote(cfg.SFPass))
+	fmt.Fprintf(&buf, "password = %s\n", strconv.Quote(cfg.SFPass))
 	fmt.Fprintf(&buf, "warehouse = %s\n", strconv.Quote(cfg.SFWarehouse))
 	fmt.Fprintf(&buf, "database = %s\n\n", strconv.Quote(cfg.SFDatabase))
 	fmt.Fprintf(&buf, "[tidbcloud]\n")
