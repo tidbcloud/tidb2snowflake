@@ -118,7 +118,7 @@ func runDeleteWithIO(ctx context.Context, opt *Option, in io.Reader, out io.Writ
 }
 
 func confirmChangefeedDeletion(in io.Reader, out io.Writer) error {
-	if _, err := fmt.Fprint(out, "Delete the changefeed recorded in state? [y/N]: "); err != nil {
+	if _, err := fmt.Fprint(out, "Delete the changefeed associated with this task? [y/N]: "); err != nil {
 		return errors.Trace(err)
 	}
 	line, err := bufio.NewReader(in).ReadString('\n')

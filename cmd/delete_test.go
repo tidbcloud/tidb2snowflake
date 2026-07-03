@@ -14,7 +14,7 @@ func TestConfirmChangefeedDeletionAcceptsYes(t *testing.T) {
 	err := confirmChangefeedDeletion(strings.NewReader("y\n"), &out)
 
 	require.NoError(t, err)
-	require.Contains(t, out.String(), "Delete the changefeed recorded in state?")
+	require.Contains(t, out.String(), "Delete the changefeed associated with this task?")
 	require.Contains(t, out.String(), "[y/N]")
 	require.NotContains(t, out.String(), "cf-1")
 }
@@ -26,7 +26,7 @@ func TestConfirmChangefeedDeletionRejectsNo(t *testing.T) {
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "delete canceled")
-	require.Contains(t, out.String(), "Delete the changefeed recorded in state?")
+	require.Contains(t, out.String(), "Delete the changefeed associated with this task?")
 }
 
 func TestConfirmChangefeedDeletionRejectsEmptyInput(t *testing.T) {
@@ -36,5 +36,5 @@ func TestConfirmChangefeedDeletionRejectsEmptyInput(t *testing.T) {
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "delete canceled")
-	require.Contains(t, out.String(), "Delete the changefeed recorded in state?")
+	require.Contains(t, out.String(), "Delete the changefeed associated with this task?")
 }
