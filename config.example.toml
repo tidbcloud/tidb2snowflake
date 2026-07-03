@@ -1,5 +1,5 @@
 # Example config for:
-#   ./bin/tidb2snowflake create --config config.example.toml
+#   ./bin/tidb2snowflake create -c config.example.toml
 #
 # The config loader rejects unknown keys. Keep new settings inside the sections
 # and key names shown in this file.

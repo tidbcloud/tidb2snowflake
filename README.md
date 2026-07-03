@@ -91,6 +91,8 @@ The `create` command reads runtime settings from a TOML file:
 
 ```bash
 ./bin/tidb2snowflake create --config config.toml
+# or
+./bin/tidb2snowflake create -c config.toml
 ```
 
 Minimal TiDB Cloud config:
@@ -182,6 +184,8 @@ deletes anything:
 
 ```bash
 ./bin/tidb2snowflake delete --config config.toml
+# or
+./bin/tidb2snowflake delete -c config.toml
 ```
 
 ## Reusing an existing export / changefeed

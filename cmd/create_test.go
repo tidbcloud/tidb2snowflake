@@ -15,7 +15,9 @@ func TestCreateCmdOnlyExposesConfigFlag(t *testing.T) {
 	cmd := NewCreateCmd()
 
 	require.Contains(t, cmd.Use, "create")
-	require.NotNil(t, cmd.Flags().Lookup("config"))
+	configFlag := cmd.Flags().Lookup("config")
+	require.NotNil(t, configFlag)
+	require.Equal(t, "c", configFlag.Shorthand)
 	require.Nil(t, cmd.Flags().Lookup("source.mode"))
 	require.Nil(t, cmd.Flags().Lookup("tidb.host"))
 	require.Nil(t, cmd.Flags().Lookup("ticdc.address"))
@@ -78,6 +80,35 @@ rcu = 8
 	require.Equal(t, "private-from-config", captured.TiDBCloudPrivateKey)
 	require.Equal(t, "api.config.example.com", captured.TiDBCloudHost)
 	require.Equal(t, 8, captured.ChangefeedRCU)
+}
+
+func TestCreateCmdLoadsConfigWithShorthand(t *testing.T) {
+	var captured *Option
+	cmd := newCreateCmdWithRun(func(_ context.Context, opt *Option) error {
+		require.NoError(t, opt.validate())
+		captured = opt
+		return nil
+	})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"-c", writeConfigFile(t, `
+tables = ["db1.t1"]
+
+[storage]
+uri = "s3://bucket/path"
+access-key = "AKIA"
+secret-access-key = "secret"
+
+[snowflake]
+account-id = "org-account"
+user = "sf-user"
+password = "sf-pass"
+database = "SNOW"
+`)})
+
+	require.NoError(t, cmd.Execute())
+	require.NotNil(t, captured)
+	require.Equal(t, "s3://bucket/path", captured.StoragePath)
 }
 
 func TestCreateCmdLoadsOPConfig(t *testing.T) {
@@ -239,7 +270,9 @@ func TestDeleteCmdOnlyExposesConfigFlag(t *testing.T) {
 	cmd := NewDeleteCmd()
 
 	require.Contains(t, cmd.Use, "delete")
-	require.NotNil(t, cmd.Flags().Lookup("config"))
+	configFlag := cmd.Flags().Lookup("config")
+	require.NotNil(t, configFlag)
+	require.Equal(t, "c", configFlag.Shorthand)
 	require.Nil(t, cmd.Flags().Lookup("source.mode"))
 	require.Nil(t, cmd.Flags().Lookup("tidb.host"))
 	require.Nil(t, cmd.Flags().Lookup("ticdc.address"))
@@ -283,6 +316,34 @@ host = " api.config.example.com "
 	require.Equal(t, "public-from-config", captured.TiDBCloudPublicKey)
 	require.Equal(t, "private-from-config", captured.TiDBCloudPrivateKey)
 	require.Equal(t, "api.config.example.com", captured.TiDBCloudHost)
+}
+
+func TestDeleteCmdLoadsConfigWithShorthand(t *testing.T) {
+	var captured *Option
+	cmd := newDeleteCmdWithRun(func(_ context.Context, opt *Option) error {
+		require.NoError(t, opt.validateDelete())
+		captured = opt
+		return nil
+	})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"-c", writeConfigFile(t, `
+source = "tidbcloud"
+
+[storage]
+uri = "s3://bucket/path"
+access-key = "AKIA"
+secret-access-key = "secret"
+
+[tidbcloud]
+cluster-id = "cluster-from-config"
+public-key = "public-from-config"
+private-key = "private-from-config"
+`)})
+
+	require.NoError(t, cmd.Execute())
+	require.NotNil(t, captured)
+	require.Equal(t, "s3://bucket/path", captured.StoragePath)
 }
 
 func TestDeleteCmdRequiresConfig(t *testing.T) {
