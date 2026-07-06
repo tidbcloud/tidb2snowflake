@@ -41,7 +41,7 @@ func TestNewOptionDefaults(t *testing.T) {
 	require.Equal(t, sourceModeTiDBCloud, opt.SourceMode)
 	require.Equal(t, runModeAll, opt.Mode)
 	require.Empty(t, opt.SnapshotTSO)
-	require.Zero(t, opt.ChangefeedRCU)
+	require.Equal(t, 2, opt.ChangefeedRCU)
 }
 
 func TestValidateConfig(t *testing.T) {

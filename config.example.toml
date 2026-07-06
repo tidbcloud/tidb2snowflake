@@ -67,8 +67,8 @@ concurrency = 8
 flush-interval = "60s"
 # Target changefeed file size in MiB. Default: 64.
 file-size = 64
-# Optional TiDB Cloud changefeed RCU. Leave 0 to use the TiDB Cloud API default.
-rcu = 0
+# Optional TiDB Cloud changefeed RCU. Default: 2. Setting 0 also uses 2.
+rcu = 2
 
 [increment]
 # Go duration string. Default: "1m".

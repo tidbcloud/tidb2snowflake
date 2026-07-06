@@ -35,7 +35,10 @@ const (
 	snapshotCSVNullValue    = "\\N"
 )
 
-const defaultIncrementScanInterval = time.Minute
+const (
+	defaultChangefeedRCU         = 2
+	defaultIncrementScanInterval = time.Minute
+)
 
 // Option contains the raw values accepted from the config file.
 type Option struct {
@@ -90,6 +93,7 @@ func NewOption() *Option {
 		SnowflakeWarehouse:      "COMPUTE_WH",
 		ChangefeedFlushInterval: 60 * time.Second,
 		ChangefeedFileSizeMiB:   64,
+		ChangefeedRCU:           defaultChangefeedRCU,
 		IncrementScanInterval:   defaultIncrementScanInterval,
 		SnapshotCompression:     snapshotCompressionNone,
 		SnapshotCSVNullValue:    snapshotCSVNullValue,

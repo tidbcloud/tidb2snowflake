@@ -136,7 +136,9 @@ func loadConfig(path string) (*Option, *logger.Config, error) {
 	}
 	opt.ChangefeedFlushInterval = flushInterval
 	opt.ChangefeedFileSizeMiB = cfg.Changefeed.FileSizeMiB
-	opt.ChangefeedRCU = cfg.Changefeed.RCU
+	if cfg.Changefeed.RCU != 0 {
+		opt.ChangefeedRCU = cfg.Changefeed.RCU
+	}
 
 	scanInterval, err := parseConfigDuration(cfg.Increment.ScanInterval, "increment.scan-interval")
 	if err != nil {
