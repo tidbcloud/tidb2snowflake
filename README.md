@@ -173,10 +173,10 @@ the snapshot with Dumpling. After Dumpling finishes, `snapshot/metadata` `Pos`
 is read back as the final snapshot TSO. `snapshot.concurrency` controls Dumpling
 snapshot dump concurrency in OP mode.
 
-Set `changefeed.rcu` to request a TiDB Cloud changefeed RCU tier. When it is
-non-zero, the tool fetches the cluster's available changefeed specifications
-before creating the changefeed and fails fast if the requested value is not
-available.
+`changefeed.rcu` defaults to `2` to request that TiDB Cloud changefeed RCU tier.
+Omitting it or setting it to `0` uses `2`. The tool fetches the cluster's
+available changefeed specifications before creating the changefeed and fails
+fast if the requested value is not available.
 
 To delete the changefeed associated with the task recorded in
 `replication-state.json`, use the same config file. The command asks for `y/N`
