@@ -212,6 +212,41 @@ func TestDoRetriesOn503ThenSucceeds(t *testing.T) {
 	require.Equal(t, int32(2), atomic.LoadInt32(&calls))
 }
 
+func TestDoRetriesUnauthorizedFiveTimesByDefaultThenSucceeds(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) <= 5 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"exportId":"exp-1","state":"SUCCEEDED"}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	exp, err := c.GetExport(context.Background(), "10", "exp-1")
+	require.NoError(t, err)
+	require.Equal(t, ExportStateSucceeded, exp.State)
+	require.Equal(t, int32(6), atomic.LoadInt32(&calls))
+}
+
+func TestDoStopsAfterFiveBadGatewayRetriesByDefault(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("bad gateway"))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.GetExport(context.Background(), "10", "exp-1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "http 502")
+	require.Equal(t, int32(6), atomic.LoadInt32(&calls))
+}
+
 func TestDoDoesNotRetryOn400(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
