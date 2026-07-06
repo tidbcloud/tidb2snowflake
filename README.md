@@ -1,243 +1,263 @@
-# tidb2snowflake
+# TiDB2Snowflake
 
-Replicate snapshot and incremental data from a **TiDB** cluster into
-**Snowflake**.
+Replicate snapshot and incremental data from TiDB to Snowflake through object storage.
 
-The default source deployment mode is **TiDB Cloud**. In that mode the tool
-drives the managed cluster through **TiDB Cloud OpenAPI**:
+TiDB2Snowflake supports both:
 
-- **Snapshot** — `ExportService.CreateExport` exports the full snapshot (CSV) to
-  your object storage.
-- **Incremental** — `ChangefeedService.CreateChangefeed` streams change data
-  (CSV) to the same object storage via a `CLOUD_STORAGE` sink.
+- TiDB Cloud source mode (managed export + changefeed via OpenAPI)
+- OP source mode (Dumpling snapshot + TiCDC OpenAPI v2 changefeed)
 
-For OP-deployed TiDB clusters, set `source = "op"` in the config file. In OP
-mode the tool uses the configured TiDB SQL endpoint directly and creates a TiCDC
-OpenAPI v2 cloud-storage changefeed against `ticdc.address`; snapshots are
-dumped with Dumpling into the same object storage layout.
+It is designed for resumable replication with state persisted in object storage.
 
-The tool then loads the snapshot and applies the incremental changes into
-Snowflake.
+## Choose Your Journey
 
+- **Just want to use the tool?** Jump straight to [Install](#install)
+- **Want to hack on the code?** Skip to [Contributor Guide](#contributor-guide)
+
+## Table of Contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Usage](#usage)
+- [Configuration & Runtime Behavior](#configuration--runtime-behavior)
+- [Reference](#reference)
+- [Contributor Guide](#contributor-guide)
+    - [Development Workflow](#development-workflow)
+    - [How to Contribute](#how-to-contribute)
+- [License](#license)
+
+## Features
+
+- Snapshot + incremental replication into Snowflake
+- Source mode switch: `tidbcloud` and `op`
+- Resumable execution with persisted replication state
+- Configurable changefeed flush interval, file size, and RCU
+- Automatic mode/source normalization (case-insensitive config values)
+- DDL-aware incremental loading pipeline
+
+## Architecture
+
+```text
+TiDB Cloud export / OP Dumpling snapshot ----+
+                                             +--> S3-compatible storage --> tidb2snowflake --> Snowflake
+TiDB Cloud changefeed / OP TiCDC changefeed -+
 ```
-TiDB Cloud cluster --(OpenAPI export)---+
-                                        +-> object storage (S3) -> tidb2snowflake -> Snowflake
-TiDB Cloud cluster --(OpenAPI cdc)------+
 
-OP TiDB cluster --(Dumpling snapshot)---+
-                                        +-> object storage (S3) -> tidb2snowflake -> Snowflake
-OP TiCDC service --(OpenAPI cdc)--------+
-```
+## Prerequisites
 
-## Status
+- Go 1.23+ (for building from source)
+- S3-compatible storage
+- Snowflake account, warehouse, and target database
 
-Under active development. The CLI can orchestrate TiDB Cloud OpenAPI or OP
-TiDB/TiCDC sources, persist replication state in object storage, and load
-snapshot / incremental data into Snowflake.
+For `source = "tidbcloud"`:
 
-## Build from source
+- TiDB Cloud cluster
+- TiDB Cloud API credentials when create flow needs to create/wait managed jobs
+
+For `source = "op"`:
+
+- TiDB SQL endpoint
+- TiCDC OpenAPI endpoint
+
+## Usage
+
+### Install
+
+Build from source:
 
 ```bash
 git clone https://github.com/tidbcloud/tidb2snowflake.git
 cd tidb2snowflake
-make build       # produces bin/tidb2snowflake
+make build
 ```
+
+Check version:
 
 ```bash
 ./bin/tidb2snowflake version
 ```
 
-## Project layout
+### Quick Start
 
-| Path | Description |
-|------|-------------|
-| `main.go` | CLI entrypoint (cobra) |
-| `pkg/snowflake` | Snowflake connector, DDL translation, type mapping |
-| `pkg/tidb` | TiDB connection and schema/DDL helpers |
-| `pkg/utils` | Shared helpers (CSV escaping, incremental table columns) |
-| `pkg/metrics` | Prometheus metrics |
-| `pkg/tidbcloud` | TiDB Cloud OpenAPI client |
-| `pkg/ticdc` | Direct TiCDC OpenAPI v2 client |
-| `pkg/dumpling` | Dumpling snapshot wrapper for OP deployments |
-| `pkg/state` | Replication state file manager |
-| `snapshot` | Snapshot loading into Snowflake |
-| `incremental` | Incremental CDC apply into Snowflake |
-| `version` | Build/version info |
-
-## Requirements
-
-- For the default `source = "tidbcloud"`: a TiDB Cloud Serverless / Essential
-  cluster and an API key (public/private).
-- For `source = "op"`: a TiDB SQL endpoint and a reachable TiCDC OpenAPI service
-  address.
-- A Snowflake account, warehouse, and target database.
-- Object storage (S3) writable by the export/changefeed and readable by this tool.
-
-Snowflake target objects use this layout:
-
-```text
-<snowflake_database>.<source_database>.<source_table>
-```
-
-Regular source identifiers are created as uppercase Snowflake identifiers so
-they can be queried without double quotes. For example, source table `source.t`
-loads into `ODS_DB.SOURCE.T` when `snowflake.database = "ODS_DB"` is used. The
-loader also creates one internal external stage at
-`<snowflake_database>.TIDB2SNOWFLAKE_INTERNAL.TIDB2SNOWFLAKE_EXTERNAL`.
-
-## Configuration
-
-The `create` command reads runtime settings from a TOML file:
+1. Copy and edit config:
 
 ```bash
-./bin/tidb2snowflake create --config config.toml
-# or
+cp config.example.toml config.toml
+
+# Modify the example configurations to your own.
+```
+
+2. Start replication:
+
+```bash
 ./bin/tidb2snowflake create -c config.toml
 ```
 
-Minimal TiDB Cloud config:
-
-```toml
-mode = "all"
-source = "tidbcloud"
-tables = ["db1.t1"]
-
-[storage]
-uri = "s3://bucket/path?region=us-west-2"
-access-key = "..."
-secret-access-key = "..."
-
-[snowflake]
-account-id = "org-account"
-user = "..."
-password = "..."
-database = "ODS_DB"
-warehouse = "COMPUTE_WH"
-
-[tidbcloud]
-cluster-id = "..."
-public-key = "..."
-private-key = "..."
-host = ""
-```
-
-## Source deployment modes
-
-`source = "tidbcloud"` is the default.
-TiDB Cloud API parameters are only needed when the tool must create or wait on a
-managed export/changefeed. Configure TiDB Cloud OpenAPI in the config file:
-
-```toml
-[tidbcloud]
-cluster-id = "..."
-public-key = "..."
-private-key = "..."
-host = ""
-```
-
-`source = "op"` uses the direct TiDB and TiCDC services instead of TiDB Cloud
-OpenAPI. Add TiDB and TiCDC sections to the config file:
-
-```toml
-mode = "all"
-source = "op"
-tables = ["db1.t1"]
-
-[storage]
-uri = "s3://bucket/path?region=us-west-2"
-access-key = "..."
-secret-access-key = "..."
-
-[tidb]
-host = "tidb.example.com"
-port = 4000
-user = "root"
-password = ""
-tls = false
-ssl-ca = ""
-
-[ticdc]
-address = "http://ticdc.example.com:8300"
-
-[snowflake]
-account-id = "org-account"
-user = "..."
-password = "..."
-database = "ODS_DB"
-warehouse = "COMPUTE_WH"
-```
-
-In OP mode with `mode = "all"`, the tool records a TiDB TSO, creates a TiCDC cloud-storage
-changefeed from that TSO, waits for the changefeed to become running, then dumps
-the snapshot with Dumpling. After Dumpling finishes, `snapshot/metadata` `Pos`
-is read back as the final snapshot TSO. `snapshot.concurrency` controls Dumpling
-snapshot dump concurrency in OP mode.
-
-`changefeed.rcu` defaults to `2` to request that TiDB Cloud changefeed RCU tier.
-Omitting it or setting it to `0` uses `2`. The tool fetches the cluster's
-available changefeed specifications before creating the changefeed and fails
-fast if the requested value is not available.
-
-To delete the changefeed associated with the task recorded in
-`replication-state.json`, use the same config file. The command asks for `y/N`
-confirmation before it deletes anything:
+3. Delete the corresponding changefeed (with confirmation prompt):
 
 ```bash
-./bin/tidb2snowflake delete --config config.toml
-# or
 ./bin/tidb2snowflake delete -c config.toml
 ```
 
-## Reusing an existing export / changefeed
+### Commands
 
-If state contains an existing export or changefeed id, the tool waits for that
-same source job on restart. If no source job id exists, the tool checks whether
-the storage already contains `snapshot/` or `increment/` data. If it does, that
-source creation step is skipped and the existing data is used.
+- `version`: print build/version information
+- `create`: run snapshot/incremental replication into Snowflake
+- `delete`: delete the changefeed ID recorded in state and clear it from state
 
-For snapshot data, `snapshot/metadata` `Pos` is the final source of truth for
-the initial `checkpoint_ts`. Snapshot load is all-or-nothing at the phase level:
-after all configured snapshot files have been loaded into Snowflake,
-`checkpoint_ts` and `snapshot_finished=true` are written together. On the next
-run, `snapshot_finished=true` skips snapshot loading.
+Notes:
 
-Snapshot export compression defaults to `none`; set
-`snapshot.compression = "gzip"` to ask TiDB Cloud export for gzip CSV files and
-configure Snowflake `COPY` to read gzip input. Use `increment.scan-interval` to
-tune how often the loader scans incremental storage; the default is `1m`.
+- `create` and `delete` both use TOML config (`-c, --config`)
+- `delete` asks for `y/N` confirmation
+- For `delete` with `source = "tidbcloud"`, `tidbcloud.cluster-id`, `tidbcloud.public-key`, and `tidbcloud.private-key` are required
 
-## Type mapping
+## Configuration & Runtime Behavior
 
-The target Snowflake type is derived from TiDB column metadata. The table below
-documents the intended mapping for the supported scalar type families.
+### Configuration
 
-| TiDB type family | Snowflake type | Notes |
-|---|---|---|
-| `BOOL`, `BOOLEAN` | `BOOLEAN` | Boolean values. |
-| `TINYINT`, `SMALLINT`, `MEDIUMINT`, `INT`, `BIGINT` | `NUMBER` | Signed and unsigned integer variants map to `NUMBER`. |
-| `YEAR` | `NUMBER` | Preserves the numeric year value. |
-| `FLOAT`, `DOUBLE` | `FLOAT` | Approximate numeric values. |
-| `DECIMAL`, `NUMERIC` | `NUMBER(p, s)` | Must fit Snowflake precision/scale limits. Unsigned decimals with precision greater than 38 are stored as `VARCHAR`. |
-| `DATE` | `DATE` | Date values. |
-| `DATETIME` | `DATETIME(p)` | Precision follows TiDB metadata. |
-| `TIMESTAMP` | `TIMESTAMP(p)` | Precision follows TiDB metadata. |
-| `TIME` | `TIME(p)` | Precision follows TiDB metadata. |
-| `CHAR`, `VARCHAR` | `CHAR(n)`, `VARCHAR(n)` | Length follows TiDB metadata. |
-| `TINYTEXT`, `TEXT`, `MEDIUMTEXT`, `LONGTEXT` | `TEXT` | Text values. |
-| `ENUM` | `VARCHAR` | Stores the selected enum label as text. |
-| `SET` | `VARCHAR` | Stores the selected set labels as text. |
-| `JSON` | `VARCHAR` | Stores the JSON text. It is not loaded as Snowflake `VARIANT`. |
-| `VECTOR` | `VARCHAR` | Stores the textual vector representation. |
-| `BIT` | `NUMBER` | TiCDC CSV encodes bit values as integers. |
-| `BINARY`, `VARBINARY`, `TINYBLOB`, `BLOB`, `MEDIUMBLOB`, `LONGBLOB` | `BINARY(n)` | Binary values are loaded with hex decoding for incremental files. `LONGBLOB` is capped at Snowflake's 64 MB `BINARY` limit. |
+Use `config.example.toml` as the template.
 
-## Known limitations
+### Run Modes
 
-- Only Snowflake is supported as the target.
-- Only tables with a primary key are supported.
-- Not all DDLs are supported (TiDB and Snowflake are not fully type-compatible).
-- Binary values larger than Snowflake's `BINARY` limit fail during load. The tool does not truncate, skip, or ignore those columns.
+- `mode = "all"` (default): snapshot + incremental
+- `mode = "snapshot-only"`: snapshot only
+- `mode = "incremental-only"`: incremental only (requires snapshot finished state)
+
+`mode` and `source` are normalized to lowercase before validation.
+
+### Parameter Reference
+
+`Required` means required by `create` validation.
+
+| Key | Type | Required | Default | Applies to | Description |
+|---|---|---|---|---|---|
+| `mode` | string | No | `all` | all | `all`, `snapshot-only`, `incremental-only` |
+| `source` | string | No | `tidbcloud` | all | `tidbcloud` or `op` |
+| `tables` | array[string] | Yes | none | all | Source tables to replicate |
+| `storage.uri` | string | Yes | none | all | S3 URI for snapshot, incremental, and state |
+| `storage.access-key` | string | Yes | none | all | S3 access key |
+| `storage.secret-access-key` | string | Yes | none | all | S3 secret access key |
+| `snowflake.account-id` | string | Yes | none | all | Snowflake account ID |
+| `snowflake.user` | string | Yes | none | all | Snowflake user |
+| `snowflake.password` | string | Yes | none | all | Snowflake password |
+| `snowflake.database` | string | Yes | none | all | Target Snowflake database |
+| `snowflake.warehouse` | string | No | `COMPUTE_WH` | all | Snowflake warehouse |
+| `tidbcloud.cluster-id` | string | Conditional | none | `source=tidbcloud` | Cluster ID |
+| `tidbcloud.public-key` | string | Conditional | none | `source=tidbcloud` | API public key |
+| `tidbcloud.private-key` | string | Conditional | none | `source=tidbcloud` | API private key |
+| `tidbcloud.host` | string | No | empty | `source=tidbcloud` | Optional API host override |
+| `tidb.host` | string | No | `127.0.0.1` | `source=op` | TiDB SQL host |
+| `tidb.port` | int | No | `4000` | `source=op` | TiDB SQL port |
+| `tidb.user` | string | No | `root` | `source=op` | TiDB SQL user |
+| `tidb.password` | string | No | empty | `source=op` | TiDB SQL password |
+| `tidb.tls` | bool | No | `false` | `source=op` | Enable TLS to TiDB |
+| `tidb.ssl-ca` | string | No | empty | `source=op` | CA file path |
+| `ticdc.address` | string | Conditional | none | `source=op` | TiCDC OpenAPI address |
+| `snapshot.tso` | string | No | empty | all | Optional start TSO (>0 when set) |
+| `snapshot.compression` | string | No | `none` | all | `none` or `gzip` |
+| `snapshot.concurrency` | int | No | `8` | `source=op` | Dumpling concurrency |
+| `changefeed.flush-interval` | duration string | No | `60s` | all | Flush interval |
+| `changefeed.file-size` | int (MiB) | No | `64` | all | File size in MiB |
+| `changefeed.rcu` | int | No | `2` | `source=tidbcloud` | Optional changefeed RCU; `0` also uses `2`; negative is invalid |
+| `increment.scan-interval` | duration string | No | `1m` | all | Increment file scan interval |
+| `log.level` | string | No | `info` | all | Log level |
+| `log.file` | string | No | empty | all | Log file path |
+
+### State and Resume Behavior
+
+Replication state is stored in object storage and used for restart/resume behavior.
+
+- Existing export/changefeed IDs in state are reused on restart
+- Existing snapshot/increment storage data may skip source creation phase
+- Snapshot completion is committed atomically with checkpoint update
+
+For delete flow, the command reads `task_info.changefeed_id` from state.
+
+## Reference
+
+### Type Mapping
+
+The main type mapping rules:
+
+- Integer types -> `NUMBER`
+- `DECIMAL`/`NUMERIC` -> `NUMBER(p, s)`
+- Temporal types -> Snowflake temporal types
+- `JSON`/`VECTOR` -> `VARCHAR`
+- Binary families -> `BINARY(n)` with Snowflake size constraints
+
+See source tests and mapping implementation for detailed edge cases.
+
+### Project Structure
+
+| Path | Description |
+|---|---|
+| `main.go` | CLI entrypoint |
+| `cmd/` | Commands, config parsing, validation |
+| `source/` | Source preparation logic |
+| `snapshot/` | Snapshot loading |
+| `incremental/` | Incremental loading |
+| `pkg/snowflake/` | Snowflake connector and SQL/DDL helpers |
+| `pkg/tidbcloud/` | TiDB Cloud API client |
+| `pkg/ticdc/` | TiCDC API client |
+| `pkg/dumpling/` | Dumpling helpers |
+| `pkg/state/` | Replication state management |
+
+### Known Limitations
+
+- Snowflake is the only supported target
+- Source tables must have primary keys
+- Not all DDL is supported across TiDB and Snowflake compatibility boundaries
+- Binary values larger than Snowflake limits fail during load
+
+## Contributor Guide
+
+This section covers the local development loop and how to contribute changes.
+
+### Development Workflow
+
+Common commands:
+
+```bash
+make fmt
+make test
+make build
+```
+
+End-to-end tests:
+
+```bash
+make e2e
+```
+
+Local helper scripts:
+
+- `scripts/local_tiup_s3_snowflake_e2e.sh`
+- `scripts/local_tiup_ddl_matrix_smoke.sh`
+- `scripts/compare_table_counts.sh`
+
+Pull request checklist:
+
+1. Fork the repository and create a feature branch.
+2. Make your code and test updates.
+3. Run the local checks listed above before opening a PR.
+4. If your change affects runtime behavior, add or update docs and tests.
+5. Open a PR with a clear problem statement, scope, and validation notes.
+
+Recommended areas to start with:
+
+- CLI/config validation in `cmd/`
+- Source orchestration in `source/`
+- Snowflake loading and SQL generation in `pkg/snowflake/`
+
+### How to Contribute
+
+Contributions are welcome.
+
+- Open an issue for discussion before major changes
+- Keep tests updated with behavior changes
+- Run `make fmt test` before submitting a PR
 
 ## License
 
-[Apache 2.0](LICENSE)
+Apache 2.0. See `LICENSE`.
