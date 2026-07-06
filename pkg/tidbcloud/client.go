@@ -26,7 +26,7 @@ const (
 	DefaultHost = "serverless.tidbapi.com"
 
 	defaultTimeout    = 30 * time.Second
-	defaultMaxRetries = 3
+	defaultMaxRetries = 5
 	maxBackoff        = 5 * time.Second
 )
 
@@ -66,7 +66,7 @@ func WithTimeout(d time.Duration) Option {
 }
 
 // WithMaxRetries sets how many times retriable failures (network errors and
-// 429/5xx responses) are retried (default 3).
+// 401/429/5xx responses) are retried (default 5).
 func WithMaxRetries(n int) Option {
 	return func(c *Client) {
 		if n >= 0 {
@@ -245,7 +245,8 @@ func backoff(attempt int) time.Duration {
 
 func isRetriableStatus(code int) bool {
 	switch code {
-	case http.StatusTooManyRequests,
+	case http.StatusUnauthorized,
+		http.StatusTooManyRequests,
 		http.StatusInternalServerError,
 		http.StatusBadGateway,
 		http.StatusServiceUnavailable,
