@@ -26,18 +26,19 @@ const (
 	DefaultHost = "serverless.tidbapi.com"
 
 	defaultTimeout    = 30 * time.Second
-	defaultMaxRetries = 3
+	defaultMaxRetries = 5
 	maxBackoff        = 5 * time.Second
 )
 
 // Client talks to the TiDB Cloud Serverless OpenAPI using HTTP Digest
 // authentication with an API key (public/private).
 type Client struct {
-	baseURL    string
-	publicKey  string
-	privateKey string
-	timeout    time.Duration
-	maxRetries int
+	baseURL      string
+	publicKey    string
+	privateKey   string
+	timeout      time.Duration
+	maxRetries   int
+	retryBackoff func(int) time.Duration
 
 	baseTransport http.RoundTripper
 	httpClient    *http.Client
@@ -66,7 +67,7 @@ func WithTimeout(d time.Duration) Option {
 }
 
 // WithMaxRetries sets how many times retriable failures (network errors and
-// 429/5xx responses) are retried (default 3).
+// 401/429/5xx responses) are retried (default 5).
 func WithMaxRetries(n int) Option {
 	return func(c *Client) {
 		if n >= 0 {
@@ -89,11 +90,12 @@ func NewClient(publicKey, privateKey string, opts ...Option) (*Client, error) {
 		return nil, errors.New("tidbcloud: public and private API key are required")
 	}
 	c := &Client{
-		baseURL:    "https://" + DefaultHost,
-		publicKey:  publicKey,
-		privateKey: privateKey,
-		timeout:    defaultTimeout,
-		maxRetries: defaultMaxRetries,
+		baseURL:      "https://" + DefaultHost,
+		publicKey:    publicKey,
+		privateKey:   privateKey,
+		timeout:      defaultTimeout,
+		maxRetries:   defaultMaxRetries,
+		retryBackoff: backoff,
 	}
 	for _, o := range opts {
 		o(c)
@@ -130,10 +132,14 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if attempt > 0 {
+			backoffDelay := backoff(attempt)
+			if c.retryBackoff != nil {
+				backoffDelay = c.retryBackoff(attempt)
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(backoff(attempt)):
+			case <-time.After(backoffDelay):
 			}
 		}
 
@@ -245,7 +251,8 @@ func backoff(attempt int) time.Duration {
 
 func isRetriableStatus(code int) bool {
 	switch code {
-	case http.StatusTooManyRequests,
+	case http.StatusUnauthorized,
+		http.StatusTooManyRequests,
 		http.StatusInternalServerError,
 		http.StatusBadGateway,
 		http.StatusServiceUnavailable,
