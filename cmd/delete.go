@@ -55,7 +55,6 @@ func newDeleteCmdWithRun(run func(context.Context, *Option) error) *cobra.Comman
 				log.Error("delete changefeed failed", zap.Error(err))
 				return err
 			}
-			log.Info("delete changefeed finished")
 			return nil
 		},
 	}
@@ -96,8 +95,12 @@ func runDeleteWithIO(ctx context.Context, opt *Option, in io.Reader, out io.Writ
 	if changefeedID == "" {
 		return errors.New("state task_info.changefeed_id is empty")
 	}
-	if err := confirmChangefeedDeletion(in, out); err != nil {
+	confirmed, err := confirmChangefeedDeletion(in, out)
+	if err != nil {
 		return err
+	}
+	if !confirmed {
+		return nil
 	}
 
 	switch opt.SourceMode {
@@ -117,19 +120,22 @@ func runDeleteWithIO(ctx context.Context, opt *Option, in io.Reader, out io.Writ
 	return nil
 }
 
-func confirmChangefeedDeletion(in io.Reader, out io.Writer) error {
+func confirmChangefeedDeletion(in io.Reader, out io.Writer) (bool, error) {
 	if _, err := fmt.Fprint(out, "Delete the changefeed associated with this task? [y/N]: "); err != nil {
-		return errors.Trace(err)
+		return false, errors.Trace(err)
 	}
 	line, err := bufio.NewReader(in).ReadString('\n')
-	if err != nil && !(errors.Cause(err) == io.EOF && line != "") {
-		return errors.Annotate(err, "read delete confirmation")
+	if err != nil && errors.Cause(err) != io.EOF {
+		return false, errors.Annotate(err, "read delete confirmation")
 	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
-		return nil
+		return true, nil
 	default:
-		return errors.New("delete canceled")
+		if _, err := fmt.Fprintln(out, "Delete canceled."); err != nil {
+			return false, errors.Trace(err)
+		}
+		return false, nil
 	}
 }
 

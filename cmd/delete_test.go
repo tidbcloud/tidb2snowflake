@@ -11,30 +11,44 @@ import (
 func TestConfirmChangefeedDeletionAcceptsYes(t *testing.T) {
 	var out bytes.Buffer
 
-	err := confirmChangefeedDeletion(strings.NewReader("y\n"), &out)
+	confirmed, err := confirmChangefeedDeletion(strings.NewReader("y\n"), &out)
 
 	require.NoError(t, err)
+	require.True(t, confirmed)
 	require.Contains(t, out.String(), "Delete the changefeed associated with this task?")
 	require.Contains(t, out.String(), "[y/N]")
 	require.NotContains(t, out.String(), "cf-1")
 }
 
-func TestConfirmChangefeedDeletionRejectsNo(t *testing.T) {
+func TestConfirmChangefeedDeletionCancelsNo(t *testing.T) {
 	var out bytes.Buffer
 
-	err := confirmChangefeedDeletion(strings.NewReader("n\n"), &out)
+	confirmed, err := confirmChangefeedDeletion(strings.NewReader("n\n"), &out)
 
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "delete canceled")
+	require.NoError(t, err)
+	require.False(t, confirmed)
 	require.Contains(t, out.String(), "Delete the changefeed associated with this task?")
+	require.Contains(t, out.String(), "Delete canceled.")
 }
 
-func TestConfirmChangefeedDeletionRejectsEmptyInput(t *testing.T) {
+func TestConfirmChangefeedDeletionCancelsEmptyInput(t *testing.T) {
 	var out bytes.Buffer
 
-	err := confirmChangefeedDeletion(strings.NewReader("\n"), &out)
+	confirmed, err := confirmChangefeedDeletion(strings.NewReader("\n"), &out)
 
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "delete canceled")
+	require.NoError(t, err)
+	require.False(t, confirmed)
 	require.Contains(t, out.String(), "Delete the changefeed associated with this task?")
+	require.Contains(t, out.String(), "Delete canceled.")
+}
+
+func TestConfirmChangefeedDeletionCancelsEOF(t *testing.T) {
+	var out bytes.Buffer
+
+	confirmed, err := confirmChangefeedDeletion(strings.NewReader(""), &out)
+
+	require.NoError(t, err)
+	require.False(t, confirmed)
+	require.Contains(t, out.String(), "Delete the changefeed associated with this task?")
+	require.Contains(t, out.String(), "Delete canceled.")
 }
