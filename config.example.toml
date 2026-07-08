@@ -37,7 +37,7 @@ warehouse = "COMPUTE_WH"
 cluster-id = "1234567890123456789"
 public-key = "..."
 private-key = "..."
-# Optional. Leave empty to use the TiDB Cloud client default endpoint.
+# Optional. Leave empty to use serverless.tidbapi.com.
 host = ""
 
 # Used when source = "op"; ignored by TiDB Cloud source mode.

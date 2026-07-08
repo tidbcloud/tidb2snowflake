@@ -12,6 +12,7 @@ import (
 	"github.com/tidbcloud/tidb2snowflake/incremental"
 	"github.com/tidbcloud/tidb2snowflake/pkg/snowflake"
 	"github.com/tidbcloud/tidb2snowflake/pkg/tidb"
+	cloudapi "github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 	"github.com/tidbcloud/tidb2snowflake/snapshot"
 	"github.com/tidbcloud/tidb2snowflake/source"
 	"github.com/tidbcloud/tidb2snowflake/source/storage"
@@ -89,6 +90,7 @@ func NewOption() *Option {
 		TiDBHost:                "127.0.0.1",
 		TiDBPort:                4000,
 		TiDBUser:                "root",
+		TiDBCloudHost:           cloudapi.DefaultHost,
 		SnapshotConcurrency:     8,
 		SnowflakeWarehouse:      "COMPUTE_WH",
 		ChangefeedFlushInterval: 60 * time.Second,
@@ -206,6 +208,9 @@ func (opt *Option) adjust() {
 	opt.TiDBCloudPublicKey = strings.TrimSpace(opt.TiDBCloudPublicKey)
 	opt.TiDBCloudPrivateKey = strings.TrimSpace(opt.TiDBCloudPrivateKey)
 	opt.TiDBCloudHost = strings.TrimSpace(opt.TiDBCloudHost)
+	if opt.TiDBCloudHost == "" {
+		opt.TiDBCloudHost = defaults.TiDBCloudHost
+	}
 
 	opt.SourceMode = strings.ToLower(strings.TrimSpace(opt.SourceMode))
 	switch opt.SourceMode {
