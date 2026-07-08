@@ -146,7 +146,7 @@ Use `config.example.toml` as the template.
 | `tidbcloud.cluster-id` | string | Conditional | none | `source=tidbcloud` | Cluster ID |
 | `tidbcloud.public-key` | string | Conditional | none | `source=tidbcloud` | API public key |
 | `tidbcloud.private-key` | string | Conditional | none | `source=tidbcloud` | API private key |
-| `tidbcloud.host` | string | No | empty | `source=tidbcloud` | Optional API host override |
+| `tidbcloud.host` | string | No | `serverless.tidbapi.com` | `source=tidbcloud` | Optional API host override |
 | `tidb.host` | string | No | `127.0.0.1` | `source=op` | TiDB SQL host |
 | `tidb.port` | int | No | `4000` | `source=op` | TiDB SQL port |
 | `tidb.user` | string | No | `root` | `source=op` | TiDB SQL user |

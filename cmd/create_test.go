@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	cloudapi "github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 )
 
 func TestCreateCmdOnlyExposesConfigFlag(t *testing.T) {
@@ -110,6 +111,38 @@ database = "SNOW"
 	require.NotNil(t, captured)
 	require.Equal(t, "s3://bucket/path", captured.StoragePath)
 	require.Equal(t, 2, captured.ChangefeedRCU)
+}
+
+func TestCreateCmdDefaultsEmptyTiDBCloudHost(t *testing.T) {
+	var captured *Option
+	cmd := newCreateCmdWithRun(func(_ context.Context, opt *Option) error {
+		require.NoError(t, opt.validate())
+		captured = opt
+		return nil
+	})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--config", writeConfigFile(t, `
+tables = ["db1.t1"]
+
+[storage]
+uri = "s3://bucket/path"
+access-key = "AKIA"
+secret-access-key = "secret"
+
+[snowflake]
+account-id = "org-account"
+user = "sf-user"
+password = "sf-pass"
+database = "SNOW"
+
+[tidbcloud]
+host = "   "
+`)})
+
+	require.NoError(t, cmd.Execute())
+	require.NotNil(t, captured)
+	require.Equal(t, cloudapi.DefaultHost, captured.TiDBCloudHost)
 }
 
 func TestCreateCmdLoadsExplicitZeroChangefeedRCU(t *testing.T) {

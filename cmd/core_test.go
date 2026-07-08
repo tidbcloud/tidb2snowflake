@@ -10,6 +10,7 @@ import (
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
 	"github.com/tidbcloud/tidb2snowflake/pkg/state"
+	cloudapi "github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 )
 
 func baseOption() *Option {
@@ -31,6 +32,7 @@ func TestNewOptionDefaults(t *testing.T) {
 	require.Equal(t, "127.0.0.1", opt.TiDBHost)
 	require.Equal(t, 4000, opt.TiDBPort)
 	require.Equal(t, "root", opt.TiDBUser)
+	require.Equal(t, cloudapi.DefaultHost, opt.TiDBCloudHost)
 	require.Equal(t, 8, opt.SnapshotConcurrency)
 	require.Equal(t, "COMPUTE_WH", opt.SnowflakeWarehouse)
 	require.Equal(t, 60*time.Second, opt.ChangefeedFlushInterval)
