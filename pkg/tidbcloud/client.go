@@ -18,6 +18,7 @@ import (
 
 	"github.com/icholy/digest"
 	"github.com/pingcap/log"
+	"github.com/tidbcloud/tidb2snowflake/internal/httpclient"
 	"go.uber.org/zap"
 )
 
@@ -102,7 +103,7 @@ func NewClient(publicKey, privateKey string, opts ...Option) (*Client, error) {
 	}
 	base := c.baseTransport
 	if base == nil {
-		base = http.DefaultTransport
+		base = httpclient.NewEnvironmentProxyTransport()
 	}
 	c.httpClient = &http.Client{
 		Timeout: c.timeout,

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -312,6 +313,38 @@ func TestDoContextCancel(t *testing.T) {
 	c := newTestClient(t, srv.URL, WithMaxRetries(100))
 	_, err := c.GetExport(ctx, "10", "exp-1")
 	require.Error(t, err)
+}
+
+func TestClientUsesLowercaseHTTPProxyEnv(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+	t.Setenv("http_proxy", "")
+
+	targetURL, err := url.Parse("http://tidbcloud-proxy.example")
+	require.NoError(t, err)
+	// Prime the standard library proxy cache before setting http_proxy.
+	_, err = http.ProxyFromEnvironment(&http.Request{URL: targetURL})
+	require.NoError(t, err)
+
+	var proxiedURL string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxiedURL = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"exportId":"exp-1","state":"SUCCEEDED"}`))
+	}))
+	defer proxy.Close()
+	t.Setenv("http_proxy", proxy.URL)
+
+	c, err := NewClient("public-key", "private-key", WithMaxRetries(0))
+	require.NoError(t, err)
+	c.baseURL = targetURL.String()
+
+	exp, err := c.GetExport(context.Background(), "10", "exp-1")
+	require.NoError(t, err)
+	require.Equal(t, "exp-1", exp.ExportID)
+	require.Equal(t, "http://tidbcloud-proxy.example/v1beta1/clusters/10/exports/exp-1", proxiedURL)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
