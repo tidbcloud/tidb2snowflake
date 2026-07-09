@@ -2,6 +2,7 @@
 
 Replicate snapshot and incremental data from TiDB to Snowflake through object storage.
 
+
 TiDB2Snowflake supports both:
 
 - TiDB Cloud source mode (managed export + changefeed via OpenAPI)
