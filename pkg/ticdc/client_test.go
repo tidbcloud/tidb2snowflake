@@ -101,3 +101,33 @@ func TestClientWaitChangefeedFailsOnTerminalState(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ended in state failed")
 }
+
+func TestClientUsesLowercaseHTTPProxyEnv(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+	t.Setenv("http_proxy", "")
+
+	targetURL, err := url.Parse("http://ticdc-proxy.example")
+	require.NoError(t, err)
+	// Prime the standard library proxy cache before setting http_proxy.
+	_, err = http.ProxyFromEnvironment(&http.Request{URL: targetURL})
+	require.NoError(t, err)
+
+	var proxiedURL string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxiedURL = r.URL.String()
+		_, _ = w.Write([]byte(`{"id":"cf-1","state":"normal"}`))
+	}))
+	defer proxy.Close()
+	t.Setenv("http_proxy", proxy.URL)
+
+	client, err := NewClient(targetURL.String())
+	require.NoError(t, err)
+
+	cf, err := client.GetChangefeed(context.Background(), "cf-1")
+	require.NoError(t, err)
+	require.Equal(t, "cf-1", cf.ID)
+	require.Equal(t, "http://ticdc-proxy.example/api/v2/changefeeds/cf-1?namespace=default", proxiedURL)
+}

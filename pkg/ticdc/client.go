@@ -17,6 +17,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	putil "github.com/pingcap/ticdc/pkg/util"
+	"github.com/tidbcloud/tidb2snowflake/internal/httpclient"
 )
 
 type ChangefeedConfig = apiv2.ChangefeedConfig
@@ -61,7 +62,7 @@ func NewClient(address string, opts ...Option) (*Client, error) {
 	}
 	c := &Client{
 		baseURL:    baseURL,
-		httpClient: http.DefaultClient,
+		httpClient: &http.Client{Transport: httpclient.NewEnvironmentProxyTransport()},
 	}
 	for _, opt := range opts {
 		opt(c)
