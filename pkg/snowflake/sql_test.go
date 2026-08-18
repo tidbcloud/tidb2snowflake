@@ -102,6 +102,8 @@ CREATE TABLE `+"`bank0`"+` (
   `+"`balance`"+` decimal,
   `+"`name`"+` varchar(30) DEFAULT 'Z',
   `+"`created_at`"+` datetime DEFAULT CURRENT_TIMESTAMP,
+  `+"`stored_col`"+` bigint GENERATED ALWAYS AS (`+"`id`"+` + 1) STORED,
+  `+"`virtual_col`"+` bigint GENERATED ALWAYS AS (`+"`id`"+` + 2) VIRTUAL,
   PRIMARY KEY (`+"`id`"+`)
 	);`)
 	got := buildCreateTableSQL("ODS_DB", tableSchema)

@@ -25,6 +25,7 @@ CREATE TABLE ` + "`bank0`" + ` (
   ` + "`updated_at`" + ` datetime(3) DEFAULT CURRENT_TIMESTAMP(3),
   ` + "`payload`" + ` blob,
   ` + "`virtual_col`" + ` bigint GENERATED ALWAYS AS (` + "`id`" + ` + 1) VIRTUAL,
+  ` + "`stored_col`" + ` bigint GENERATED ALWAYS AS (` + "`id`" + ` + 2) STORED,
   PRIMARY KEY (` + "`id`" + `) /*T![clustered_index] CLUSTERED */
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;`
 
@@ -36,6 +37,11 @@ CREATE TABLE ` + "`bank0`" + ` (
 	require.Equal(t, "decimal", balance.Tp)
 	require.Equal(t, "10", balance.Precision)
 	require.Equal(t, "0", balance.Scale)
+	columnNames := make([]string, 0, len(tableSchema.Columns))
+	for _, column := range tableSchema.Columns {
+		columnNames = append(columnNames, column.Name)
+	}
+	require.Equal(t, []string{"id", "balance", "name", "created_at", "updated_at", "payload"}, columnNames)
 }
 
 func TestParseExtendedColumnTypes(t *testing.T) {

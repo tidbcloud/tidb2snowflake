@@ -197,9 +197,7 @@ func newColumnFromAstDef(colDef *ast.ColumnDef) (Column, bool) {
 			}
 			col.Default = defaultValue
 		case ast.ColumnOptionGenerated:
-			if !opt.Stored {
-				return col, true
-			}
+			return col, true
 		}
 	}
 	return col, false
