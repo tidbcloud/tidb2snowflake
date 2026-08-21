@@ -7,12 +7,14 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
+	cloudapi "github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 )
 
 type configFile struct {
-	Mode   string   `toml:"mode"`
-	Source string   `toml:"source"`
-	Tables []string `toml:"tables"`
+	Mode            string                 `toml:"mode"`
+	Source          string                 `toml:"source"`
+	Tables          []string               `toml:"tables"`
+	ColumnSelectors []columnSelectorConfig `toml:"column-selectors"`
 
 	Storage    storageConfig    `toml:"storage"`
 	TiDB       tidbConfig       `toml:"tidb"`
@@ -29,6 +31,11 @@ type storageConfig struct {
 	URI             string `toml:"uri"`
 	AccessKey       string `toml:"access-key"`
 	SecretAccessKey string `toml:"secret-access-key"`
+}
+
+type columnSelectorConfig struct {
+	Matcher []string `toml:"matcher"`
+	Columns []string `toml:"columns"`
 }
 
 type tidbConfig struct {
@@ -101,6 +108,15 @@ func loadConfig(path string) (*Option, *logger.Config, error) {
 	opt.Mode = cfg.Mode
 	opt.SourceMode = cfg.Source
 	opt.Tables = cfg.Tables
+	if len(cfg.ColumnSelectors) > 0 {
+		opt.ColumnSelectors = make([]cloudapi.ColumnSelector, 0, len(cfg.ColumnSelectors))
+		for _, selector := range cfg.ColumnSelectors {
+			opt.ColumnSelectors = append(opt.ColumnSelectors, cloudapi.ColumnSelector{
+				Matcher: selector.Matcher,
+				Columns: selector.Columns,
+			})
+		}
+	}
 
 	opt.StoragePath = cfg.Storage.URI
 	opt.AWSAccessKey = cfg.Storage.AccessKey

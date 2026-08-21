@@ -186,6 +186,19 @@ func TestValidateConfig(t *testing.T) {
 	require.Contains(t, err.Error(), "changefeed.rcu must be greater than 0")
 }
 
+func TestValidateRejectsColumnSelectorsForOP(t *testing.T) {
+	opt := baseOption()
+	opt.SourceMode = sourceModeOP
+	opt.Mode = runModeSnapshotOnly
+	opt.ColumnSelectors = []cloudapi.ColumnSelector{{
+		Matcher: []string{"db1.t1"},
+		Columns: []string{"*", "!customer_email"},
+	}}
+
+	err := opt.validate()
+	require.ErrorContains(t, err, "column-selectors is currently supported only when source=tidbcloud")
+}
+
 func TestMarkSnapshotFinishedSetsCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	store, err := util.GetExternalStorageWithDefaultTimeout(ctx, (&url.URL{Scheme: "file", Path: t.TempDir()}).String())

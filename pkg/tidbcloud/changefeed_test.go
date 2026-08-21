@@ -78,8 +78,35 @@ func TestCreateChangefeedCloudStorageBody(t *testing.T) {
 	require.Equal(t, string(StartModeFromTSO), startPosition["mode"])
 	require.Equal(t, "449023000000000000", startPosition["tso"])
 	require.Equal(t, float64(8), gotBody["rcu"])
+	require.NotContains(t, cloudStorage, "columnSelectors")
 
 	require.Equal(t, "cf-1", cf.ChangefeedID)
+}
+
+func TestCreateChangefeedCloudStorageColumnSelectorsBody(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"changefeedId":"cf-1","state":"CREATING"}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.CreateChangefeed(context.Background(), "10", &CreateChangefeedRequest{Sink: &Sink{
+		Type: ChangefeedTypeCloudStorage,
+		CloudStorage: &CloudStorageSink{ColumnSelectors: []ColumnSelector{{
+			Matcher: []string{"db1.t1"},
+			Columns: []string{"*", "!customer_email"},
+		}}},
+	}})
+	require.NoError(t, err)
+
+	cloudStorage := gotBody["sink"].(map[string]any)["cloudStorage"].(map[string]any)
+	require.Equal(t, []any{map[string]any{
+		"matcher": []any{"db1.t1"},
+		"columns": []any{"*", "!customer_email"},
+	}}, cloudStorage["columnSelectors"])
 }
 
 func TestListChangefeedSpecifications(t *testing.T) {

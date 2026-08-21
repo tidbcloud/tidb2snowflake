@@ -78,6 +78,7 @@ type Option struct {
 	IncrementScanInterval   time.Duration
 	SnapshotCompression     string
 	SnapshotCSVNullValue    string
+	ColumnSelectors         []cloudapi.ColumnSelector
 
 	SourceMode string
 
@@ -153,6 +154,7 @@ func (opt *Option) prepareRequest(
 		ChangefeedRCU:           opt.ChangefeedRCU,
 
 		SnapshotCompression: opt.SnapshotCompression,
+		ColumnSelectors:     opt.ColumnSelectors,
 
 		Credential:   cred,
 		SnapshotURI:  snapshotURI,
@@ -270,6 +272,9 @@ func (opt *Option) validate() error {
 	opt.adjust()
 
 	if opt.SourceMode == sourceModeOP {
+		if len(opt.ColumnSelectors) > 0 {
+			return errors.New("column-selectors is currently supported only when source=tidbcloud")
+		}
 		if opt.Mode != runModeSnapshotOnly && opt.TiCDCAddress == "" {
 			return errors.New("ticdc.address is required when source=op")
 		}
@@ -298,6 +303,14 @@ func (opt *Option) validate() error {
 
 	if len(opt.Tables) == 0 {
 		return errors.New("tables is required")
+	}
+	for i, selector := range opt.ColumnSelectors {
+		if len(selector.Matcher) == 0 {
+			return errors.Errorf("column-selectors[%d].matcher is required", i)
+		}
+		if len(selector.Columns) == 0 {
+			return errors.Errorf("column-selectors[%d].columns is required", i)
+		}
 	}
 	if opt.ChangefeedRCU < 0 {
 		return errors.New("changefeed.rcu must be greater than 0")
@@ -328,6 +341,7 @@ func (opt *Option) logSummary() {
 
 	log.Info("replication options validated",
 		zap.Int("tableCount", len(opt.Tables)),
+		zap.Int("columnSelectorCount", len(opt.ColumnSelectors)),
 		zap.String("mode", opt.Mode),
 		zap.String("sourceMode", opt.SourceMode),
 		zap.String("storage", storage),

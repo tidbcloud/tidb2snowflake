@@ -48,12 +48,36 @@ func TestCreateExportRequestAndResponse(t *testing.T) {
 	require.Equal(t, "449023000000000000", gotBody.ExportOptions.SnapshotTSO)
 	require.Equal(t, ExportFileTypeCSV, gotBody.ExportOptions.FileType)
 	require.Equal(t, []string{"db1.t1"}, gotBody.ExportOptions.Filter.Table.Patterns)
+	require.Nil(t, gotBody.ExportOptions.ColumnSelectors)
 	require.Equal(t, ExportTargetTypeS3, gotBody.Target.Type)
 	require.Equal(t, "s3://bucket/snapshot", gotBody.Target.S3.URI)
 	require.Equal(t, "AKIA", gotBody.Target.S3.AccessKey.ID)
 
 	require.Equal(t, "exp-9", exp.ExportID)
 	require.Equal(t, "449023000000000000", exp.SnapshotTSO)
+}
+
+func TestCreateExportColumnSelectorsRequest(t *testing.T) {
+	var gotBody CreateExportRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"exportId":"exp-9","state":"RUNNING"}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.CreateExport(context.Background(), "10", &CreateExportRequest{ExportOptions: &ExportOptions{
+		ColumnSelectors: []ColumnSelector{{
+			Matcher: []string{"db1.t1"},
+			Columns: []string{"*", "!customer_email"},
+		}},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, []ColumnSelector{{
+		Matcher: []string{"db1.t1"},
+		Columns: []string{"*", "!customer_email"},
+	}}, gotBody.ExportOptions.ColumnSelectors)
 }
 
 func TestWaitExportReturnsSucceededExport(t *testing.T) {

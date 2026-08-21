@@ -136,6 +136,9 @@ type CloudStorageSink struct {
 	// OutputColumnID adds source column IDs to the CSV schema files so the
 	// consumer can map columns by ID across DDL changes.
 	OutputColumnID bool `json:"outputColumnId,omitempty"`
+	// ColumnSelectors select columns emitted for matching tables. When omitted,
+	// the changefeed keeps the server's legacy all-column behavior.
+	ColumnSelectors []ColumnSelector `json:"columnSelectors,omitempty"`
 }
 
 // CloudStorage selects the storage backend and its credentials.

@@ -36,6 +36,7 @@ type Request struct {
 	ChangefeedFileSizeMiB   int
 	ChangefeedRCU           int
 	SnapshotCompression     string
+	ColumnSelectors         []cloudapi.ColumnSelector
 
 	Credential   *aws.Credentials
 	SnapshotURI  *url.URL
@@ -120,6 +121,7 @@ func (request Request) tidbCloudConfig() tidbcloud.Config {
 		ChangefeedRCU:           request.ChangefeedRCU,
 		SnapshotCompression:     compression,
 		SnapshotTSO:             request.SnapshotTSO,
+		ColumnSelectors:         request.ColumnSelectors,
 		Credential:              request.Credential,
 	}
 }
