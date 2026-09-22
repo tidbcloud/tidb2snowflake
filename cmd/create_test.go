@@ -48,6 +48,10 @@ mode = "all"
 source = "tidbcloud"
 tables = ["db1.t1", "db2.t2"]
 
+[[column-selectors]]
+matcher = ["db1.t1"]
+columns = ["*", "!customer_email"]
+
 [storage]
 uri = "s3://bucket/path?region=us-west-2"
 access-key = "AKIA"
@@ -81,6 +85,10 @@ rcu = 8
 	require.Equal(t, "private-from-config", captured.TiDBCloudPrivateKey)
 	require.Equal(t, "api.config.example.com", captured.TiDBCloudHost)
 	require.Equal(t, 8, captured.ChangefeedRCU)
+	require.Equal(t, []cloudapi.ColumnSelector{{
+		Matcher: []string{"db1.t1"},
+		Columns: []string{"*", "!customer_email"},
+	}}, captured.ColumnSelectors)
 }
 
 func TestCreateCmdLoadsConfigWithShorthand(t *testing.T) {

@@ -30,6 +30,7 @@ type Config struct {
 	ChangefeedRCU           int
 	SnapshotCompression     tidbcloud.ExportCompression
 	SnapshotTSO             string
+	ColumnSelectors         []tidbcloud.ColumnSelector
 
 	Credential *aws.Credentials
 }
@@ -300,6 +301,7 @@ func buildChangefeedRequest(cfg Config, cleanIncrementURI string, cred *aws.Cred
 				DateSeparator:     tidbcloud.DateSeparatorDay,
 				IntervalInSeconds: int(cfg.ChangefeedFlushInterval.Seconds()),
 				SizeInMiB:         cfg.ChangefeedFileSizeMiB,
+				ColumnSelectors:   cfg.ColumnSelectors,
 			},
 		},
 		Filter:        &tidbcloud.ChangefeedFilter{FilterRule: cfg.Tables, Mode: tidbcloud.TableModeForceSync},
@@ -323,6 +325,7 @@ func buildExportRequest(cfg Config, cleanSnapshotURI string, cred *aws.Credentia
 				SkipHeader: true,
 				Dialect:    tidbcloud.ExportCSVDialectSnowflake,
 			},
+			ColumnSelectors: cfg.ColumnSelectors,
 		},
 		Target: &tidbcloud.ExportTarget{
 			Type: tidbcloud.ExportTargetTypeS3,

@@ -101,6 +101,16 @@ type ExportOptions struct {
 	// export is taken at create time and the effective TSO is returned on the
 	// Export resource.
 	SnapshotTSO string `json:"snapshotTso,omitempty"`
+	// ColumnSelectors select columns emitted for matching tables. When omitted,
+	// the export keeps the server's legacy all-column behavior.
+	ColumnSelectors []ColumnSelector `json:"columnSelectors,omitempty"`
+}
+
+// ColumnSelector selects columns for matching tables. Selector ordering is
+// preserved because it is part of the TiDB Cloud API contract.
+type ColumnSelector struct {
+	Matcher []string `json:"matcher,omitempty"`
+	Columns []string `json:"columns,omitempty"`
 }
 
 // ExportFilter selects which tables to export.

@@ -47,12 +47,31 @@ func TestBuildExportRequest(t *testing.T) {
 	require.NotNil(t, req.ExportOptions.EscapeBackslash)
 	require.False(t, *req.ExportOptions.EscapeBackslash)
 	require.Empty(t, req.ExportOptions.SnapshotTSO)
+	require.Nil(t, req.ExportOptions.ColumnSelectors)
 
 	require.Equal(t, cloudapi.ExportTargetTypeS3, req.Target.Type)
 	require.Equal(t, "s3://bucket/path/snapshot/", req.Target.S3.URI)
 	require.Equal(t, cloudapi.S3AuthTypeAccessKey, req.Target.S3.AuthType)
 	require.Equal(t, "AKIA", req.Target.S3.AccessKey.ID)
 	require.Equal(t, "secret", req.Target.S3.AccessKey.Secret)
+}
+
+func TestBuildRequestsWithColumnSelectors(t *testing.T) {
+	cfg := baseConfig()
+	cfg.ColumnSelectors = []cloudapi.ColumnSelector{{
+		Matcher: []string{"db1.t1"},
+		Columns: []string{"*", "!customer_email"},
+	}}
+
+	exportReq := buildExportRequest(cfg, "s3://bucket/path/snapshot/", testCred(), "")
+	changefeedReq := buildChangefeedRequest(cfg, "s3://bucket/path/increment/", testCred(), "449023000000000000")
+
+	want := []cloudapi.ColumnSelector{{
+		Matcher: []string{"db1.t1"},
+		Columns: []string{"*", "!customer_email"},
+	}}
+	require.Equal(t, want, exportReq.ExportOptions.ColumnSelectors)
+	require.Equal(t, want, changefeedReq.Sink.CloudStorage.ColumnSelectors)
 }
 
 func TestEnsureSnapshotLoadsExistingMetadata(t *testing.T) {
@@ -119,6 +138,7 @@ func TestBuildChangefeedRequestFromTSO(t *testing.T) {
 	require.Equal(t, cloudapi.DateSeparatorDay, cs.DateSeparator)
 	require.Equal(t, 60, cs.IntervalInSeconds)
 	require.Equal(t, 64, cs.SizeInMiB)
+	require.Nil(t, cs.ColumnSelectors)
 
 	require.Equal(t, []string{"db1.t1", "db2.t2"}, req.Filter.FilterRule)
 	require.Equal(t, cloudapi.TableModeForceSync, req.Filter.Mode)

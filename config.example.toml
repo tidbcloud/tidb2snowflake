@@ -18,6 +18,12 @@ tables = [
   "app.customers",
 ]
 
+# Optional ordered projection shared by the snapshot and changefeed. Omit this
+# section to retain all columns.
+[[column-selectors]]
+matcher = ["app.orders"]
+columns = ["*", "!customer_email"]
+
 [storage]
 # S3 path shared by snapshot export, incremental CDC files, and loader state.
 uri = "s3://my-bucket/tidb2snowflake/prod?region=us-west-2"

@@ -33,6 +33,7 @@ It is designed for resumable replication with state persisted in object storage.
 - Source mode switch: `tidbcloud` and `op`
 - Resumable execution with persisted replication state
 - Configurable changefeed flush interval, file size, and RCU
+- Sensitive-column projection for TiDB Cloud snapshots and changefeeds
 - Automatic mode/source normalization (case-insensitive config values)
 - DDL-aware incremental loading pipeline
 
@@ -126,6 +127,27 @@ Use `config.example.toml` as the template.
 
 `mode` and `source` are normalized to lowercase before validation.
 
+### Column Selectors
+
+For `source = "tidbcloud"`, optional ordered `[[column-selectors]]` rules can
+exclude sensitive columns from both the managed snapshot Export and the Cloud
+Storage Changefeed:
+
+```toml
+[[column-selectors]]
+matcher = ["app.orders"]
+columns = ["*", "!customer_email", "!phone_number"]
+```
+
+The same ordered rules are sent to both jobs, so the snapshot and incremental
+streams use the same column projection. Omit the section (or leave it empty)
+to retain the legacy all-column behavior. Each rule requires at least one
+`matcher` and one `columns` entry. Keep every primary-key column selected,
+because Snowflake incremental `MERGE` requires the primary key.
+
+`column-selectors` is not yet supported for `source = "op"`; the command
+returns a validation error rather than silently exporting unfiltered data.
+
 ### Parameter Reference
 
 `Required` means required by `create` validation.
@@ -135,6 +157,7 @@ Use `config.example.toml` as the template.
 | `mode` | string | No | `all` | all | `all`, `snapshot-only`, `incremental-only` |
 | `source` | string | No | `tidbcloud` | all | `tidbcloud` or `op` |
 | `tables` | array[string] | Yes | none | all | Source tables to replicate |
+| `column-selectors` | array[table] | No | empty | `source=tidbcloud` | Ordered `matcher`/`columns` projection rules shared by Export and Cloud Storage Changefeed |
 | `storage.uri` | string | Yes | none | all | S3 URI for snapshot, incremental, and state |
 | `storage.access-key` | string | Yes | none | all | S3 access key |
 | `storage.secret-access-key` | string | Yes | none | all | S3 secret access key |
@@ -207,6 +230,7 @@ See source tests and mapping implementation for detailed edge cases.
 
 - Snowflake is the only supported target
 - Source tables must have primary keys
+- `column-selectors` currently requires `source=tidbcloud`
 - Not all DDL is supported across TiDB and Snowflake compatibility boundaries
 - Binary values larger than Snowflake limits fail during load
 
