@@ -50,7 +50,7 @@ func newDeleteCmdWithRun(run func(context.Context, *Option) error) *cobra.Comman
 				c.PrintErrf("init logger failed: %v\n", err)
 				return errors.Trace(err)
 			}
-			ctx := context.Background()
+			ctx := c.Context()
 			if err := run(ctx, opt); err != nil {
 				log.Error("delete changefeed failed", zap.Error(err))
 				return err
@@ -91,6 +91,9 @@ func runDeleteWithIO(ctx context.Context, opt *Option, in io.Reader, out io.Writ
 	if err != nil {
 		return errors.Trace(err)
 	}
+	if opt.SourceMode == sourceModeOP && stateManager.Snapshot().SourceIdentity != nil {
+		return errors.New("Cloud state cannot be deleted with source=op")
+	}
 	changefeedID := stateManager.Snapshot().TaskInfo.ChangefeedID
 	if changefeedID == "" {
 		return errors.New("state task_info.changefeed_id is empty")
@@ -107,7 +110,7 @@ func runDeleteWithIO(ctx context.Context, opt *Option, in io.Reader, out io.Writ
 	case sourceModeOP:
 		err = deleteOPChangefeed(ctx, opt, changefeedID)
 	default:
-		err = deleteTiDBCloudChangefeed(ctx, opt, changefeedID)
+		err = deleteTiDBCloudChangefeed(ctx, opt, changefeedID, stateManager.Snapshot().SourceIdentity)
 	}
 	if err != nil {
 		return errors.Trace(err)
@@ -165,7 +168,7 @@ func (opt *Option) validateDelete() error {
 	return nil
 }
 
-func deleteTiDBCloudChangefeed(ctx context.Context, opt *Option, changefeedID string) error {
+func deleteTiDBCloudChangefeed(ctx context.Context, opt *Option, changefeedID string, bound *cloudapi.ClusterInfo) error {
 	var clientOptions []cloudapi.Option
 	if opt.TiDBCloudHost != "" {
 		clientOptions = append(clientOptions, cloudapi.WithHost(opt.TiDBCloudHost))
@@ -174,7 +177,16 @@ func deleteTiDBCloudChangefeed(ctx context.Context, opt *Option, changefeedID st
 	if err != nil {
 		return errors.Trace(err)
 	}
-	return client.DeleteChangefeed(ctx, opt.TiDBCloudClusterID, changefeedID)
+	var backend *cloudapi.Backend
+	if bound != nil {
+		backend, err = client.BoundBackend(opt.TiDBCloudClusterID, *bound)
+	} else {
+		backend, err = client.OpenBackend(ctx, opt.TiDBCloudClusterID, nil, true)
+	}
+	if err != nil {
+		return err
+	}
+	return backend.DeleteChangefeed(ctx, changefeedID, bound != nil)
 }
 
 func deleteOPChangefeed(ctx context.Context, opt *Option, changefeedID string) error {

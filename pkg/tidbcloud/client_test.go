@@ -252,23 +252,17 @@ func TestBackoffIncreasesExponentiallyAndCaps(t *testing.T) {
 	require.Equal(t, maxBackoff, backoff(10))
 }
 
-func TestDoRetriesUnauthorizedFiveTimesByDefaultThenSucceeds(t *testing.T) {
+func TestDoDoesNotRetryFinalUnauthorized(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt32(&calls, 1) <= 5 {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"exportId":"exp-1","state":"SUCCEEDED"}`))
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
-
 	c := newTestClient(t, srv.URL, withRetryBackoffForTest(func(int) time.Duration { return 0 }))
-	exp, err := c.GetExport(context.Background(), "10", "exp-1")
-	require.NoError(t, err)
-	require.Equal(t, ExportStateSucceeded, exp.State)
-	require.Equal(t, int32(6), atomic.LoadInt32(&calls))
+	_, err := c.GetExport(context.Background(), "10", "exp-1")
+	require.Error(t, err)
+	require.Equal(t, int32(1), atomic.LoadInt32(&calls))
 }
 
 func TestDoStopsAfterFiveBadGatewayRetriesByDefault(t *testing.T) {

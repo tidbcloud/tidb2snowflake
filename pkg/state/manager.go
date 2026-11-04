@@ -7,10 +7,14 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 )
 
 // Manager owns durable replication state and its consistency checks.
 type Manager interface {
+	BindCloudSource(context.Context, tidbcloud.ClusterInfo) error
+	BeginCreate(context.Context, string, string) error
+	ClearPendingCreate(context.Context) error
 	// Snapshot returns a deep copy of the current durable state for recovery decisions.
 	Snapshot() State
 
@@ -130,6 +134,9 @@ func (m *manager) SetExportID(ctx context.Context, exportID string) error {
 	}
 	return m.update(ctx, func(st *State) error {
 		st.TaskInfo.ExportID = exportID
+		if st.PendingCreate != nil && st.PendingCreate.Kind == "export" {
+			st.PendingCreate = nil
+		}
 		return nil
 	})
 }
@@ -140,6 +147,9 @@ func (m *manager) SetChangefeedID(ctx context.Context, changefeedID string) erro
 	}
 	return m.update(ctx, func(st *State) error {
 		st.TaskInfo.ChangefeedID = changefeedID
+		if st.PendingCreate != nil && st.PendingCreate.Kind == "changefeed" {
+			st.PendingCreate = nil
+		}
 		return nil
 	})
 }
@@ -216,4 +226,48 @@ func (m *manager) upload(ctx context.Context, st State) error {
 		return errors.Annotatef(err, "write state file %s", stateFileName)
 	}
 	return nil
+}
+
+// BindCloudSource upgrades Cloud state only. A historical backup is never
+// overwritten; progress and cursors are retained in the same state update.
+func (m *manager) BindCloudSource(ctx context.Context, source tidbcloud.ClusterInfo) error {
+	old := m.Snapshot()
+	if old.SourceIdentity != nil {
+		prior := old.SourceIdentity
+		if prior.ClusterID != source.ClusterID || prior.Family != source.Family || prior.Environment != source.Environment {
+			return errors.New("source identity mismatch")
+		}
+	}
+	if old.Version == Version && (old.TaskInfo.ExportID != "" || old.TaskInfo.ChangefeedID != "") {
+		const backup = "replication-state.v1.backup.json"
+		exists, err := m.store.FileExists(ctx, backup)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			data, err := m.store.ReadFile(ctx, stateFileName)
+			if err != nil {
+				return err
+			}
+			if err = m.store.WriteFile(ctx, backup, data); err != nil {
+				return errors.Annotate(err, "backup v1 state")
+			}
+		}
+	}
+	return m.update(ctx, func(st *State) error { st.Version = CloudVersion; st.SourceIdentity = &source; return nil })
+}
+func (m *manager) BeginCreate(ctx context.Context, kind, name string) error {
+	return m.update(ctx, func(st *State) error {
+		if st.SourceIdentity == nil {
+			return errors.New("bind source before creating jobs")
+		}
+		if st.PendingCreate != nil {
+			return errors.New("creation outcome unknown: pending_create requires manual verification")
+		}
+		st.PendingCreate = &PendingCreate{Kind: kind, Name: name}
+		return nil
+	})
+}
+func (m *manager) ClearPendingCreate(ctx context.Context) error {
+	return m.update(ctx, func(st *State) error { st.PendingCreate = nil; return nil })
 }

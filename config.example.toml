@@ -43,6 +43,10 @@ warehouse = "COMPUTE_WH"
 cluster-id = "1234567890123456789"
 public-key = "..."
 private-key = "..."
+# Only required when a Premium/Essential_V2/Reserved/BYOC export is created.
+# These are source TiDB SQL credentials, not API keys or Snowflake credentials.
+export-user = ""
+export-password = ""
 # Optional. Leave empty to use serverless.tidbapi.com.
 host = ""
 
@@ -73,7 +77,9 @@ concurrency = 8
 flush-interval = "60s"
 # Target changefeed file size in MiB. Default: 64.
 file-size = 64
-# Optional TiDB Cloud changefeed RCU. Default: 2. Setting 0 also uses 2.
+# TiDB Cloud changefeed capacity. Default: 2. Setting 0 also uses 2.
+# Serverless sends rcu=N; Premium sends changefeedCapacity="Nccu".
+# The value must be present in the target API specification list.
 rcu = 2
 
 [increment]

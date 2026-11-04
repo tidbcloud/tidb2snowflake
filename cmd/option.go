@@ -54,10 +54,12 @@ type Option struct {
 	TiDBTLS   bool
 	TiDBSSLCA string
 
-	TiDBCloudClusterID  string
-	TiDBCloudPublicKey  string
-	TiDBCloudPrivateKey string
-	TiDBCloudHost       string
+	TiDBCloudExportUser     string
+	TiDBCloudExportPassword string
+	TiDBCloudClusterID      string
+	TiDBCloudPublicKey      string
+	TiDBCloudPrivateKey     string
+	TiDBCloudHost           string
 
 	TiCDCAddress        string
 	SnapshotConcurrency int
@@ -138,10 +140,12 @@ func (opt *Option) prepareRequest(
 		SnapshotTSO:       opt.SnapshotTSO,
 		TiDB:              opt.tidbConfig(),
 
-		TiDBCloudClusterID:  opt.TiDBCloudClusterID,
-		TiDBCloudPublicKey:  opt.TiDBCloudPublicKey,
-		TiDBCloudPrivateKey: opt.TiDBCloudPrivateKey,
-		TiDBCloudHost:       opt.TiDBCloudHost,
+		TiDBCloudClusterID:      opt.TiDBCloudClusterID,
+		TiDBCloudExportUser:     opt.TiDBCloudExportUser,
+		TiDBCloudExportPassword: opt.TiDBCloudExportPassword,
+		TiDBCloudPublicKey:      opt.TiDBCloudPublicKey,
+		TiDBCloudPrivateKey:     opt.TiDBCloudPrivateKey,
+		TiDBCloudHost:           opt.TiDBCloudHost,
 
 		TiCDCAddress:         opt.TiCDCAddress,
 		SnapshotConcurrency:  opt.SnapshotConcurrency,
@@ -189,9 +193,10 @@ func (opt *Option) loadRequest(
 			Compression: opt.SnapshotCompression,
 		},
 		Incremental: incremental.Config{
-			Tables:       opt.Tables,
-			StorageDir:   storage.IncrementDirName,
-			ScanInterval: opt.IncrementScanInterval,
+			RejectStoredGenerated: opt.SourceMode == sourceModeTiDBCloud,
+			Tables:                opt.Tables,
+			StorageDir:            storage.IncrementDirName,
+			ScanInterval:          opt.IncrementScanInterval,
 		},
 	}
 }

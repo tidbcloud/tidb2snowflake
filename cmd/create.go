@@ -36,7 +36,7 @@ func newCreateCmdWithRun(run func(context.Context, *Option) error) *cobra.Comman
 				c.PrintErrf("init logger failed: %v\n", err)
 				return errors.Trace(err)
 			}
-			ctx := context.Background()
+			ctx := c.Context()
 			if err := run(ctx, opt); err != nil {
 				log.Error("replication failed", zap.Error(err))
 				return err

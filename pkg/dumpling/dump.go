@@ -145,7 +145,14 @@ func LoadTSOFromMetadata(ctx context.Context, store storeapi.Storage) (uint64, e
 		return 0, errors.Annotatef(err, "read snapshot metadata %s", metadataPath)
 	}
 	tso := tsoFromMetadata(data)
-	return strconv.ParseUint(tso, 10, 64)
+	n, err := strconv.ParseUint(tso, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if n == 0 {
+		return 0, errors.New("snapshot metadata TSO is zero")
+	}
+	return n, nil
 }
 
 func tsoFromMetadata(data []byte) string {
@@ -156,6 +163,6 @@ func tsoFromMetadata(data []byte) string {
 		}
 		return strings.TrimSpace(strings.TrimPrefix(line, "Pos:"))
 	}
-	log.Panic("metadata Pos is missing")
+	// Missing Pos is returned as a parse error by LoadTSOFromMetadata.
 	return ""
 }

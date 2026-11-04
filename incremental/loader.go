@@ -31,9 +31,10 @@ const (
 )
 
 type Config struct {
-	Tables       []string
-	StorageDir   string
-	ScanInterval time.Duration
+	RejectStoredGenerated bool
+	Tables                []string
+	StorageDir            string
+	ScanInterval          time.Duration
 }
 
 func Load(ctx context.Context, cfg Config, store *storage.Storage, stateManager state.Manager, pool *workerpool.Pool, conn *snowflake.Connector) error {
@@ -124,12 +125,13 @@ type tableScan struct {
 }
 
 type loader struct {
-	conn         *snowflake.Connector
-	storage      *storage.Storage
-	storageDir   string
-	scanInterval time.Duration
-	state        state.Manager
-	tables       []*tableState
+	rejectStoredGenerated bool
+	conn                  *snowflake.Connector
+	storage               *storage.Storage
+	storageDir            string
+	scanInterval          time.Duration
+	state                 state.Manager
+	tables                []*tableState
 }
 
 type tableState struct {
@@ -175,12 +177,13 @@ func parseDMLCursorKey(cursor string) (uint64, int64, string) {
 
 func newLoader(cfg Config, store *storage.Storage, conn *snowflake.Connector, stateManager state.Manager) *loader {
 	l := &loader{
-		conn:         conn,
-		storage:      store,
-		storageDir:   cfg.StorageDir,
-		scanInterval: cfg.ScanInterval,
-		state:        stateManager,
-		tables:       make([]*tableState, 0, len(cfg.Tables)),
+		rejectStoredGenerated: cfg.RejectStoredGenerated,
+		conn:                  conn,
+		storage:               store,
+		storageDir:            cfg.StorageDir,
+		scanInterval:          cfg.ScanInterval,
+		state:                 stateManager,
+		tables:                make([]*tableState, 0, len(cfg.Tables)),
 	}
 	st := stateManager.Snapshot()
 	for _, tableFQN := range cfg.Tables {
@@ -719,6 +722,11 @@ func (loader *loader) readSchemaFile(ctx context.Context, objectPath string) (cl
 	}
 	if err = json.Unmarshal(schemaContent, &schemaFile); err != nil {
 		return schemaFile, errors.Trace(err)
+	}
+	if loader.rejectStoredGenerated && schemaFile.Query != "" {
+		if err = table.ValidateIncrementalSchema(schemaFile.Query); err != nil {
+			return schemaFile, err
+		}
 	}
 	return schemaFile, nil
 }

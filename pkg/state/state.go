@@ -6,14 +6,23 @@ import (
 	"io"
 
 	"github.com/pingcap/errors"
+	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 )
 
 const (
 	Version       = 1
+	CloudVersion  = 2
 	stateFileName = "replication-state.json"
 )
 
+type PendingCreate struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+}
+
 type State struct {
+	SourceIdentity *tidbcloud.ClusterInfo `json:"source_identity,omitempty"`
+	PendingCreate  *PendingCreate         `json:"pending_create,omitempty"`
 	// Version is the on-disk state schema version.
 	Version int `json:"version"`
 	// CheckpointTS is the latest upstream checkpoint confirmed in downstream Snowflake.
@@ -79,8 +88,28 @@ func ensureConfiguredTables(st *State, tables []string) bool {
 }
 
 func validateState(st State, tables []string) error {
-	if st.Version != Version {
+	if st.Version != Version && st.Version != CloudVersion {
 		return errors.Errorf("unsupported state version %d", st.Version)
+	}
+	if st.Version == Version && (st.SourceIdentity != nil || st.PendingCreate != nil) {
+		return errors.New("v1 state contains v2 source fields")
+	}
+	if st.Version == CloudVersion {
+		source := st.SourceIdentity
+		if source == nil || source.Environment == "" || (source.Family != tidbcloud.Serverless && source.Family != tidbcloud.Premium) {
+			return errors.New("invalid v2 source identity")
+		}
+		if id, err := tidbcloud.CanonicalClusterID(source.ClusterID); err != nil || id != source.ClusterID {
+			return errors.New("invalid v2 cluster ID")
+		}
+	}
+	if pending := st.PendingCreate; pending != nil {
+		if (pending.Kind != "export" && pending.Kind != "changefeed") || pending.Name == "" || len(pending.Name) > 128 {
+			return errors.New("invalid pending_create")
+		}
+		if (pending.Kind == "export" && st.TaskInfo.ExportID != "") || (pending.Kind == "changefeed" && st.TaskInfo.ChangefeedID != "") {
+			return errors.New("pending_create conflicts with saved job ID")
+		}
 	}
 	if st.Tables == nil {
 		return errors.New("state missing required field tables")
@@ -133,6 +162,14 @@ func validateTableState(table string, tableState TableState) error {
 
 func cloneState(st State) State {
 	out := st
+	if st.SourceIdentity != nil {
+		v := *st.SourceIdentity
+		out.SourceIdentity = &v
+	}
+	if st.PendingCreate != nil {
+		v := *st.PendingCreate
+		out.PendingCreate = &v
+	}
 	out.Tables = make(map[string]TableState, len(st.Tables))
 	for tableName, tableState := range st.Tables {
 		cloned := tableState

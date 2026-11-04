@@ -288,3 +288,31 @@ func restoreExpr(expr ast.ExprNode) (string, error) {
 	}
 	return sb.String(), nil
 }
+
+// ValidateIncrementalSchema protects the CSV positional contract: snapshots
+// omit generated columns while TiCDC can emit STORED generated values.
+func ValidateIncrementalSchema(ddl string) error {
+	stmts, _, err := parser.New().Parse(ddl, "", "")
+	if err != nil {
+		return errors.Annotate(err, "parse incremental table schema")
+	}
+	for _, stmt := range stmts {
+		var columns []*ast.ColumnDef
+		switch v := stmt.(type) {
+		case *ast.CreateTableStmt:
+			columns = v.Cols
+		case *ast.AlterTableStmt:
+			for _, spec := range v.Specs {
+				columns = append(columns, spec.NewColumns...)
+			}
+		}
+		for _, col := range columns {
+			for _, opt := range col.Options {
+				if opt.Tp == ast.ColumnOptionGenerated && opt.Stored {
+					return errors.New("STORED generated columns are not supported for incremental replication")
+				}
+			}
+		}
+	}
+	return nil
+}

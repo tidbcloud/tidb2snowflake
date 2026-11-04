@@ -257,3 +257,39 @@ func s3URIWithTrailingSlash(uri *url.URL) string {
 }
 
 var errWalkStop = errors.New("stop walk")
+
+// ValidateManagedTarget rejects connection settings that public Export and
+// Changefeed APIs cannot both express. Pure file loading and OP are unchanged.
+func (s *Storage) ValidateManagedTarget(clusterRegion string) error {
+	if s.uri == nil || s.uri.Scheme != "s3" {
+		return errors.New("managed TiDB Cloud jobs require standard AWS S3")
+	}
+	for key, values := range s.uri.Query() {
+		switch key {
+		case "access-key", "secret-access-key", "region", "s3.region":
+		case "provider", "s3.provider":
+			for _, v := range values {
+				if v != "" && v != "aws" {
+					return errors.New("managed jobs do not support non-AWS storage providers")
+				}
+			}
+		case "endpoint", "s3.endpoint":
+			for _, v := range values {
+				if v != "" {
+					return errors.New("managed jobs do not support custom storage endpoints")
+				}
+			}
+		default:
+			return errors.Errorf("storage URI option %q is not supported for managed jobs", key)
+		}
+	}
+	if clusterRegion != "" {
+		if s.s3Client == nil {
+			return errors.New("S3 region is not available")
+		}
+		if region := s.s3Client.Options().Region; region != clusterRegion {
+			return errors.New("S3 bucket region must match source cluster region for Premium changefeeds")
+		}
+	}
+	return nil
+}

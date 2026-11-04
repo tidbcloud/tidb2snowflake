@@ -9,6 +9,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
+	"github.com/tidbcloud/tidb2snowflake/pkg/tidbcloud"
 )
 
 func TestOpenCreatesStateFile(t *testing.T) {
@@ -229,4 +230,42 @@ func mapKeys(m map[string]any) []string {
 		keys = append(keys, key)
 	}
 	return keys
+}
+
+func TestCloudStateUpgradeAndPendingRecovery(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	m, err := Open(ctx, store, []string{"db.t"}, false)
+	require.NoError(t, err)
+	require.NoError(t, m.MarkSnapshotFinished(ctx, 449))
+	require.NoError(t, m.SetDMLCursors(ctx, "db.t", map[string]DMLCursor{"449/0/CDC": {Date: "2026-11-02", FileIndex: 5}}))
+	require.NoError(t, m.SetChangefeedID(ctx, "legacy-cf"))
+	identity := tidbcloud.ClusterInfo{ClusterID: "10000000000000000001", Family: tidbcloud.Serverless, Environment: "prod", ServicePlan: "Essential"}
+	require.NoError(t, m.BindCloudSource(ctx, identity))
+	backup, err := store.ReadFile(ctx, "replication-state.v1.backup.json")
+	require.NoError(t, err)
+	require.Contains(t, string(backup), `"version":1`)
+	st := m.Snapshot()
+	require.Equal(t, CloudVersion, st.Version)
+	require.Equal(t, uint64(449), st.CheckpointTS)
+	require.Equal(t, uint64(5), st.Tables["db.t"].DMLCursors["449/0/CDC"].FileIndex)
+	changed := identity
+	changed.Environment = "dev"
+	require.Error(t, m.BindCloudSource(ctx, changed))
+	require.NoError(t, m.ClearChangefeedID(ctx))
+	require.NoError(t, m.BeginCreate(ctx, "changefeed", "task-increment"))
+	reopened, err := OpenExisting(ctx, store)
+	require.NoError(t, err)
+	require.Equal(t, "changefeed", reopened.Snapshot().PendingCreate.Kind)
+	require.ErrorContains(t, reopened.BeginCreate(ctx, "changefeed", "other"), "outcome unknown")
+	snapshot := reopened.Snapshot()
+	snapshot.SourceIdentity.ClusterID = "wrong"
+	snapshot.PendingCreate.Name = "wrong"
+	require.Equal(t, identity.ClusterID, reopened.Snapshot().SourceIdentity.ClusterID)
+	require.Equal(t, "task-increment", reopened.Snapshot().PendingCreate.Name)
+	require.NoError(t, reopened.SetChangefeedID(ctx, "verified-cf"))
+	require.Nil(t, reopened.Snapshot().PendingCreate)
+	again, err := OpenExisting(ctx, store)
+	require.NoError(t, err)
+	require.Equal(t, "verified-cf", again.Snapshot().TaskInfo.ChangefeedID)
 }

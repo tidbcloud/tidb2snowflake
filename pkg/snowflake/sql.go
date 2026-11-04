@@ -25,7 +25,7 @@ func snapshotFileFormat(compression string) string {
 		"NULL_IF=('\\\\N')",
 		`FIELD_OPTIONALLY_ENCLOSED_BY='"'`,
 		`ESCAPE='\\'`,
-		"BINARY_FORMAT = 'UTF8'",
+		"BINARY_FORMAT = 'HEX'",
 	}
 	switch compression {
 	case "none":

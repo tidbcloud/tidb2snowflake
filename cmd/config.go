@@ -48,10 +48,12 @@ type tidbConfig struct {
 }
 
 type tidbCloudConfig struct {
-	ClusterID  string `toml:"cluster-id"`
-	PublicKey  string `toml:"public-key"`
-	PrivateKey string `toml:"private-key"`
-	Host       string `toml:"host"`
+	ExportUser     string `toml:"export-user"`
+	ExportPassword string `toml:"export-password"`
+	ClusterID      string `toml:"cluster-id"`
+	PublicKey      string `toml:"public-key"`
+	PrivateKey     string `toml:"private-key"`
+	Host           string `toml:"host"`
 }
 
 type ticdcConfig struct {
@@ -129,6 +131,8 @@ func loadConfig(path string) (*Option, *logger.Config, error) {
 	opt.TiDBTLS = cfg.TiDB.TLS
 	opt.TiDBSSLCA = cfg.TiDB.SSLCA
 
+	opt.TiDBCloudExportUser = cfg.TiDBCloud.ExportUser
+	opt.TiDBCloudExportPassword = cfg.TiDBCloud.ExportPassword
 	opt.TiDBCloudClusterID = cfg.TiDBCloud.ClusterID
 	opt.TiDBCloudPublicKey = cfg.TiDBCloud.PublicKey
 	opt.TiDBCloudPrivateKey = cfg.TiDBCloud.PrivateKey

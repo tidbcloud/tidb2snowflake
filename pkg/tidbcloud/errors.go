@@ -12,7 +12,8 @@ import (
 type APIError struct {
 	// StatusCode is the HTTP status code.
 	StatusCode int `json:"-"`
-	// Code is the gRPC status code returned in the body, when present.
+	// Code is the API status code, which may be a business code (for
+	// example management NotFound=49900004), not a canonical gRPC code.
 	Code int `json:"code"`
 	// Message is the human-readable error message.
 	Message string `json:"message"`

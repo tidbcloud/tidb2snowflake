@@ -24,6 +24,8 @@ type Request struct {
 	SnapshotTSO       string
 
 	TiDB                    *tidb.Config
+	TiDBCloudExportUser     string
+	TiDBCloudExportPassword string
 	TiDBCloudClusterID      string
 	TiDBCloudPublicKey      string
 	TiDBCloudPrivateKey     string
@@ -63,6 +65,11 @@ func Prepare(ctx context.Context, request Request, store *storage.Storage, state
 		}
 	}
 	runner := newRunner(request, store, state)
+	if cloud, ok := runner.(*tidbcloud.Runner); ok {
+		if err := cloud.Preflight(ctx, request.PrepareSnapshot, request.PrepareChangefeed); err != nil {
+			return err
+		}
+	}
 	if request.PrepareSnapshot {
 		if err := runner.EnsureSnapshot(ctx); err != nil {
 			return errors.Trace(err)
@@ -112,6 +119,8 @@ func (request Request) tidbCloudConfig() tidbcloud.Config {
 	}
 	return tidbcloud.Config{
 		ClusterID:               request.TiDBCloudClusterID,
+		ExportUser:              request.TiDBCloudExportUser,
+		ExportPassword:          request.TiDBCloudExportPassword,
 		PublicKey:               request.TiDBCloudPublicKey,
 		PrivateKey:              request.TiDBCloudPrivateKey,
 		Host:                    request.TiDBCloudHost,

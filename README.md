@@ -53,8 +53,9 @@ TiDB Cloud changefeed / OP TiCDC changefeed -+
 
 For `source = "tidbcloud"`:
 
-- TiDB Cloud cluster
+- A supported TiDB Cloud Starter/Essential or Premium API cluster (Dedicated is rejected)
 - TiDB Cloud API credentials when create flow needs to create/wait managed jobs
+- Source SQL credentials (`tidbcloud.export-user` and `tidbcloud.export-password`) when creating a Premium API export
 
 For `source = "op"`:
 
@@ -127,6 +128,39 @@ Use `config.example.toml` as the template.
 
 `mode` and `source` are normalized to lowercase before validation.
 
+### TiDB Cloud Plans and API Selection
+
+The tool identifies the actual `servicePlan` using the cluster ID and API key:
+
+- `Starter` and `Essential` use the Serverless v1beta1 API.
+- `Premium`, `Essential_V2`, `Premium_Reserved`, and `BYOC` use the Cloud v1beta2 API.
+- `Dedicated` and unknown plans are rejected. Plan routing does not override the service's feature or region restrictions.
+
+The same `changefeed.rcu` setting is used for both APIs: `4` becomes `rcu: 4`
+for Serverless or `changefeedCapacity: "4ccu"` for Premium. The default remains
+`2`; if it is unavailable for the selected plan, the tool reports the available
+values. Existing changefeeds are reused without automatic resizing.
+
+Only two new configuration fields are needed for a new Premium export:
+
+```toml
+[tidbcloud]
+export-user = "<source-sql-user>"
+export-password = "<source-sql-password>"
+```
+
+They are not required when waiting for an existing export, loading an existing
+snapshot, creating only a changefeed, or deleting a changefeed. Explicit
+`snapshot.tso` for a **new Premium export** is rejected until the public API
+contract supports it; default snapshots use the export's actual TSO.
+
+Managed job creation supports standard AWS S3. Custom endpoints, non-AWS
+providers, temporary session tokens, and other connection settings that both
+managed APIs cannot represent are rejected before creation. Premium AWS
+changefeeds require the bucket and source cluster to use the same region;
+ordinary non-`us-east-1` buckets are supported through bucket region discovery.
+OP mode and file-only loading retain their existing storage behavior.
+
 ### Column Selectors
 
 For `source = "tidbcloud"`, optional ordered `[[column-selectors]]` rules can
@@ -169,7 +203,9 @@ returns a validation error rather than silently exporting unfiltered data.
 | `tidbcloud.cluster-id` | string | Conditional | none | `source=tidbcloud` | Cluster ID |
 | `tidbcloud.public-key` | string | Conditional | none | `source=tidbcloud` | API public key |
 | `tidbcloud.private-key` | string | Conditional | none | `source=tidbcloud` | API private key |
-| `tidbcloud.host` | string | No | `serverless.tidbapi.com` | `source=tidbcloud` | Optional API host override |
+| `tidbcloud.export-user` | string | Conditional | empty | Premium API export creation | Source TiDB SQL username |
+| `tidbcloud.export-password` | string | Conditional | empty | Premium API export creation | Source TiDB SQL password, preserved without trimming |
+| `tidbcloud.host` | string | No | `serverless.tidbapi.com` | `source=tidbcloud` | Optional API host override; known prod/staging/dev product hosts select the matching environment; arbitrary hosts retain Serverless-only behavior |
 | `tidb.host` | string | No | `127.0.0.1` | `source=op` | TiDB SQL host |
 | `tidb.port` | int | No | `4000` | `source=op` | TiDB SQL port |
 | `tidb.user` | string | No | `root` | `source=op` | TiDB SQL user |
@@ -182,7 +218,7 @@ returns a validation error rather than silently exporting unfiltered data.
 | `snapshot.concurrency` | int | No | `8` | `source=op` | Dumpling concurrency |
 | `changefeed.flush-interval` | duration string | No | `60s` | all | Flush interval |
 | `changefeed.file-size` | int (MiB) | No | `64` | all | File size in MiB |
-| `changefeed.rcu` | int | No | `2` | `source=tidbcloud` | Optional changefeed RCU; `0` also uses `2`; negative is invalid |
+| `changefeed.rcu` | int | No | `2` | `source=tidbcloud` | Capacity value: Serverless RCU or the numeric CCU count for Premium; `0` also uses `2`; negative is invalid |
 | `increment.scan-interval` | duration string | No | `1m` | all | Increment file scan interval |
 | `log.level` | string | No | `info` | all | Log level |
 | `log.file` | string | No | empty | all | Log file path |
@@ -192,10 +228,31 @@ returns a validation error rather than silently exporting unfiltered data.
 Replication state is stored in object storage and used for restart/resume behavior.
 
 - Existing export/changefeed IDs in state are reused on restart
+- An export recorded in state is checked before reusing metadata that may have appeared during an unfinished export
+- Changefeed creation requires a nonzero checkpoint, snapshot metadata TSO, or explicit start TSO; the old `FROM_TSO=0` path is rejected
+- Reused jobs must match the source cluster, output prefix, table/column filters, and CSV format
 - Existing snapshot/increment storage data may skip source creation phase
 - Snapshot completion is committed atomically with checkpoint update
 
-For delete flow, the command reads `task_info.changefeed_id` from state.
+For delete flow, the command reads `task_info.changefeed_id` from state,
+verifies cluster ownership, and clears the ID only after deletion is confirmed.
+It does not delete exported files or Snowflake data.
+
+Cloud-managed tasks use state version 2 to bind the cluster, API family, and
+environment. Version 1 jobs are checked through the historical Serverless API
+before upgrade; a `replication-state.v1.backup.json` copy is retained. Use the
+same host and cluster ID as the original task when upgrading. OP/file-only
+state does not require this upgrade. Old binaries cannot read version 2; never
+restore an old backup after newer checkpoints have advanced.
+
+A small `pending_create` marker is saved before each managed creation. A timeout,
+lost response, or state-write failure can leave the result unknown. Restart then
+stops instead of creating another job. Stop the tool and back up state before
+checking the named task in Console/API. Verify its cluster, output prefix and
+configuration before recording its ID under `task_info` and removing
+`pending_create`; clear the marker without an ID only after confirming no task
+was created. The tool does not automatically discover or adopt orphan jobs.
+Legacy version 1 orphan jobs cannot be recovered automatically either.
 
 ## Reference
 
@@ -231,7 +288,9 @@ See source tests and mapping implementation for detailed edge cases.
 - Snowflake is the only supported target
 - Source tables must have primary keys
 - `column-selectors` currently requires `source=tidbcloud`
+- Managed incremental replication rejects STORED generated columns because snapshot and CDC output differ; VIRTUAL generated columns are skipped. Snapshot-only mode omits generated columns.
 - Not all DDL is supported across TiDB and Snowflake compatibility boundaries
+- Export finishes before CDC is created. If the snapshot TSO has passed the upstream GC window, creation fails; the tool does not silently move the start point forward or adjust GC
 - Binary values larger than Snowflake limits fail during load
 
 ## Contributor Guide

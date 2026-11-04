@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/require"
 )
 
@@ -118,4 +119,25 @@ func TestListDirs(t *testing.T) {
 	dirs, err := store.ListDirs(ctx, "increment/db/t/100")
 	require.NoError(t, err)
 	require.Equal(t, []string{"2026-06-29", "2026-06-30"}, dirs)
+}
+
+func TestManagedTargetDoesNotSilentlyDiscardConnectionOptions(t *testing.T) {
+	for _, query := range []string{"endpoint=https://example.test", "s3.endpoint=https://example.test", "provider=alibaba", "s3.provider=minio", "force-path-style=true", "session-token=temporary"} {
+		t.Run(query, func(t *testing.T) {
+			u, err := url.Parse("s3://bucket/task?" + query)
+			require.NoError(t, err)
+			s := &Storage{uri: u}
+			require.Error(t, s.ValidateManagedTarget(""))
+		})
+	}
+	for _, query := range []string{"region=us-west-2", "s3.region=us-west-2&provider=aws", "access-key=key&secret-access-key=secret"} {
+		u, err := url.Parse("s3://bucket/task?" + query)
+		require.NoError(t, err)
+		s := &Storage{uri: u}
+		require.NoError(t, s.ValidateManagedTarget(""))
+	}
+	u, _ := url.Parse("s3://bucket/task")
+	s := &Storage{uri: u, s3Client: s3.New(s3.Options{Region: "us-west-2"})}
+	require.NoError(t, s.ValidateManagedTarget("us-west-2"))
+	require.Error(t, s.ValidateManagedTarget("us-east-1"))
 }

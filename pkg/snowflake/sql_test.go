@@ -14,6 +14,8 @@ func TestSnapshotFileFormatCompression(t *testing.T) {
 	require.Contains(t, snapshotFileFormat("none"), "COMPRESSION = 'NONE'")
 	require.Contains(t, snapshotFileFormat("gzip"), "COMPRESSION = 'GZIP'")
 	require.Contains(t, snapshotFileFormat("gzip"), `ESCAPE='\\'`)
+	// Dumpling's Snowflake dialect emits binary values as hex strings.
+	require.Contains(t, snapshotFileFormat("none"), "BINARY_FORMAT = 'HEX'")
 }
 
 func TestQuoteIdent(t *testing.T) {

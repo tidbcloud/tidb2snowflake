@@ -67,6 +67,8 @@ database = "SNOW"
 cluster-id = "cluster-from-config"
 public-key = "public-from-config"
 private-key = "private-from-config"
+export-user = "export-user"
+export-password = " export-password "
 host = " api.config.example.com "
 
 [changefeed]
@@ -83,6 +85,11 @@ rcu = 8
 	require.Equal(t, "cluster-from-config", captured.TiDBCloudClusterID)
 	require.Equal(t, "public-from-config", captured.TiDBCloudPublicKey)
 	require.Equal(t, "private-from-config", captured.TiDBCloudPrivateKey)
+	require.Equal(t, "export-user", captured.TiDBCloudExportUser)
+	require.Equal(t, " export-password ", captured.TiDBCloudExportPassword)
+	request := captured.prepareRequest(nil, nil, nil)
+	require.Equal(t, "export-user", request.TiDBCloudExportUser)
+	require.Equal(t, " export-password ", request.TiDBCloudExportPassword)
 	require.Equal(t, "api.config.example.com", captured.TiDBCloudHost)
 	require.Equal(t, 8, captured.ChangefeedRCU)
 	require.Equal(t, []cloudapi.ColumnSelector{{

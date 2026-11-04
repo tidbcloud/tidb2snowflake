@@ -187,6 +187,8 @@ type StartPosition struct {
 
 // CreateChangefeedRequest is the body of CreateChangefeed.
 type CreateChangefeedRequest struct {
+	// FlushInterval retains subsecond precision for the Premium adapter only.
+	FlushInterval time.Duration     `json:"-"`
 	DisplayName   string            `json:"displayName,omitempty"`
 	Sink          *Sink             `json:"sink,omitempty"`
 	Filter        *ChangefeedFilter `json:"filter,omitempty"`

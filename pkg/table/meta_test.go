@@ -73,3 +73,10 @@ CREATE TABLE types (
 	require.Equal(t, "65", cols["c_decimal_unsigned"].Precision)
 	require.Equal(t, "30", cols["c_decimal_unsigned"].Scale)
 }
+
+func TestIncrementalGeneratedColumnBoundary(t *testing.T) {
+	require.NoError(t, ValidateIncrementalSchema("CREATE TABLE t(id INT PRIMARY KEY, v INT AS (id+1) VIRTUAL)"))
+	require.ErrorContains(t, ValidateIncrementalSchema("CREATE TABLE t(id INT PRIMARY KEY, s INT AS (id+1) STORED)"), "STORED")
+	require.ErrorContains(t, ValidateIncrementalSchema("ALTER TABLE t ADD COLUMN s INT AS (id+1) STORED"), "STORED")
+	require.NoError(t, ValidateIncrementalSchema("ALTER TABLE t ADD COLUMN ordinary INT"))
+}

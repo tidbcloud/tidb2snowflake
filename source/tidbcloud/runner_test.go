@@ -157,6 +157,9 @@ func TestCreateChangefeedValidatesConfiguredRCUAgainstSpecifications(t *testing.
 	postCalled := false
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
+		case "GET /v1beta1/clusters/10":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"clusterId":"10","servicePlan":"Essential","state":"ACTIVE","region":{"name":"regions/aws-us-west-2"}}`))
 		case http.MethodGet + " /v1beta1/clusters/10/changefeeds:listSpecifications":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"items":[{"name":"3rcu","rcu":3},{"name":"8rcu","rcu":8}],"total":2}`))
@@ -199,6 +202,9 @@ func TestCreateChangefeedSendsConfiguredRCUAfterValidation(t *testing.T) {
 	}
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
+		case "GET /v1beta1/clusters/10":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"clusterId":"10","servicePlan":"Essential","state":"ACTIVE","region":{"name":"regions/aws-us-west-2"}}`))
 		case http.MethodGet + " /v1beta1/clusters/10/changefeeds:listSpecifications":
 			events = append(events, "list")
 			w.Header().Set("Content-Type", "application/json")
@@ -207,7 +213,7 @@ func TestCreateChangefeedSendsConfiguredRCUAfterValidation(t *testing.T) {
 			events = append(events, "create")
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&createReq))
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"changefeedId":"cf-1","state":"CREATING"}`))
+			_, _ = w.Write([]byte(`{"changefeedId":"cf-1","clusterId":"10","state":"CREATING"}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -220,6 +226,7 @@ func TestCreateChangefeedSendsConfiguredRCUAfterValidation(t *testing.T) {
 		ChangefeedFlushInterval: time.Minute,
 		ChangefeedFileSizeMiB:   64,
 		ChangefeedRCU:           8,
+		SnapshotTSO:             "466924115091783691",
 		Credential:              testCred(),
 	}, store, manager)
 	runner.client = newCloudAPITestClient(t, srv)

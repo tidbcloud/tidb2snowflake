@@ -462,3 +462,18 @@ func writePartitionIndexFile(
 	))
 	require.NoError(t, store.WriteFile(ctx, path.Join(storageDir, dmlKey.GenerateIndexFilePath(cloudstorage.FileIndexKey{})), []byte(fileName)))
 }
+
+func TestCloudSchemaRejectsNewStoredGeneratedColumnBeforeLoading(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(ctx, &url.URL{Scheme: "file", Path: t.TempDir()})
+	require.NoError(t, err)
+	defer store.Close()
+	raw := []byte(`{"Schema":"db","Table":"t","Query":"ALTER TABLE t ADD COLUMN s INT AS (id+1) STORED","TableColumns":[]}`)
+	require.NoError(t, store.WriteFile(ctx, "increment/schema.json", raw))
+	cloud := &loader{storage: store, rejectStoredGenerated: true}
+	_, err = cloud.readSchemaFile(ctx, "increment/schema.json")
+	require.ErrorContains(t, err, "STORED")
+	op := &loader{storage: store}
+	_, err = op.readSchemaFile(ctx, "increment/schema.json")
+	require.NoError(t, err)
+}
